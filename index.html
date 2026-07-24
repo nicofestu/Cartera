@@ -95,6 +95,36 @@ h1{font-family:var(--din);font-size:36px;font-weight:700;text-transform:uppercas
 .btn.danger:hover{border-color:var(--down)}
 .btn:focus-visible,.toggle button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--white);outline-offset:2px}
 
+/* ══ CONTROL GROUPING ══ */
+.ctrl-div{width:1px;height:26px;background:var(--hair);margin:0 2px;flex-shrink:0}
+.btn.action{
+  background:linear-gradient(180deg,#1B2530,#141C26);
+  border:1px solid #2E3D4D;
+  border-top-color:#3A4C5F;
+  color:#DCE6F0;
+  display:inline-flex;align-items:center;gap:8px;
+}
+.btn.action:hover{background:linear-gradient(180deg,#212D3A,#182130);border-color:#3E5266;transform:translateY(-1px)}
+.btn-dot{width:6px;height:6px;background:#6FA8DC;border-radius:1px;box-shadow:0 0 6px rgba(111,168,220,.5);flex-shrink:0}
+.btn.icon{padding:9px 13px;font-size:16px;line-height:1;letter-spacing:0}
+.more-wrap{position:relative}
+.more-menu{
+  position:absolute;top:calc(100% + 8px);right:0;min-width:170px;
+  background:var(--surf);border:1px solid var(--hair-hot);border-radius:var(--r);
+  box-shadow:0 16px 48px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.02);
+  display:none;flex-direction:column;padding:6px;gap:2px;z-index:40;
+  animation:menuIn .16s var(--ease);
+}
+.more-menu.open{display:flex}
+@keyframes menuIn{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+.more-menu button{
+  background:transparent;border:0;color:var(--grey);padding:9px 12px;text-align:left;cursor:pointer;
+  font-family:var(--din);font-size:12.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  border-radius:2px;transition:all .13s var(--ease);display:flex;align-items:center;gap:8px
+}
+.more-menu button:hover{background:var(--surf-hover);color:var(--white)}
+@media(max-width:700px){.ctrl-div{display:none}}
+
 /* ══ TABS ══ */
 #contenido{animation:fadeIn .28s var(--ease)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -294,12 +324,18 @@ select{cursor:pointer}
       <button id="btn-ars" class="active" onclick="setMoneda('ARS')">ARS</button>
       <button id="btn-usd" onclick="setMoneda('USD')">USD</button>
     </div>
-    <button class="btn primary" onclick="abrirMov()">+ Movimiento</button>
-    <button class="btn" onclick="abrirSaldos()">Saldos</button>
+    <div class="ctrl-div"></div>
+    <button class="btn action" onclick="abrirMov()"><i class="btn-dot"></i>+ Movimiento</button>
+    <button class="btn action" onclick="abrirSaldos()"><i class="btn-dot"></i>Saldos</button>
     <button class="btn" onclick="cargar()">Refrescar</button>
-    <button class="btn" id="btn-sync" onclick="abrirSync()">Sync</button>
-    <button class="btn" onclick="exportar()">Export</button>
-    <button class="btn" onclick="document.getElementById('imp').click()">Import</button>
+    <div class="more-wrap">
+      <button class="btn icon" id="btn-more" onclick="toggleMore(event)" aria-haspopup="true" aria-expanded="false" aria-label="Más opciones">⋯</button>
+      <div class="more-menu" id="more-menu">
+        <button onclick="closeMore();abrirSync()"><span id="btn-sync-badge"></span>Sync</button>
+        <button onclick="closeMore();exportar()">Export</button>
+        <button onclick="closeMore();document.getElementById('imp').click()">Import</button>
+      </div>
+    </div>
     <input type="file" id="imp" accept=".json" style="display:none" onchange="importar(event)">
   </div>
 </header>
@@ -1657,6 +1693,8 @@ async function bajarNube(manual){
 }
 
 function pintarSync(){
+  const badge=document.getElementById("btn-sync-badge");
+  if(badge) badge.innerHTML=SYNC?.gist?`<i class="btn-dot" style="background:${SYNC.error?'var(--down)':'var(--up)'};box-shadow:0 0 6px ${SYNC.error?'rgba(255,59,48,.6)':'rgba(0,224,138,.6)'}"></i>`:"";
   const cell=document.getElementById("sy-cell"), el=document.getElementById("sy-badge");
   if(!cell) return;
   if(!SYNC?.gist){ cell.style.display="none"; return; }
@@ -1724,6 +1762,18 @@ async function guardarCash(){
   EDIT_ID=null;
   persistirYSync(); cerrarModales(); cargar();
 }
+
+/* ══════════════ Menú "más opciones" ══════════════ */
+function toggleMore(e){
+  e.stopPropagation();
+  document.getElementById("more-menu").classList.toggle("open");
+}
+function closeMore(){ document.getElementById("more-menu")?.classList.remove("open"); }
+document.addEventListener("click", e=>{
+  const w=document.querySelector(".more-wrap");
+  if(w&&!w.contains(e.target)) closeMore();
+});
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeMore(); });
 
 /* ══════════════ Backup ══════════════ */
 function exportar(){
