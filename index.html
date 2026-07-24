@@ -220,6 +220,31 @@ footer b{color:var(--grey);font-weight:400}
 .st-cell .v.sync-ok{color:var(--up)}
 .st-cell .v.sync-warn{color:var(--down)}
 
+
+/* ══ MERCADO ══ */
+.submenu{display:flex;gap:1px;background:var(--hair);border:1px solid var(--hair);border-radius:var(--r);
+  overflow:hidden;margin-bottom:20px;flex-wrap:wrap}
+.subtab{flex:1;min-width:120px;background:var(--surf);border:0;color:var(--grey);padding:12px 14px;cursor:pointer;
+  font-family:var(--din);font-size:12.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  transition:all .16s var(--ease);position:relative}
+.subtab:hover{background:var(--surf-hover);color:#C4C4C4}
+.subtab.active{background:linear-gradient(180deg,#161616,#0E0E0E);color:var(--white)}
+.subtab.active::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--white)}
+.mkt-bar{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+.mkt-bar input{max-width:300px;background:#060606;border:1px solid var(--hair);color:var(--white);padding:9px 12px;
+  border-radius:2px;font-family:var(--mono);font-size:13px;transition:border-color .15s var(--ease)}
+.mkt-bar input:focus{border-color:var(--white);outline:none;box-shadow:0 0 0 3px rgba(255,255,255,.05)}
+.mkt-ts{font-family:var(--din);font-size:10.5px;letter-spacing:.1em;color:var(--grey-dim);text-transform:uppercase}
+.chips{display:flex;gap:8px;margin-bottom:16px}
+.chip{background:var(--surf);border:1px solid var(--hair);color:var(--grey);padding:6px 15px;cursor:pointer;
+  border-radius:20px;font-family:var(--din);font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  transition:all .16s var(--ease)}
+.chip:hover{border-color:var(--hair-hot);color:#C4C4C4}
+.chip.active{background:var(--white);color:var(--void);border-color:var(--white)}
+.sector{font-family:var(--din);font-size:11px;font-weight:500;letter-spacing:.04em;color:var(--grey);text-transform:uppercase}
+.mkt-foot{font-family:var(--din);font-size:11px;letter-spacing:.06em;color:var(--grey-dim);text-transform:uppercase;
+  padding:12px 2px 0}
+
 /* ══ MODALS ══ */
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.82);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;
   padding:44px 16px;overflow-y:auto;z-index:50}
@@ -1117,19 +1142,78 @@ function guardarSaldos(){
 }
 
 
+/* ══════════════ Mapeos de mercado ══════════════ */
+// ETFs (por subyacente, sin sufijo de especie). Todo lo que no esté acá es acción individual.
+const ETFS=new Set(["SPY","QQQ","DIA","IWM","IVV","VOO","VTI","EEM","EFA","EWZ","EWJ","EWY","FXI","ILF","IEMG","IEUR","VEA","ACWI","ARKK","XLE","XLF","XLK","XLV","XLI","XLP","XLY","XLB","XLU","XLRE","XLC","GLD","SLV","USO","GDX","COPX","XME","URA","IBB","SMH","CIBR","ICLN","TQQQ","SPXL","PSQ","SH","VXX","IBIT","ETHA","VIG","RSP","SPHQ","ESGU","IVE","IVW","IJH","ITA","ARM","IEFA","EMB"]);
+// Sector por subyacente (GICS simplificado). Solo los relevantes; el resto queda "—".
+const SECTOR={
+// Tecnología
+AAPL:"Tecnología",MSFT:"Tecnología",NVDA:"Tecnología",AVGO:"Tecnología",ORCL:"Tecnología",CRM:"Tecnología",ADBE:"Tecnología",AMD:"Tecnología",INTC:"Tecnología",QCOM:"Tecnología",TXN:"Tecnología",IBM:"Tecnología",CSCO:"Tecnología",INTC:"Tecnología",MU:"Tecnología",AMAT:"Tecnología",LRCX:"Tecnología",ASML:"Tecnología",TSM:"Tecnología",ARM:"Tecnología",PLTR:"Tecnología",SNOW:"Tecnología",CRWD:"Tecnología",PANW:"Tecnología",ANET:"Tecnología",NOW:"Tecnología",MRVL:"Tecnología",SMSN:"Tecnología",SONY:"Tecnología",DELL:"Tecnología",HPQ:"Tecnología",GLW:"Tecnología",SWKS:"Tecnología",ADI:"Tecnología",TEAM:"Tecnología",TWLO:"Tecnología",PATH:"Tecnología",SNDK:"Tecnología",CLS:"Tecnología",ALAB:"Tecnología",NBIS:"Tecnología",VRSN:"Tecnología",ACN:"Tecnología",INFY:"Tecnología",GLOB:"Tecnología",ERIC:"Tecnología",NOKA:"Tecnología",
+// Comunicación / Internet
+GOOGL:"Comunicación",META:"Comunicación",NFLX:"Comunicación",DISN:"Comunicación",SPOT:"Comunicación",T:"Comunicación",VZ:"Comunicación",TMUS:"Comunicación",SNAP:"Comunicación",PINS:"Comunicación",RBLX:"Comunicación",ROKU:"Comunicación",EA:"Comunicación",TTWO:"Comunicación",BIDU:"Comunicación",NTES:"Comunicación",JOYY:"Comunicación",YELP:"Comunicación",TCOM:"Comunicación",
+// Consumo discrecional
+AMZN:"Consumo Disc.",TSLA:"Consumo Disc.",MELI:"Consumo Disc.",HD:"Consumo Disc.",NKE:"Consumo Disc.",MCD:"Consumo Disc.",SBUX:"Consumo Disc.",BKNG:"Consumo Disc.",ABNB:"Consumo Disc.",LVS:"Consumo Disc.",RACE:"Consumo Disc.",STLA:"Consumo Disc.",GM:"Consumo Disc.",F:"Consumo Disc.",HMC:"Consumo Disc.",TM:"Consumo Disc.",ROST:"Consumo Disc.",TJX:"Consumo Disc.",TGT:"Consumo Disc.",LOW:"Consumo Disc.",ORLY:"Consumo Disc.",ETSY:"Consumo Disc.",EBAY:"Consumo Disc.",BABA:"Consumo Disc.",PDD:"Consumo Disc.",JD:"Consumo Disc.",NIO:"Consumo Disc.",XPEV:"Consumo Disc.",LI:"Consumo Disc.",MGLU3:"Consumo Disc.",LREN3:"Consumo Disc.",ARCO:"Consumo Disc.",DECK:"Consumo Disc.",URBN:"Consumo Disc.",ANF:"Consumo Disc.",HOG:"Consumo Disc.",CCL:"Consumo Disc.",DAL:"Consumo Disc.",UAL:"Consumo Disc.",AAL:"Consumo Disc.",CAR:"Consumo Disc.",JMIA:"Consumo Disc.",
+// Consumo básico
+KO:"Consumo Básico",PEP:"Consumo Básico",PG:"Consumo Básico",WMT:"Consumo Básico",COST:"Consumo Básico",MDLZ:"Consumo Básico",MO:"Consumo Básico",PM:"Consumo Básico",CL:"Consumo Básico",KMB:"Consumo Básico",SYY:"Consumo Básico",HSY:"Consumo Básico",ABEV:"Consumo Básico",FMX:"Consumo Básico",BUD:"Consumo Básico",DEO:"Consumo Básico",UL:"Consumo Básico",KOFM:"Consumo Básico",
+// Salud
+JNJ:"Salud",LLY:"Salud",UNH:"Salud",ABBV:"Salud",MRK:"Salud",PFE:"Salud",TMO:"Salud",ABT:"Salud",DHR:"Salud",BMY:"Salud",AMGN:"Salud",GILD:"Salud",ISRG:"Salud",VRTX:"Salud",MRNA:"Salud",BIIB:"Salud",CVS:"Salud",MDT:"Salud",SNY:"Salud",NVO:"Salud",NVS:"Salud",AZN:"Salud",GSK:"Salud",HIMS:"Salud",IFF:"Salud",CAH:"Salud",
+// Financiero
+JPM:"Financiero",BAC:"Financiero",WFC:"Financiero",C:"Financiero",GS:"Financiero",MS:"Financiero",AXP:"Financiero",BX:"Financiero",SCHW:"Financiero",USB:"Financiero",SPGI:"Financiero",V:"Financiero",MA:"Financiero",PYPL:"Financiero",XYZ:"Financiero",HOOD:"Financiero",COIN:"Financiero",NU:"Financiero",BRKB:"Financiero",AIG:"Financiero",BBD:"Financiero",BSBR:"Financiero",ITUB:"Financiero",BBAS3:"Financiero",SAN:"Financiero",HSBC:"Financiero",BCS:"Financiero",ING:"Financiero",LYG:"Financiero",NMR:"Financiero",MUFG:"Financiero",MFG:"Financiero",KB:"Financiero",HDB:"Financiero",IBN:"Financiero",PAGS:"Financiero",STNE:"Financiero",XP:"Financiero",BBDC:"Financiero",
+// Energía
+XOM:"Energía",CVX:"Energía",COP:"Energía",SLB:"Energía",EOG:"Energía",OXY:"Energía",PSX:"Energía",HAL:"Energía",BKR:"Energía",MPC:"Energía",VLO:"Energía",WMB:"Energía",KMI:"Energía",PBR:"Energía",PETR3:"Energía",SHEL:"Energía",BP:"Energía",TTE:"Energía",EQNR:"Energía",EC:"Energía",YPF:"Energía",VIST:"Energía",GPRK:"Energía",PRIO3:"Energía",UGP:"Energía",E:"Energía",ENB:"Energía",GLNG:"Energía",
+// Industrial
+BA:"Industrial",CAT:"Industrial",GE:"Industrial",HON:"Industrial",UNP:"Industrial",UPS:"Industrial",FDX:"Industrial",LMT:"Industrial",RTX:"Industrial",DE:"Industrial",MMM:"Industrial",EMR:"Industrial",ETN:"Industrial",ITW:"Industrial",CSX:"Industrial",NSC:"Industrial",WM:"Industrial",JCI:"Industrial",PCAR:"Industrial",GD:"Industrial",NOC:"Industrial",MSI:"Industrial",HWM:"Industrial",EFX:"Industrial",GRMN:"Industrial",SNA:"Industrial",PBI:"Industrial",EMBJ:"Industrial",WEGE3:"Industrial",EMBR3:"Industrial",TEN:"Industrial",
+// Materiales
+LIN:"Materiales",SHW:"Materiales",FCX:"Materiales",NEM:"Materiales",NUE:"Materiales",DOW:"Materiales",DD:"Materiales",ECL:"Materiales",APD:"Materiales",VALE:"Materiales",VALE3:"Materiales",GGB:"Materiales",SID:"Materiales",BHP:"Materiales",RIO:"Materiales",SCCO:"Materiales",AEM:"Materiales",GFI:"Materiales",KGC:"Materiales",HMY:"Materiales",GOLD:"Materiales",PAAS:"Materiales",CDE:"Materiales",HL:"Materiales",MOS:"Materiales",CX:"Materiales",SUZ:"Materiales",SUZB3:"Materiales",AVY:"Materiales",IP:"Materiales",MP:"Materiales",MUX:"Materiales",AA:"Materiales",CCJ:"Materiales",NG:"Materiales",NXE:"Materiales",BAK:"Materiales",LAC:"Materiales",
+// Servicios / Utilities
+NEE:"Utilities",DUK:"Utilities",SO:"Utilities",CEG:"Utilities",VST:"Utilities",D:"Utilities",AEP:"Utilities",EXC:"Utilities",OKLO:"Utilities",
+// Real estate
+O:"Real Estate",PLD:"Real Estate",AMT:"Real Estate",EQIX:"Real Estate",
+// Cripto / mineras BTC
+MSTR:"Cripto",RIOT:"Cripto",HUT:"Cripto",IREN:"Cripto",BMNR:"Cripto",CRWV:"Cripto",BB:"Tecnología",
+// Aeroespacial / satélites
+RKLB:"Aeroespacial",ASTS:"Aeroespacial",SATL:"Aeroespacial",SPCE:"Aeroespacial",ONDS:"Aeroespacial",
+};
+// Sectores de acciones argentinas
+const SECTOR_AR={
+GGAL:"Bancos",BMA:"Bancos",BBAR:"Bancos",SUPV:"Bancos",VALO:"Bancos",BHIP:"Bancos",BPAT:"Bancos",
+YPF:"Energía",YPFD:"Energía",PAMP:"Energía",CEPU:"Energía",CGPA2:"Energía",CAPX:"Energía",COME:"Energía",
+TGSU2:"Gas/Transporte",TGNO4:"Gas/Transporte",TRAN:"Gas/Transporte",METR:"Gas/Transporte",EDN:"Gas/Transporte",DGCU2:"Gas/Transporte",GBAN:"Gas/Transporte",
+ALUA:"Industria",TXAR:"Industria",SAMI:"Industria",FERR:"Industria",COLO:"Industria",
+LOMA:"Materiales",HARG:"Materiales",CRES:"Real Estate",IRSA:"Real Estate",
+TECO2:"Telecom",CVH:"Telecom",
+MIRG:"Industria",MOLI:"Consumo",MORI:"Consumo",AGRO:"Agro",CADO:"Agro",
+BYMA:"Financiero",A3:"Financiero",IEB:"Financiero",
+AUSO:"Infraestructura",OEST:"Infraestructura",
+};
+
 /* ══════════════ Pestaña Mercado ══════════════ */
-let MKT_Q="", MKT_TS=0, MKT={};
+let MKT_Q="", MKT_TS=0, MKT={}, MKT_SUB="acciones", MKT_FILTRO="todos";
+// Quita el sufijo de especie (C/D) solo si el símbolo base existe en el panel;
+// así "INTC" (Intel) no se confunde con una especie "INT+C".
+function subOf(s,panel){
+  if(/[DC]$/.test(s)&&panel&&panel[s.slice(0,-1)]!=null) return s.slice(0,-1);
+  return s;
+}
 function clasificarPeso(s){
-  if(/^(AL|GD|AE|BP)/.test(s)) return "usd";
+  if(/^(AL|GD|AE|BP|BA37|GD3|GD4)/.test(s)) return "usd";
   if(/^TT/.test(s)) return "dual";
   if(/^TM/.test(s)) return "tamar";
-  if(/^(TZX|TX|DIC|PAR|CUA|PR)/.test(s)) return "cer";
-  if(/^TZV/.test(s)) return "dlk";
-  if(/^D\d/.test(s)) return "dlk";
-  if(/^(S\d|T\d|TO|BON)/.test(s)) return "fija";
+  if(/^(TZX|TX|DIC|PAR|CUA|PR|TC)/.test(s)) return "cer";
+  if(/^(TZV|TV|D\d)/.test(s)) return "dlk";
+  if(/^(S\d|T\d|TO|BON|BJ|LE)/.test(s)) return "fija";
   return "otros";
 }
+const esProvincial=s=>/^(BA|PB|BP|PM|MD|MG|MZ|CO|CH|NE|RN|SL|SA|TF|TU|ER|CE|FE)/.test(s)&&!/^BON/.test(s);
 const esEspecieUSD=(sym,panel)=>/[DC]$/.test(sym)&&panel[sym.slice(0,-1)]!=null;
+
+const MKT_MENU=[
+  {k:"acciones",   n:"Acciones"},
+  {k:"cedears",    n:"CEDEARs"},
+  {k:"soberanos",  n:"Bonos soberanos"},
+  {k:"provinciales",n:"Bonos provinciales"},
+  {k:"ons",        n:"ONs"},
+];
 
 async function renderMercado(){
   const cont=document.getElementById("contenido");
@@ -1142,71 +1226,129 @@ async function renderMercado(){
     }catch(e){ cont.innerHTML='<div class="chart-warn">No se pudieron cargar los paneles ('+e.message+').</div>'; return; }
   }
   if(TAB!=="mercado") return;
-  const q=MKT_Q.trim().toUpperCase();
-  const F=r=>!q||r.symbol.includes(q);
 
-  // Pesos: bonos + letras, sin especies D/C
-  const pesos={fija:[],cer:[],tamar:[],dual:[],dlk:[],otros:[]};
+  const menu=`<nav class="submenu">${MKT_MENU.map(m=>
+    `<button class="subtab ${MKT_SUB===m.k?"active":""}" onclick="MKT_SUB='${m.k}';MKT_FILTRO='todos';renderMercado()">${m.n}</button>`).join("")}</nav>`;
+
+  const buscador=`<div class="mkt-bar">
+    <input id="mkt-q" placeholder="Buscar especie…" value="${MKT_Q.replace(/"/g,'&quot;')}" oninput="MKT_Q=this.value;renderMercado()">
+    <span class="mkt-ts">BYMA · ${new Date(MKT_TS).toLocaleTimeString("es-AR",{hour12:false})}</span>
+  </div>`;
+
+  const q=MKT_Q.trim().toUpperCase();
+  const F=s=>!q||s.includes(q);
+  let cuerpo="";
+
+  if(MKT_SUB==="acciones") cuerpo=vistaRV(MKT.accion,"accion",F,q);
+  else if(MKT_SUB==="cedears") cuerpo=vistaRV(MKT.cedear,"cedear",F,q);
+  else if(MKT_SUB==="soberanos") cuerpo=vistaSoberanos(F);
+  else if(MKT_SUB==="provinciales") cuerpo=vistaProvinciales(F);
+  else if(MKT_SUB==="ons") cuerpo=vistaONs(F);
+
+  cont.innerHTML=menu+buscador+cuerpo;
+  const inp=document.getElementById("mkt-q");
+  if(q&&inp){ inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length); }
+}
+
+// ── Acciones / CEDEARs con filtro acción-ETF y sector ──
+function vistaRV(panel,tipo,F,q){
+  const esCedear=tipo==="cedear";
+  let rows=Object.values(panel||{}).filter(r=>!esEspecieUSD(r.symbol,panel)).filter(r=>F(r.symbol));
+  // Filtro acción individual / ETF
+  const filtroFn={
+    todos:()=>true,
+    acciones:r=>!ETFS.has(subOf(r.symbol,panel)),
+    etfs:r=>ETFS.has(subOf(r.symbol,panel)),
+  }[MKT_FILTRO];
+  rows=rows.filter(filtroFn).sort((a,b)=>(b.v||0)*(b.c||0)-(a.v||0)*(a.c||0));
+  const sectorDe=s=>{const base=subOf(s,panel);
+    return esCedear?(SECTOR[base]||(ETFS.has(base)?"ETF":"—")):(SECTOR_AR[base]||"—");};
+  const total=rows.length;
+  const lim=q?rows.length:60;
+  const vis=rows.slice(0,lim);
+  const chips=`<div class="chips">
+    ${[["todos","Todos"],["acciones","Acciones"],["etfs","ETFs"]].map(([k,n])=>
+      `<button class="chip ${MKT_FILTRO===k?"active":""}" onclick="MKT_FILTRO='${k}';renderMercado()">${n}</button>`).join("")}
+  </div>`;
+  const filas=vis.map(r=>`<tr>
+    <td class="tk">${r.symbol}</td>
+    <td class="l"><span class="sector">${sectorDe(r.symbol)}</span></td>
+    <td>$ ${fmt(r.c,r.c<100?2:0)}</td>
+    <td class="${cls(r.pct_change)}">${r.pct_change==null?"—":sgn(r.pct_change)}</td>
+    <td>${r.v?fmt(r.v*r.c/1e6,1)+" M":"—"}</td></tr>`).join("");
+  return chips+`<div class="tbl-scroll"><table><thead><tr>
+    <th>Especie</th><th class="l">Sector</th><th>Último</th><th>Var %</th><th>Vol. $</th></tr></thead>
+    <tbody>${filas}</tbody></table></div>
+    <div class="mkt-foot">${q?total+" resultados":"Top "+Math.min(lim,total)+" de "+total+" por volumen"}</div>`;
+}
+
+// ── Soberanos, clasificados por tipo ──
+function vistaSoberanos(F){
+  const grupos={usd:[],fija:[],cer:[],tamar:[],dual:[],dlk:[],otros:[]};
   const usdRows=[];
   for(const t of ["bono","letra"]){
     for(const r of Object.values(MKT[t]||{})){
       if(esEspecieUSD(r.symbol,MKT[t])) continue;
+      if(esProvincial(r.symbol)) continue;
       const c=clasificarPeso(r.symbol);
-      if(c==="usd"){
-        const d=MKT[t][r.symbol+"D"];
-        usdRows.push({symbol:r.symbol,ars:r.c,usd:d?.c,pct:d?.pct_change??r.pct_change});
-      } else pesos[c].push(r);
+      if(c==="usd"){ const d=MKT[t][r.symbol+"D"]; usdRows.push({symbol:r.symbol,ars:r.c,usd:d?.c,pct:d?.pct_change??r.pct_change}); }
+      else grupos[c].push(r);
     }
   }
-  const rowsB=arr=>arr.filter(F).sort((a,b)=>(b.v||0)-(a.v||0)).map(r=>
-    `<tr><td class="tk">${r.symbol}</td><td>$ ${fmt(r.c,r.c<1000?2:0)}</td>
+  const nom={fija:"Tasa fija",cer:"CER",tamar:"TAMAR",dual:"Duales",dlk:"Dólar linked",otros:"Otros"};
+  let out="";
+  if(usdRows.filter(r=>F(r.symbol)).length){
+    out+=secTabla("Hard dollar (USD)",`<th>Especie</th><th>USD (D)</th><th>ARS</th><th>Var %</th>`,
+      usdRows.filter(r=>F(r.symbol)).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(r=>
+      `<tr><td class="tk">${r.symbol}</td><td>${r.usd?"US$ "+fmt(r.usd,2):"—"}</td>
+      <td>$ ${fmt(r.ars,0)}</td><td class="${cls(r.pct)}">${r.pct==null?"—":sgn(r.pct)}</td></tr>`).join(""));
+  }
+  for(const k of ["fija","cer","tamar","dual","dlk","otros"]){
+    const rs=grupos[k].filter(r=>F(r.symbol));
+    if(rs.length) out+=secTabla("Pesos · "+nom[k],`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,rowsBono(rs));
+  }
+  return out||'<div class="mkt-foot">Sin resultados.</div>';
+}
+
+function vistaProvinciales(F){
+  // Provinciales en USD (especie D/C) y en pesos, agrupados.
+  // El sufijo D no basta: BA37D cotiza en pesos pese a terminar en D, así que
+  // desempatamos por magnitud de precio (las especies hard-dollar cotizan < 1.000).
+  const usdP=[], pesosP=[];
+  for(const t of ["bono","letra"]){
+    for(const r of Object.values(MKT[t]||{})){
+      if(!esProvincial(r.symbol)||!F(r.symbol)) continue;
+      if(/D$/.test(r.symbol)&&MKT[t][r.symbol.slice(0,-1)]!=null) continue; // evitar duplicar la especie D
+      const pareceUSD=/[DC]$/.test(r.symbol)&&r.c<1000;
+      if(pareceUSD) usdP.push(r); else pesosP.push(r);
+    }
+  }
+  let out="";
+  if(usdP.length) out+=secTabla("Provinciales · Hard dollar",`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,
+    rowsBono(usdP.sort((a,b)=>a.symbol.localeCompare(b.symbol))));
+  if(pesosP.length) out+=secTabla("Provinciales · Pesos",`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,
+    rowsBono(pesosP.sort((a,b)=>a.symbol.localeCompare(b.symbol))));
+  return out||'<div class="mkt-foot">Sin resultados en bonos provinciales.</div>';
+}
+
+function vistaONs(F){
+  const rows=Object.values(MKT.on||{}).filter(r=>!esEspecieUSD(r.symbol,MKT.on)).filter(r=>F(r.symbol));
+  if(!rows.length) return '<div class="mkt-foot">Sin resultados en ONs.</div>';
+  return secTabla("Obligaciones negociables",`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,
+    rowsBono(rows.sort((a,b)=>(b.v||0)-(a.v||0))));
+}
+
+function rowsBono(arr){
+  return arr.map(r=>`<tr><td class="tk">${r.symbol}</td>
+    <td>$ ${fmt(r.c,r.c<1000?2:0)}</td>
     <td class="${cls(r.pct_change)}">${r.pct_change==null?"—":sgn(r.pct_change)}</td>
     <td>${r.px_bid?fmt(r.px_bid,r.px_bid<1000?2:0):"—"} / ${r.px_ask?fmt(r.px_ask,r.px_ask<1000?2:0):"—"}</td></tr>`).join("");
-  const secB=(titulo,arr)=>arr.filter(F).length?`<div class="grupo"><div class="grupo-h"><h2>${titulo}</h2>
-    <span class="tot">${arr.filter(F).length} especies</span></div>
-    <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th></tr></thead>
-    <tbody>${rowsB(arr)}</tbody></table></div></div>`:"";
-
-  const rowsRV=(panel,lim)=>{
-    let arr=Object.values(panel||{}).filter(r=>!esEspecieUSD(r.symbol,panel)).filter(F)
-      .sort((a,b)=>(b.v||0)*(b.c||0)-(a.v||0)*(a.c||0));
-    const tot=arr.length;
-    if(!q) arr=arr.slice(0,lim);
-    return {tot,html:arr.map(r=>`<tr><td class="tk">${r.symbol}</td><td>$ ${fmt(r.c,r.c<100?2:0)}</td>
-      <td class="${cls(r.pct_change)}">${r.pct_change==null?"—":sgn(r.pct_change)}</td>
-      <td>${r.v?fmt(r.v*r.c/1e6,1)+" M":"—"}</td></tr>`).join("")};
-  };
-  const cedears=rowsRV(MKT.cedear,40), acciones=rowsRV(MKT.accion,40);
-  const rowsUSD=usdRows.filter(r=>!q||r.symbol.includes(q)).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(r=>
-    `<tr><td class="tk">${r.symbol}</td><td>${r.usd?"US$ "+fmt(r.usd,2):"—"}</td>
-    <td>$ ${fmt(r.ars,0)}</td><td class="${cls(r.pct)}">${r.pct==null?"—":sgn(r.pct)}</td></tr>`).join("");
-
-  cont.innerHTML=`
-    <div style="display:flex;gap:14px;align-items:center;margin-bottom:24px;flex-wrap:wrap">
-      <input id="mkt-q" placeholder="Buscar especie…" value="${MKT_Q.replace(/"/g,'&quot;')}"
-        style="max-width:280px" oninput="MKT_Q=this.value;renderMercado();">
-      <span style="color:var(--grey-dim);font-size:11px">Actualizado ${new Date(MKT_TS).toLocaleTimeString("es-AR",{hour12:false})} · se refresca cada 2 min al reabrir</span>
-    </div>
-    ${usdRows.length?`<div class="grupo"><div class="grupo-h"><h2>Bonos en USD</h2>
-      <span class="tot">${usdRows.filter(r=>!q||r.symbol.includes(q)).length} especies</span></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th>USD (D)</th><th>ARS</th><th>Var %</th></tr></thead>
-      <tbody>${rowsUSD}</tbody></table></div></div>`:""}
-    ${secB("Pesos · Tasa fija",pesos.fija)}
-    ${secB("Pesos · CER",pesos.cer)}
-    ${secB("Pesos · TAMAR",pesos.tamar)}
-    ${secB("Pesos · Duales",pesos.dual)}
-    ${secB("Pesos · Dólar linked",pesos.dlk)}
-    ${secB("Pesos · Otros",pesos.otros)}
-    ${secB("ONs corporativas",Object.values(MKT.on||{}).filter(r=>!esEspecieUSD(r.symbol,MKT.on)))}
-    <div class="grupo"><div class="grupo-h"><h2>Acciones</h2><span class="tot">${q?acciones.tot+" resultados":acciones.tot+" especies · top 40 por volumen"}</span></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th>Último</th><th>Var %</th><th>Vol. $</th></tr></thead>
-      <tbody>${acciones.html}</tbody></table></div></div>
-    <div class="grupo"><div class="grupo-h"><h2>CEDEARs</h2><span class="tot">${q?cedears.tot+" resultados":cedears.tot+" especies · top 40 por volumen"}</span></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th>Último</th><th>Var %</th><th>Vol. $</th></tr></thead>
-      <tbody>${cedears.html}</tbody></table></div></div>`;
-  const inp=document.getElementById("mkt-q");
-  if(q){ inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length); }
 }
+function secTabla(titulo,ths,filas){
+  return `<div class="grupo"><div class="grupo-h"><h2>${titulo}</h2></div>
+    <div class="tbl-scroll"><table><thead><tr>${ths}</tr></thead><tbody>${filas}</tbody></table></div></div>`;
+}
+
 
 /* ══════════════ Formulario de movimientos ══════════════ */
 function abrirMov(id){
