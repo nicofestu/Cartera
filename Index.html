@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PORTFOLIO TELEMETRY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Chivo+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#000000;
+  --panel:#0A0A0A;
+  --panel-2:#111111;
+  --hair:#242424;
+  --hair-hot:#3A3A3A;
+  --white:#FFFFFF;
+  --grey:#8E8E8E;
+  --grey-dim:#5E5E5E;
+  --up:#00E08A;
+  --down:#FF3B30;
+  --din:'Archivo',-apple-system,Helvetica,sans-serif;
+  --mono:'Chivo Mono',ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;border-radius:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--void);color:var(--white);font-family:var(--mono);
+  min-height:100vh;padding-bottom:80px;font-size:13.5px;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum";
+}
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+@media(max-width:700px){.wrap{padding:0 14px}}
+
+/* ══ Etiquetas técnicas ══ */
+.lbl{font-family:var(--din);font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:11px;color:var(--grey);line-height:1}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}
+
+/* ══ STATUS BAR — firma del diseño ══ */
+.status{border-bottom:1px solid var(--hair);background:var(--void);position:sticky;top:0;z-index:30}
+.status .wrap{display:flex;align-items:stretch;gap:0;height:46px;overflow-x:auto;scrollbar-width:none}
+.status .wrap::-webkit-scrollbar{display:none}
+.st-cell{display:flex;flex-direction:column;justify-content:center;gap:3px;padding:0 18px;border-right:1px solid var(--hair);white-space:nowrap;flex-shrink:0}
+.st-cell:first-child{padding-left:0}
+.st-cell .k{font-family:var(--din);font-size:10px;font-weight:600;letter-spacing:.04em;color:var(--grey-dim);text-transform:uppercase;line-height:1}
+.st-cell .v{font-size:12.5px;font-weight:500;letter-spacing:.02em;line-height:1}
+.st-live{display:flex;align-items:center;gap:9px;padding-right:20px;border-right:1px solid var(--hair);flex-shrink:0}
+.dot{width:6px;height:6px;background:var(--up);box-shadow:0 0 8px var(--up);animation:pulse 2.4s ease-in-out infinite;flex-shrink:0}
+.dot.err{background:var(--down);box-shadow:0 0 8px var(--down)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){.dot{animation:none}}
+.st-live .txt{font-family:var(--din);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.st-clock{margin-left:auto;padding-left:20px;border-right:0;color:var(--grey)}
+
+/* ══ HEADER ══ */
+header{padding:26px 0 20px;display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;justify-content:space-between}
+h1{font-family:var(--din);font-size:36px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;line-height:.9}
+@media(max-width:700px){h1{font-size:32px;letter-spacing:.08em}}
+.h-sub{font-family:var(--din);font-size:11px;font-weight:500;letter-spacing:.07em;color:var(--grey-dim);text-transform:uppercase;margin-top:7px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.toggle{display:flex;border:1px solid var(--hair)}
+.toggle button{background:transparent;border:0;color:var(--grey);padding:9px 17px;cursor:pointer;
+  font-family:var(--din);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;transition:none}
+.toggle button+button{border-left:1px solid var(--hair)}
+.toggle button.active{background:var(--white);color:var(--void)}
+.btn{background:transparent;border:1px solid var(--hair);color:var(--white);padding:9px 15px;cursor:pointer;
+  font-family:var(--din);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;transition:border-color .12s,background .12s}
+.btn:hover{border-color:var(--white)}
+.btn.primary{background:var(--white);color:var(--void);border-color:var(--white)}
+.btn.primary:hover{background:var(--grey);border-color:var(--grey)}
+.btn.mini{padding:2px 8px;font-size:10px;letter-spacing:.05em;border-color:var(--hair-hot)}
+.btn.danger{color:var(--down);border-color:transparent;padding:2px 7px}
+.btn.danger:hover{border-color:var(--down)}
+.btn:focus-visible,.toggle button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--white);outline-offset:2px}
+
+/* ══ READOUT CARDS ══ */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:1px;background:var(--hair);
+  border:1px solid var(--hair);margin-bottom:1px}
+.cards .card.hero{grid-column:1/-1;padding:24px 24px 22px}
+.cards .card.hero .v{font-size:52px;font-weight:300;letter-spacing:-.035em}
+.cards .card.hero .d{font-size:12.5px;margin-top:10px;color:var(--grey)}
+@media(max-width:700px){.cards .card.hero .v{font-size:34px}}
+.card{background:var(--void);padding:19px 20px 17px;position:relative}
+.card .k{font-family:var(--din);font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--grey);text-transform:uppercase;margin-bottom:11px;display:flex;align-items:center;gap:7px}
+.card .k::before{content:"";width:5px;height:5px;background:var(--hair-hot);flex-shrink:0}
+.card.hero .k::before{background:var(--white)}
+.card .v{font-size:25px;font-weight:400;letter-spacing:-.02em;line-height:1.05}
+.card .d{font-size:11.5px;margin-top:7px;color:var(--grey);letter-spacing:.02em}
+@media(max-width:700px){.card .v{font-size:20px}}
+
+/* ══ ALLOCATION ══ */
+.alloc{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--hair);border:1px solid var(--hair);border-top:0;margin-bottom:30px}
+@media(max-width:760px){.alloc{grid-template-columns:1fr}}
+.alloc .card{padding:19px 20px 18px}
+.bar{display:flex;height:5px;background:var(--panel-2);margin-top:2px}
+.bar div{transition:width .3s linear}
+.legend{display:flex;flex-direction:column;gap:7px;margin-top:15px}
+.legend span{display:flex;align-items:center;gap:9px;color:var(--grey);font-size:11.5px}
+.legend i{width:7px;height:7px;flex-shrink:0}
+.legend .nm{font-family:var(--din);font-size:12px;letter-spacing:.05em;text-transform:uppercase;font-weight:500}
+.legend b{margin-left:auto;color:var(--white);font-weight:400;font-size:12px}
+
+/* ══ CHART ══ */
+.chart-card{border:1px solid var(--hair);border-top:0;background:var(--void);padding:19px 20px 15px;margin-bottom:30px}
+.chart-card svg{width:100%;height:170px;display:block;margin-top:14px}
+.chart-meta{display:flex;justify-content:space-between;font-size:11px;color:var(--grey);margin-top:9px;letter-spacing:.04em;gap:10px;flex-wrap:wrap}
+
+/* ══ TABLES ══ */
+.grupo{margin-bottom:32px}
+.grupo-h{display:flex;align-items:center;gap:14px;margin-bottom:0;padding:0 0 9px;border-bottom:1px solid var(--white)}
+.grupo-h h2{font-family:var(--din);font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--white)}
+.grupo-h .idx{font-family:var(--mono);font-size:10px;color:var(--grey-dim);letter-spacing:.05em}
+.grupo-h .tot{margin-left:auto;font-size:13px;color:var(--grey);letter-spacing:.02em}
+.grupo-h .tot b{color:var(--white);font-weight:500}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:right;font-family:var(--din);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+  font-weight:600;color:var(--grey-dim);padding:11px 12px 9px;white-space:nowrap;border-bottom:1px solid var(--hair)}
+th:first-child,td:first-child{text-align:left;padding-left:2px}
+th.l,td.l{text-align:left}
+td{text-align:right;padding:10px 12px;border-bottom:1px solid #171717;white-space:nowrap;letter-spacing:0;color:#B4B4B4}
+tbody tr:hover td{background:var(--panel);color:var(--white)}
+td.tk{font-family:var(--din);font-size:14.5px;font-weight:600;letter-spacing:.04em;color:var(--white);text-transform:uppercase}
+td .cta-tag{font-family:var(--din);font-size:10.5px;font-weight:600;letter-spacing:.07em;color:var(--grey);
+  border:1px solid var(--hair);padding:2px 8px;text-transform:uppercase}
+td .op-c,td .op-v{font-family:var(--din);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+td .op-c{color:var(--up)}td .op-v{color:var(--down)}
+.tbl-scroll{overflow-x:auto;scrollbar-width:thin}
+.section-h{display:flex;align-items:center;gap:14px;margin:42px 0 0;padding-bottom:9px;border-bottom:1px solid var(--white)}
+.section-h h2{font-family:var(--din);font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.section-h .idx{font-size:10px;color:var(--grey-dim);letter-spacing:.05em}
+.section-h span:last-child{margin-left:auto;color:var(--grey);font-size:11.5px;letter-spacing:.04em}
+
+/* ══ EMPTY / MESSAGES ══ */
+.empty{border:1px solid var(--hair);padding:64px 30px;text-align:center;margin:30px 0 40px}
+.empty h3{font-family:var(--din);font-size:26px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:16px}
+.empty p{color:var(--grey);font-size:12.5px;line-height:1.9;max-width:560px;margin:0 auto 26px;letter-spacing:.02em}
+.err,.notice{border:1px solid var(--down);color:var(--down);padding:13px 18px;margin-bottom:20px;font-size:12px;
+  display:none;letter-spacing:.05em;text-transform:uppercase;font-family:var(--din);font-weight:600;font-size:12.5px}
+.notice{border-color:var(--hair-hot);color:var(--grey)}
+.loading{color:var(--grey-dim);font-family:var(--din);font-size:13px;padding:60px 0;text-align:center;
+  letter-spacing:.16em;text-transform:uppercase;font-weight:600}
+footer{margin-top:56px;color:var(--grey-dim);font-size:11px;line-height:2;border-top:1px solid var(--hair);
+  padding-top:20px;letter-spacing:.04em}
+footer b{color:var(--grey);font-weight:400}
+
+
+/* ══ PERFORMANCE ══ */
+.perf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;background:var(--hair);
+  border:1px solid var(--hair);border-top:0;margin-bottom:26px}
+.perf{background:var(--void);padding:17px 19px 15px}
+.perf.hero{grid-column:span 2}
+@media(max-width:700px){.perf.hero{grid-column:1/-1}}
+.perf .k{font-family:var(--din);font-size:10.5px;font-weight:600;letter-spacing:.09em;color:var(--grey);
+  text-transform:uppercase;margin-bottom:10px}
+.perf .v{font-size:26px;font-weight:400;letter-spacing:-.02em;line-height:1}
+.perf.hero .v{font-size:40px;font-weight:300}
+.perf .d{font-size:11.5px;color:var(--grey);margin-top:8px}
+.perf-tbl td{padding:11px 12px}
+.contrib-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
+.contrib-bar{height:8px;min-width:1px}
+.contrib-bar.pos{background:var(--up)}
+.contrib-bar.neg{background:var(--down)}
+.contrib-wrap span{font-size:11.5px;color:var(--grey);white-space:nowrap}
+.perf-note{font-size:11px;color:var(--grey-dim);line-height:1.9;margin-top:14px;max-width:840px}
+/* ══ CHART v2 ══ */
+.chart-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.chart-now{font-size:24px;font-weight:400;letter-spacing:-.02em}
+.chart-yaxis{display:flex;flex-direction:column;justify-content:space-between;position:absolute;right:20px;top:52px;
+  height:172px;font-size:10px;color:var(--grey-dim);text-align:right;pointer-events:none}
+.chart-card{position:relative}
+.chart-axis{position:relative;height:15px;margin-top:3px}
+.chart-axis span{position:absolute;transform:translateX(-50%);font-size:9.5px;color:var(--grey-dim);letter-spacing:.06em}
+.chart-warn{font-size:12px;color:var(--down);line-height:1.8;padding:22px 2px 6px;max-width:760px}
+.chart-warn b{color:var(--white)}
+.chart-note{font-size:11px;color:var(--grey-dim);line-height:1.8;margin-top:12px;border-top:1px solid var(--hair);padding-top:11px}
+
+.sync-row{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--hair);font-size:12.5px}
+.sync-row .lbl{color:var(--grey)}
+.st-cell .v.sync-ok{color:var(--up)}
+.st-cell .v.sync-warn{color:var(--down)}
+
+/* ══ MODALS ══ */
+.modal-bg{position:fixed;inset:0;background:#000000E8;display:none;align-items:flex-start;justify-content:center;
+  padding:44px 16px;overflow-y:auto;z-index:50}
+.modal-bg.open{display:flex}
+.modal{background:var(--void);border:1px solid var(--hair-hot);padding:28px;width:100%;max-width:540px}
+.modal h3{font-family:var(--din);font-size:19px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  margin-bottom:24px;padding-bottom:13px;border-bottom:1px solid var(--hair)}
+.f-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.f-grid .full{grid-column:1/-1}
+label{display:block;font-family:var(--din);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--grey);font-weight:600;margin-bottom:7px}
+input,select{width:100%;background:var(--void);border:1px solid var(--hair);color:var(--white);padding:9px 11px;
+  font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+input:focus,select:focus{border-color:var(--white);outline:none}
+input:disabled{color:var(--grey-dim);border-color:#161616}
+select{cursor:pointer}
+.hint{font-size:11px;color:var(--grey);margin-top:7px;line-height:1.7;letter-spacing:.03em}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:26px;padding-top:20px;border-top:1px solid var(--hair)}
+.f-err{color:var(--down);font-size:11.5px;margin-top:16px;display:none;letter-spacing:.05em;line-height:1.7}
+@media(max-width:760px){.f-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="status"><div class="wrap">
+  <div class="st-live"><span class="dot" id="dot"></span><span class="txt" id="conn">LIVE</span></div>
+  <div class="st-cell"><span class="k">MEP</span><span class="v" id="fx-mep">—</span></div>
+  <div class="st-cell"><span class="k">CCL</span><span class="v" id="fx-ccl">—</span></div>
+  <div class="st-cell"><span class="k">OFICIAL</span><span class="v" id="fx-oficial">—</span></div>
+  <div class="st-cell"><span class="k">BLUE</span><span class="v" id="fx-blue">—</span></div>
+  <div class="st-cell" id="sy-cell" style="display:none"><span class="k">Sync</span><span class="v" id="sy-badge">—</span></div>
+  <div class="st-cell" id="bk-cell" style="display:none"><span class="k">Backup</span><span class="v" id="bk">—</span></div>
+  <div class="st-cell st-clock"><span class="k">LOCAL</span><span class="v" id="clock">—</span></div>
+  <span id="fx-ts" style="display:none"></span>
+</div></div>
+
+<div class="wrap">
+<header>
+  <div>
+    <h1>Portfolio Telemetry</h1>
+    <div class="h-sub" id="ts">INICIALIZANDO</div>
+  </div>
+  <div class="controls">
+    <div class="toggle" role="group" aria-label="Moneda de valuación">
+      <button id="btn-ars" class="active" onclick="setMoneda('ARS')">ARS</button>
+      <button id="btn-usd" onclick="setMoneda('USD')">USD</button>
+    </div>
+    <button class="btn primary" onclick="abrirMov()">+ Movimiento</button>
+    <button class="btn" onclick="abrirSaldos()">Saldos</button>
+    <button class="btn" onclick="cargar()">Refrescar</button>
+    <button class="btn" id="btn-sync" onclick="abrirSync()">Sync</button>
+    <button class="btn" onclick="exportar()">Export</button>
+    <button class="btn" onclick="document.getElementById('imp').click()">Import</button>
+    <input type="file" id="imp" accept=".json" style="display:none" onchange="importar(event)">
+  </div>
+</header>
+
+<div class="err" id="err"></div>
+<div class="notice" id="notice"></div>
+<div id="contenido"><div class="loading">Estableciendo enlace</div></div>
+
+<footer>
+  Precios: <b>data912.com</b> (BYMA, ~tiempo real) · Dólares: <b>dolarapi.com</b> · FCI: <b>argentinadatos.com</b> (VCP por 1.000 cuotapartes, cierre previo).
+  Bonos, letras y ONs por precio c/100 VN. Costos bimonetarios al MEP del día de cada operación. Posiciones por costo promedio ponderado; ventas realizan P&amp;L contra el promedio.
+  Los datos se guardan en este navegador (localStorage) y no se sincronizan entre dispositivos: usá <b>Export/Import</b> para moverlos y como respaldo. Uso personal, verificar contra extracto del broker.
+</footer>
+</div>
+
+<!-- Modal movimiento -->
+<div class="modal-bg" id="modal-mov">
+  <div class="modal">
+    <h3 id="mov-title">Registrar movimiento</h3>
+    <div class="f-grid">
+      <div><label>Fecha</label><input type="date" id="m-fecha"></div>
+      <div><label>Operación</label><select id="m-op"><option value="compra">Compra</option><option value="venta">Venta</option></select></div>
+      <div><label>Tipo</label>
+        <select id="m-tipo" onchange="tipoChanged()">
+          <option value="bono">Bono soberano/subsob.</option>
+          <option value="letra">Letra</option>
+          <option value="on">ON corporativa</option>
+          <option value="accion">Acción</option>
+          <option value="cedear">CEDEAR</option>
+          <option value="fci">FCI</option>
+          <option value="manual">Manual (UCITS, otro)</option>
+        </select></div>
+      <div><label>Cuenta</label>
+        <select id="m-cuenta-sel" onchange="cuentaChanged()"></select>
+        <input id="m-cuenta-nueva" placeholder="Nombre de la cuenta nueva" style="display:none;margin-top:8px" autocomplete="off">
+      </div>
+      <div class="full" id="f-ticker"><label>Ticker / especie</label><input id="m-ticker" list="dl-tickers" placeholder="AL30D, GD35, MELI…" style="text-transform:uppercase" autocomplete="off"><datalist id="dl-tickers"></datalist>
+        <div class="hint">Sugiere especies del panel BYMA según el tipo elegido. Sufijo D = especie en dólares (AL30D).</div></div>
+      <div class="full" id="f-fci" style="display:none">
+        <label>Categoría del fondo</label>
+        <select id="m-cat" onchange="cargarFondos()">
+          <option value="mercadoDinero">Mercado de dinero</option>
+          <option value="rentaFija">Renta fija</option>
+          <option value="rentaVariable">Renta variable</option>
+          <option value="rentaMixta">Renta mixta</option>
+        </select>
+        <label style="margin-top:12px">Fondo (nombre exacto)</label>
+        <input id="m-fondo" list="dl-fondos" placeholder="Fima Premium - Clase A"><datalist id="dl-fondos"></datalist>
+      </div>
+      <div><label>Cantidad</label><input type="number" id="m-cant" step="any" min="0" placeholder="Nominales / cuotapartes">
+        <div class="hint" id="h-cant"></div></div>
+      <div><label>Precio unitario</label><input type="number" id="m-precio" step="any" min="0">
+        <div class="hint" id="h-precio">Bonos/letras/ONs: c/100 VN · FCI: VCP por 1.000 cp</div></div>
+      <div><label>Moneda del precio</label><select id="m-moneda"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+      <div><label>Total operación</label><input id="m-total" disabled></div>
+    </div>
+    <div class="f-err" id="m-err"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="cerrarModales()">Cancelar</button>
+      <button class="btn primary" id="m-guardar" onclick="guardarMov()">Guardar movimiento</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal precio manual -->
+<div class="modal-bg" id="modal-precio">
+  <div class="modal">
+    <h3>Actualizar precio manual · <span id="p-ticker" style="color:var(--amber)"></span></h3>
+    <div class="f-grid">
+      <div><label>Precio actual</label><input type="number" id="p-precio" step="any" min="0"></div>
+      <div><label>Moneda</label><select id="p-moneda"><option value="USD">USD</option><option value="ARS">ARS</option></select></div>
+    </div>
+    <div class="hint" style="margin-top:10px">Para UCITS u otros activos sin cotización BYMA: cargá el NAV/precio cuando quieras actualizarlo.</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="cerrarModales()">Cancelar</button>
+      <button class="btn primary" onclick="guardarPrecio()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal sync -->
+<div class="modal-bg" id="modal-sync">
+  <div class="modal">
+    <h3>Sincronización en la nube</h3>
+    <div id="sync-setup">
+      <div class="hint" style="margin-bottom:18px;line-height:1.9">
+        Guarda tus movimientos en un <b>gist secreto</b> de GitHub para acceder a los mismos datos desde cualquier dispositivo.
+        El gist es privado: solo accesible con tu token. Necesitás un token con permiso únicamente sobre gists.
+        <a href="https://github.com/settings/tokens/new?scopes=gist&description=Cartera" target="_blank" rel="noopener" style="color:var(--white)">Crear token →</a>
+        (marcá solo <b>gist</b>, sin fecha de expiración o la que prefieras).
+      </div>
+      <div class="f-grid">
+        <div class="full"><label>Token de GitHub</label>
+          <input type="password" id="sy-token" placeholder="ghp_…" autocomplete="off">
+          <div class="hint">Se guarda solo en este navegador. Nunca se envía a otro lado que no sea la API de GitHub.</div></div>
+        <div class="full"><label>ID del gist <span style="color:var(--grey-dim)">— dejalo vacío para crear uno nuevo</span></label>
+          <input id="sy-gist" placeholder="Se completa solo al crear" autocomplete="off">
+          <div class="hint">Para conectar un segundo dispositivo, copiá acá el ID que aparece en el primero.</div></div>
+      </div>
+      <div class="f-err" id="sy-err"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="cerrarModales()">Cancelar</button>
+        <button class="btn primary" id="sy-conectar" onclick="conectarSync()">Conectar</button>
+      </div>
+    </div>
+    <div id="sync-panel" style="display:none">
+      <div class="sync-row"><span class="lbl">Estado</span><span id="sy-estado">—</span></div>
+      <div class="sync-row"><span class="lbl">Último sync</span><span id="sy-fecha">—</span></div>
+      <div class="sync-row"><span class="lbl">ID del gist</span>
+        <span style="display:flex;gap:8px;align-items:center"><code id="sy-id" style="font-size:11.5px;color:var(--grey)"></code>
+        <button class="btn mini" onclick="copiarGist()">Copiar</button></span></div>
+      <div class="hint" style="margin-top:16px;line-height:1.9">
+        Para usar el mismo dashboard en otro dispositivo: abrí la URL allá, entrá a Sync, pegá el mismo token y este ID.
+      </div>
+      <div class="f-err" id="sy-err2"></div>
+      <div class="modal-actions" style="flex-wrap:wrap">
+        <button class="btn danger" onclick="desconectarSync()" style="margin-right:auto;border-color:var(--hair)">Desconectar</button>
+        <button class="btn" onclick="bajarNube(true)">Traer de la nube</button>
+        <button class="btn primary" onclick="subirNube(true)">Subir a la nube</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal saldos -->
+<div class="modal-bg" id="modal-saldos">
+  <div class="modal">
+    <h3>Saldos en cuenta</h3>
+    <div class="hint" style="margin-bottom:16px">Efectivo disponible por cuenta. Los valores negativos (descubierto, caución tomadora) se restan del total de la cartera.</div>
+    <div id="saldos-rows"></div>
+    <div style="display:flex;gap:10px;margin-top:14px;align-items:flex-end">
+      <div style="flex:1"><label>Agregar cuenta</label><input id="s-nueva" placeholder="Nombre de la cuenta"></div>
+      <button class="btn" onclick="agregarCuentaSaldo()">+ Agregar</button>
+    </div>
+    <div style="border-top:1px solid var(--line);margin-top:20px;padding-top:16px">
+      <label>Renombrar o unificar cuentas</label>
+      <div class="hint" style="margin:0 0 10px">Si cargaste la misma cuenta con nombres distintos, renombrá una al nombre de la otra para fusionar las posiciones.</div>
+      <div style="display:flex;gap:10px;align-items:flex-end">
+        <div style="flex:1"><select id="r-origen"></select></div>
+        <span style="color:var(--muted);padding-bottom:9px">→</span>
+        <div style="flex:1"><input id="r-destino" placeholder="Nombre destino" autocomplete="off"></div>
+        <button class="btn" onclick="renombrarCuenta()">Aplicar</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="cerrarModales()">Cancelar</button>
+      <button class="btn primary" onclick="guardarSaldos()">Guardar saldos</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ══════════════ Config ══════════════ */
+const LS_KEY = "mi_cartera_datos_v1";
+const EP = {
+  bono:"https://data912.com/live/arg_bonds", letra:"https://data912.com/live/arg_notes",
+  on:"https://data912.com/live/arg_corp", accion:"https://data912.com/live/arg_stocks",
+  cedear:"https://data912.com/live/arg_cedears",
+};
+const GRUPOS = [
+  {nombre:"Soberanos y letras", tipos:["bono","letra"], color:"#FFFFFF"},
+  {nombre:"ONs corporativas",   tipos:["on"], color:"#A8A8A8"},
+  {nombre:"Acciones y CEDEARs", tipos:["accion","cedear"], color:"#6E6E6E"},
+  {nombre:"FCI y otros",        tipos:["fci","manual"], color:"#414141"},
+];
+const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 1000 : 1;
+
+/* ══════════════ Estado y persistencia ══════════════ */
+let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}};
+let MONEDA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null;
+try{ localStorage.setItem("__t","1"); localStorage.removeItem("__t"); }catch(e){ hayStorage=false; }
+
+function persistir(){
+  if(!hayStorage) return;
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(DATOS)); }catch(e){}
+}
+function purgarSnapshots(){
+  // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
+  // Se detectan porque quedan muy por debajo del capital aportado a esa fecha.
+  const movs=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.id-b.id);
+  if(!movs.length||!DATOS.snapshots?.length) return;
+  let caja=0,apor=0; const hitos=[];
+  for(const m of movs){
+    const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
+    const a=m.moneda==="USD"?bruto*m.mep:bruto;
+    if(m.op==="compra"){ const d=Math.min(caja,a); caja-=d; apor+=a-d; } else caja+=a;
+    hitos.push({fecha:m.fecha,apor,caja});
+  }
+  DATOS.snapshots=DATOS.snapshots.filter(s=>{
+    let hh=hitos[0]; for(const x of hitos) if(x.fecha<=s.fecha) hh=x;
+    return (s.ars+hh.caja)/hh.apor-1 > -0.5; // −50% en un mes es casi seguro dato roto
+  });
+}
+let syncTimer=null;
+function persistirYSync(){
+  persistir();
+  if(!SYNC?.gist) return;
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(()=>subirNube(false),1500);
+}
+function restaurar(){
+  if(!hayStorage) return;
+  try{ const d = localStorage.getItem(LS_KEY); if(d) DATOS = {movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...JSON.parse(d)}; }catch(e){}
+}
+
+/* ══════════════ Utilidades ══════════════ */
+const fmt=(n,dec=0)=> n==null||isNaN(n)?"—":n.toLocaleString("es-AR",{minimumFractionDigits:dec,maximumFractionDigits:dec});
+const money=n=> MONEDA==="ARS"?"$ "+fmt(n,0):"US$ "+fmt(n,0);
+const signoMoney=n=>(n<0?"−":"+")+money(Math.abs(n));
+const cls=n=> n>0?"up":n<0?"down":"";
+const sgn=n=> (n>0?"+":"")+fmt(n,2)+"%";
+const hoy=()=> new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD local
+async function getJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error(url.split("/").slice(-2).join("/")+" HTTP "+r.status); return r.json(); }
+
+function setMoneda(m){
+  MONEDA=m;
+  document.getElementById("btn-ars").classList.toggle("active",m==="ARS");
+  document.getElementById("btn-usd").classList.toggle("active",m==="USD");
+  if(ESTADO) render();
+}
+
+/* ══════════════ Derivación de posiciones (CPP) ══════════════ */
+function derivarPosiciones(excluirId){
+  const map={}; let realARS=0, realUSD=0;
+  const movs=[...DATOS.movimientos].filter(m=>m.id!==excluirId).sort((a,b)=> a.fecha.localeCompare(b.fecha)||a.id-b.id);
+  for(const m of movs){
+    const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
+    const div=divisorDe(m.tipo);
+    const bruto=m.precio/div*m.cantidad;
+    const cARS=m.moneda==="USD"?bruto*m.mep:bruto;
+    const cUSD=m.moneda==="USD"?bruto:bruto/m.mep;
+    if(!map[key]) map[key]={tipo:m.tipo,ticker:m.ticker,cuenta:m.cuenta,categoria:m.categoria,fondo:m.fondo,qty:0,costARS:0,costUSD:0};
+    const p=map[key];
+    if(m.op==="compra"){ p.qty+=m.cantidad; p.costARS+=cARS; p.costUSD+=cUSD; }
+    else{
+      const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
+      realARS+=cARS-aARS*m.cantidad; realUSD+=cUSD-aUSD*m.cantidad;
+      p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
+    }
+  }
+  return {posiciones:Object.values(map).filter(p=>p.qty>1e-9), realARS, realUSD};
+}
+function qtyDisponible(tipo,ticker,fondo,cuenta,excluirId){
+  const {posiciones}=derivarPosiciones(excluirId);
+  const p=posiciones.find(x=>x.tipo===tipo&&x.cuenta===cuenta&&(tipo==="fci"?x.fondo===fondo:x.ticker===ticker));
+  return p?p.qty:0;
+}
+
+
+/* ══════════════ Serie de rendimiento ══════════════
+   Distingue APORTES de capital externo de la ROTACIÓN interna de cartera.
+   Una venta acredita caja; una compra consume caja y solo el faltante
+   cuenta como aporte nuevo. Sin esa distinción, reinvertir el producto de
+   una venta se contabilizaría como si hubiera entrado plata de afuera.
+
+   Rendimiento acumulado = (valor de posiciones + caja) / capital aportado − 1.
+   Los puntos de la curva usan snapshots de NAV; entre snapshots no hay
+   precios históricos por especie disponibles en fuentes gratuitas, así que
+   la serie se ancla en los hitos ciertos: cada operación y cada cierre. */
+function serieRendimiento(){
+  const movs=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.id-b.id);
+  if(!movs.length) return null;
+  const K=MONEDA==="ARS"?"ars":"usd";
+  let cajaA=0, cajaU=0, aporA=0, aporU=0;
+  const hitos=[];
+  for(const m of movs){
+    const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
+    const a=m.moneda==="USD"?bruto*m.mep:bruto;
+    const u=m.moneda==="USD"?bruto:bruto/m.mep;
+    if(m.op==="compra"){
+      const dA=Math.min(cajaA,a), dU=Math.min(cajaU,u);
+      cajaA-=dA; cajaU-=dU; aporA+=a-dA; aporU+=u-dU;
+    } else { cajaA+=a; cajaU+=u; }
+    const prev=hitos[hitos.length-1];
+    const snap={fecha:m.fecha,aporA,aporU,cajaA,cajaU};
+    if(prev&&prev.fecha===m.fecha) hitos[hitos.length-1]=snap; else hitos.push(snap);
+  }
+  const aporte=K==="ars"?aporA:aporU;
+  const caja=K==="ars"?cajaA:cajaU;
+  // Aporte vigente en cada fecha (para normalizar los snapshots de NAV)
+  const aporteEn=f=>{
+    let r=hitos[0];
+    for(const hh of hitos) if(hh.fecha<=f) r=hh;
+    return K==="ars"?{ap:r.aporA,cj:r.cajaA}:{ap:r.aporU,cj:r.cajaU};
+  };
+  const puntos=[];
+  puntos.push({fecha:movs[0].fecha,ret:0});
+  for(const s of (DATOS.snapshots||[])){
+    if(s.fecha<=movs[0].fecha) continue;
+    const {ap,cj}=aporteEn(s.fecha);
+    if(ap>0) puntos.push({fecha:s.fecha,ret:(s[K]+cj)/ap-1});
+  }
+  return {puntos,aporte,caja,desde:movs[0].fecha,hitos};
+}
+
+/* ══════════════ Rendimientos ══════════════ */
+function diasEntre(a,b){ return Math.max(1,Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5)); }
+function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null; }
+
+function metricasPorPosicion(pos){
+  // Fecha de primera compra y monto invertido por posición (para TIR simple y anualizado)
+  const primera={};
+  for(const m of [...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))){
+    const k=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
+    if(m.op==="compra"&&!primera[k]) primera[k]=m.fecha;
+  }
+  return pos.map(p=>{
+    const k=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
+    const desde=primera[k];
+    const costo=MONEDA==="ARS"?p.costARS:p.costUSD;
+    const val=MONEDA==="ARS"?p.valARS:p.valUSD;
+    const ret=(val!=null&&costo>0)?val/costo-1:null;
+    const dias=desde?diasEntre(desde,hoy()):null;
+    return {...p,desde,dias,ret,tna:(ret!=null&&dias)?anualizar(ret,dias):null,
+      costoM:costo,valM:val,contrib:null};
+  });
+}
+
+/* ══════════════ Carga de precios y valuación ══════════════ */
+async function cargar(){
+  const err=document.getElementById("err"); err.style.display="none";
+  document.getElementById("ts").textContent="SINCRONIZANDO";
+  try{
+    const {posiciones, realARS, realUSD}=derivarPosiciones();
+    const tipos=[...new Set(posiciones.map(p=>p.tipo))].filter(t=>EP[t]);
+    const cats=[...new Set(posiciones.filter(p=>p.tipo==="fci").map(p=>p.categoria))];
+    const [dolares,...resto]=await Promise.all([
+      getJSON("https://dolarapi.com/v1/dolares"),
+      ...tipos.map(t=>getJSON(EP[t]).then(d=>({t,d}))),
+      ...cats.map(c=>getJSON("https://api.argentinadatos.com/v1/finanzas/fci/"+c+"/ultimo").then(d=>({t:"fci:"+c,d})))
+    ]);
+    const precios={};
+    for(const {t,d} of resto){ precios[t]={}; for(const r of d) precios[t][r.symbol??r.fondo]=r; }
+    const fx={}; for(const d of dolares) fx[d.casa]=(d.compra+d.venta)/2;
+    const MEP=fx["bolsa"];
+
+    const pos=posiciones.map(p=>{
+      let px=null,pxMoneda="ARS",pct=null,fuente="";
+      if(p.tipo==="manual"){
+        const pm=DATOS.preciosManuales[p.ticker];
+        if(pm){ px=pm.precio; pxMoneda=pm.moneda; fuente=pm.fecha; }
+      } else if(p.tipo==="fci"){
+        const r=precios["fci:"+p.categoria]?.[p.fondo];
+        if(r){ px=r.vcp; fuente=r.fecha; }
+      } else {
+        const r=precios[p.tipo]?.[p.ticker];
+        if(r){
+          px=r.c||r.px_bid||null; pct=r.pct_change??null;
+          const base=p.ticker.slice(0,-1);
+          pxMoneda=(/[DC]$/.test(p.ticker)&&precios[p.tipo][base]!=null)?"USD":"ARS";
+        }
+      }
+      const div=divisorDe(p.tipo);
+      const valNat=px!=null?px/div*p.qty:null;
+      const valARS=valNat==null?null:pxMoneda==="USD"?valNat*MEP:valNat;
+      const valUSD=valARS==null?null:valARS/MEP;
+      return {...p,px,pxMoneda,pct,fuente,valARS,valUSD,
+        plARS:valARS==null?null:valARS-p.costARS,
+        plUSD:valUSD==null?null:valUSD-p.costUSD,
+        varDiaARS:(valARS!=null&&pct!=null)?valARS-valARS/(1+pct/100):0};
+    });
+
+    ESTADO={pos,fx,MEP,realARS,realUSD,hora:new Date()};
+    conn(true);
+
+    // Snapshot diario (uno por fecha, se pisa si ya existe) — incluye liquidez
+    const cashARS=Object.values(DATOS.saldos||{}).reduce((s,x)=>s+(x.ars||0)+(x.usd||0)*MEP,0);
+    const tARS=pos.reduce((s,p)=>s+(p.valARS||0),0)+cashARS;
+    const sinPrecio=pos.filter(p=>p.valARS==null).length;
+    if(pos.length>0&&sinPrecio===0){
+      const f=hoy(), i=DATOS.snapshots.findIndex(s=>s.fecha===f);
+      const snap={fecha:f,ars:Math.round(tARS),usd:Math.round(tARS/MEP*100)/100};
+      if(i>=0) DATOS.snapshots[i]=snap; else DATOS.snapshots.push(snap);
+      DATOS.snapshots.sort((a,b)=>a.fecha.localeCompare(b.fecha));
+      persistir();
+    }
+    render();
+  }catch(e){
+    conn(false);
+    err.textContent="Enlace interrumpido — "+e.message;
+    err.style.display="block";
+    document.getElementById("ts").textContent="ERROR DE SYNC";
+    render(true);
+  }
+}
+
+/* ══════════════ Render ══════════════ */
+function render(soloEstructura){
+  const cont=document.getElementById("contenido");
+  const {posiciones}=derivarPosiciones();
+
+  if(!hayStorage){
+    document.getElementById("notice").textContent="Este entorno no permite guardar datos (vista previa). Abrí el archivo localmente en tu navegador para que los movimientos queden guardados.";
+    document.getElementById("notice").style.display="block";
+  }
+
+  if(DATOS.movimientos.length===0){
+    cont.innerHTML=`<div class="empty">
+      <h3>Sin datos de posición</h3>
+      <p>Registrá cada posición actual como una <b>compra</b> con su fecha y costo reales (o los de hoy si preferís arrancar la medición desde ahora).
+      A partir de ahí, cada compra o venta que hagas se registra acá y el sistema deriva posiciones, costo promedio y P&amp;L realizado automáticamente.</p>
+      <button class="btn primary" onclick="abrirMov()">Iniciar registro</button>
+    </div>`;
+    if(ESTADO){pintarFX();} return;
+  }
+
+  if(!ESTADO){ cont.innerHTML='<div class="loading">Consultando precios…</div>'; return; }
+  const {pos,fx,MEP,realARS,realUSD,hora}=ESTADO;
+  const V=p=>MONEDA==="ARS"?p.valARS:p.valUSD, C=p=>MONEDA==="ARS"?p.costARS:p.costUSD, PL=p=>MONEDA==="ARS"?p.plARS:p.plUSD;
+
+  pintarFX(); estadoBackup(); pintarSync();
+  document.getElementById("ts").textContent="ÚLTIMO SYNC "+hora.toLocaleString("es-AR",{dateStyle:"short",timeStyle:"medium"}).toUpperCase();
+
+  const totalPos=pos.reduce((s,p)=>s+(V(p)||0),0);
+  const costo=pos.reduce((s,p)=>s+(V(p)!=null?C(p):0),0);
+  const pl=totalPos-costo;
+  const varDia=pos.reduce((s,p)=>s+(p.varDiaARS||0),0)/(MONEDA==="ARS"?1:MEP);
+  const realizado=MONEDA==="ARS"?realARS:realUSD;
+  const saldos=DATOS.saldos||{};
+  const cuentas=[...new Set([...pos.map(p=>p.cuenta),...Object.keys(saldos)])];
+  const cashCta=c=>{const s=saldos[c]||{}; const a=(s.ars||0)+(s.usd||0)*MEP; return MONEDA==="ARS"?a:a/MEP;};
+  const cash=cuentas.reduce((s,c)=>s+cashCta(c),0);
+  const total=totalPos+cash;
+  const hayCash=Object.keys(saldos).length>0;
+
+  let html=`<div class="cards">
+    <div class="card hero"><div class="k">NAV · Total</div><div class="v">${money(total)}</div>
+      <div class="d">${MONEDA==="ARS"?"US$ "+fmt(total/MEP,0)+" MEP":"$ "+fmt(total*MEP,0)}${hayCash?" · incl. liquidez":""}</div></div>
+    ${hayCash?`<div class="card"><div class="k">Cash · Neto</div><div class="v ${cash<0?"down":""}">${(cash<0?"−":"")+money(Math.abs(cash))}</div>
+      <div class="d">${fmt(cash/total*100,1)}% del total</div></div>`:""}
+    <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
+      <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
+    <div class="card"><div class="k">Delta · 24H</div><div class="v ${cls(varDia)}">${signoMoney(varDia)}</div>
+      <div class="d ${cls(varDia)}">${totalPos-varDia>0?sgn(varDia/(totalPos-varDia)*100):""}</div></div>
+    ${Math.abs(realizado)>0.01?`<div class="card"><div class="k">P&amp;L · Realizado</div>
+      <div class="v ${cls(realizado)}">${signoMoney(realizado)}</div><div class="d">acumulado</div></div>`:""}
+    ${cuentas.map(c=>{const t=pos.filter(p=>p.cuenta===c).reduce((s,p)=>s+(V(p)||0),0)+cashCta(c);
+      return `<div class="card"><div class="k">${c}</div><div class="v">${money(t)}</div><div class="d">${fmt(t/total*100,1)}% del total</div></div>`;}).join("")}
+  </div>`;
+
+  // Asignación
+  const allocClase=GRUPOS.map(g=>({n:g.nombre,color:g.color,v:pos.filter(p=>g.tipos.includes(p.tipo)).reduce((s,p)=>s+(V(p)||0),0)})).filter(x=>x.v>0);
+  if(cash!==0) allocClase.push({n:"Liquidez",color:"#282828",v:cash});
+  const colC=["#FFFFFF","#9A9A9A","#5C5C5C","#383838","#1F1F1F"];
+  const allocCta=cuentas.map((c,i)=>({n:c,color:colC[i%colC.length],v:pos.filter(p=>p.cuenta===c).reduce((s,p)=>s+(V(p)||0),0)+cashCta(c)}));
+  const barra=arr=>`<div class="bar">${arr.map(x=>`<div style="width:${Math.max(0,x.v/total*100)}%;background:${x.color}"></div>`).join("")}</div>
+    <div class="legend">${arr.map(x=>`<span><i style="background:${x.color}"></i><span class="nm">${x.n}</span><b>${fmt(x.v/total*100,1)}%</b></span>`).join("")}</div>`;
+  html+=`<div class="alloc"><div class="card"><div class="k">Asignación · Clase</div>${barra(allocClase)}</div>
+    <div class="card"><div class="k">Asignación · Cuenta</div>${barra(allocCta)}</div></div>`;
+
+  // ══ Gráfico de rendimiento acumulado ══
+  const sr=serieRendimiento();
+  const sinPx=pos.filter(p=>p.valARS==null);
+  if(sinPx.length){
+    html+=`<div class="chart-card"><div class="chart-head"><div class="k">Rendimiento acumulado</div></div>
+      <div class="chart-warn">No se puede calcular el rendimiento porque ${sinPx.length===1?"una posición no tiene":sinPx.length+" posiciones no tienen"} precio:
+      <b>${sinPx.map(p=>p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker).join(", ")}</b>.
+      Revisá que el tipo de instrumento sea el correcto (editando el movimiento) o cargá un precio manual.</div></div>`;
+  } else if(sr&&sr.aporte>0){
+    const retHoy=(total+ (0))/sr.aporte-1; // total ya incluye posiciones + liquidez declarada
+    const pts=sr.puntos.filter(p=>p.fecha!==hoy());
+    pts.push({fecha:hoy(),ret:retHoy});
+    const t0=new Date(sr.desde+"T12:00").getTime(), t1=new Date(hoy()+"T12:00").getTime();
+    const span=Math.max(1,t1-t0);
+    const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
+    const rets=pts.map(p=>p.ret);
+    let mn=Math.min(0,...rets), mx=Math.max(0,...rets);
+    const pad0=(mx-mn)*0.15||0.02; mn-=pad0; mx+=pad0;
+    const rg=(mx-mn)||1;
+    const W=1000,H=220,pl=4,pt=12,pb=24;
+    const px=x=>(pl+x*(W-2*pl)).toFixed(1);
+    const py=y=>(H-pb-(y-mn)/rg*(H-pt-pb)).toFixed(1);
+    const yCero=py(0);
+    const dLine="M "+pts.map(p=>px(X(p.fecha))+" "+py(p.ret)).join(" L ");
+    const gan=retHoy>=0;
+    // Marcas mensuales
+    const meses=[]; let cur=new Date(t0); cur.setDate(1);
+    while(cur.getTime()<=t1){
+      const f=cur.toLocaleDateString("sv-SE");
+      if(f>=sr.desde) meses.push({x:X(f),lbl:cur.toLocaleDateString("es-AR",{month:"short"}).toUpperCase().replace(".","")});
+      cur.setMonth(cur.getMonth()+1);
+    }
+    // Escala Y: 4 niveles
+    const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
+    html+=`<div class="chart-card">
+      <div class="chart-head"><div class="k">Rendimiento acumulado · ${MONEDA==="ARS"?"ARS":"USD MEP"}</div>
+        <div class="chart-now ${cls(retHoy)}">${sgn(retHoy*100)}</div></div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera">
+        ${ticks.map(t=>`<line x1="0" y1="${t.y}" x2="${W}" y2="${t.y}" stroke="#161616" stroke-width="1"/>`).join("")}
+        ${meses.map(m=>`<line x1="${px(m.x)}" y1="${pt}" x2="${px(m.x)}" y2="${H-pb}" stroke="#141414" stroke-width="1"/>`).join("")}
+        <path d="${dLine} L ${px(1)} ${yCero} L ${px(X(pts[0].fecha))} ${yCero} Z" fill="${gan?"#00E08A":"#FF3B30"}" opacity="0.09"/>
+        <line x1="0" y1="${yCero}" x2="${W}" y2="${yCero}" stroke="#5E5E5E" stroke-width="1" stroke-dasharray="3 3"/>
+        <path d="${dLine}" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+        ${sr.hitos.map(hh=>hh.fecha>sr.desde?`<line x1="${px(X(hh.fecha))}" y1="${H-pb}" x2="${px(X(hh.fecha))}" y2="${H-pb+4}" stroke="#5E5E5E" stroke-width="1"/>`:"").join("")}
+        <circle cx="${px(1)}" cy="${py(retHoy)}" r="3.5" fill="${gan?"#00E08A":"#FF3B30"}"/>
+      </svg>
+      <div class="chart-yaxis">${ticks.slice().reverse().map(t=>`<span>${sgn(t.v*100)}</span>`).join("")}</div>
+      <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
+      <div class="chart-meta"><span>Desde ${sr.desde} · ${diasEntre(sr.desde,hoy())} días</span>
+        <span>Capital aportado ${money(sr.aporte)}${sr.caja>1?" · caja sin reinvertir "+money(sr.caja):""}</span>
+        <span class="${cls(retHoy)}">${signoMoney(total-sr.aporte)}</span></div>
+      ${pts.length<4?`<div class="chart-note">La curva se dibuja sobre hitos ciertos: el inicio, cada operación y los cierres que registra el dashboard. Gana resolución a medida que lo abrís en días sucesivos.</div>`:""}
+    </div>`;
+  }
+
+  let secIdx=0;
+  // ══ RENDIMIENTOS ══
+  const met=metricasPorPosicion(pos).filter(p=>p.ret!=null).sort((a,b)=>b.ret-a.ret);
+  if(met.length&&!sinPx.length){
+    const invTot=met.reduce((s,p)=>s+p.costoM,0);
+    const valTot=met.reduce((s,p)=>s+p.valM,0);
+    // Retorno de la cartera sobre CAPITAL APORTADO (incluye resultado de ventas cerradas),
+    // no sobre el costo de las posiciones vivas: si no, las ventas quedan fuera de la cuenta.
+    const srT=serieRendimiento();
+    const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
+    const retTot=baseCap>0?total/baseCap-1:0;
+    const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
+    const diasTot=diasEntre(fPrim,hoy());
+    const tnaTot=anualizar(retTot,diasTot);
+    // Contribución de cada posición al retorno total de la cartera
+    met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
+    const mejor=met[0], peor=met[met.length-1];
+    const realTot=MONEDA==="ARS"?realARS:realUSD;
+    // Retorno del MEP en el mismo período, como referencia
+    const mepIni=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].mep;
+    const retMEP=mepIni?MEP/mepIni-1:null;
+
+    html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Rendimientos</h2>
+      <span>${diasTot} días · desde ${fPrim}</span></div>
+    <div class="perf-grid">
+      <div class="perf hero"><div class="k">Retorno total</div>
+        <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
+        <div class="d">${signoMoney(total-baseCap)} sobre ${money(baseCap)} aportados</div></div>
+      <div class="perf"><div class="k">TNA equivalente</div>
+        <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
+        <div class="d">anualizado · ${diasTot}d</div></div>
+      <div class="perf"><div class="k">vs. MEP</div>
+        <div class="v ${cls(retMEP==null?0:retTot-retMEP)}">${retMEP==null?"—":sgn((retTot-retMEP)*100)}</div>
+        <div class="d">MEP ${retMEP==null?"—":sgn(retMEP*100)} en el período</div></div>
+      <div class="perf"><div class="k">Mejor posición</div>
+        <div class="v up" style="font-size:20px">${mejor.tipo==="fci"?mejor.fondo.split(" - ")[0]:mejor.ticker}</div>
+        <div class="d up">${sgn(mejor.ret*100)}</div></div>
+      <div class="perf"><div class="k">Peor posición</div>
+        <div class="v ${cls(peor.ret)}" style="font-size:20px">${peor.tipo==="fci"?peor.fondo.split(" - ")[0]:peor.ticker}</div>
+        <div class="d ${cls(peor.ret)}">${sgn(peor.ret*100)}</div></div>
+      ${Math.abs(realTot)>0.01?`<div class="perf"><div class="k">Resultado realizado</div>
+        <div class="v ${cls(realTot)}">${signoMoney(realTot)}</div>
+        <div class="d">ventas cerradas</div></div>`:""}
+    </div>
+    <div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
+      <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
+      <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th>TNA</th><th class="l" style="width:130px">Contribución</th>
+    </tr></thead><tbody>
+    ${met.map(p=>{
+      const maxC=Math.max(...met.map(x=>Math.abs(x.contrib)))||1;
+      const w=Math.abs(p.contrib)/maxC*100;
+      return `<tr><td class="tk">${p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker}</td>
+      <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
+      <td>${p.desde||"—"}</td><td>${p.dias||"—"}</td>
+      <td>${money(p.costoM)}</td><td>${money(p.valM)}</td>
+      <td class="${cls(p.valM-p.costoM)}">${signoMoney(p.valM-p.costoM)}</td>
+      <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
+      <td class="${cls(p.tna)}" ${p.dias<90&&p.tna!=null?'title="Extrapolado desde '+p.dias+' días — tomar con cautela"':""}>${p.tna==null?"—":sgn(p.tna*100)+(p.dias<90?"*":"")}</td>
+      <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
+        <span>${sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
+    </tbody></table></div>
+    <div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
+      <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${MONEDA==="ARS"?"pesos":"dólares MEP"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
+      TNA anualiza con base 365 y requiere más de 30 días de tenencia; los valores marcados con * extrapolan menos de 90 días y conviene leerlos con reservas.
+      La contribución mide cuánto aportó cada posición al retorno total de la cartera.</div>`;
+  }
+
+  // Tablas de posiciones
+  for(const g of GRUPOS){
+    const rows=pos.filter(p=>g.tipos.includes(p.tipo)).sort((a,b)=>(V(b)||0)-(V(a)||0));
+    if(!rows.length) continue;
+    const tg=rows.reduce((s,p)=>s+(V(p)||0),0);
+    html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>${g.nombre}</h2>
+      <span class="tot"><b>${money(tg)}</b> · ${fmt(tg/total*100,1)}%</span></div>
+      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>P&amp;L</th><th>P&amp;L %</th></tr></thead><tbody>
+      ${rows.map(p=>{
+        const nombre=p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker;
+        const precioCell=p.px==null
+          ?(p.tipo==="manual"?`<button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">fijar precio</button>`:"—")
+          :`${p.pxMoneda==="USD"?"US$ ":"$ "}${fmt(p.px,p.px<1000?2:0)}${p.tipo==="manual"?` <button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">✎</button>`:""}${p.fuente?` <span style="color:var(--muted);font-size:10px">${p.fuente}</span>`:""}`;
+        const plp=(V(p)!=null&&C(p)>0)?(V(p)/C(p)-1)*100:null;
+        return `<tr><td class="tk">${nombre}</td>
+        <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
+        <td>${fmt(p.qty,p.qty%1?2:0)}</td>
+        <td>${precioCell}</td>
+        <td class="${cls(p.pct)}">${p.pct==null?"—":sgn(p.pct)}</td>
+        <td>${V(p)==null?"—":money(V(p))}</td>
+        <td class="${cls(PL(p))}">${PL(p)==null?"—":signoMoney(PL(p))}</td>
+        <td class="${cls(plp)}">${plp==null?"—":sgn(plp)}</td></tr>`;}).join("")}
+      </tbody></table></div></div>`;
+  }
+
+  // Liquidez por cuenta
+  if(hayCash){
+    html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
+      <span class="tot"><b>${(cash<0?"−":"")+money(Math.abs(cash))}</b> · ${fmt(cash/total*100,1)}%</span>
+      <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ editar</button></div>
+      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Saldo ARS</th><th>Saldo USD</th><th>Total (${MONEDA==="ARS"?"ARS":"USD MEP"})</th></tr></thead><tbody>
+      ${Object.entries(saldos).map(([c,s])=>{
+        const t=cashCta(c);
+        return `<tr><td class="tk">${c}</td>
+        <td class="${(s.ars||0)<0?"down":""}">${s.ars?"$ "+fmt(s.ars,0):"—"}</td>
+        <td class="${(s.usd||0)<0?"down":""}">${s.usd?"US$ "+fmt(s.usd,2):"—"}</td>
+        <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
+      </tbody></table></div></div>`;
+  }
+
+  // Historial de movimientos
+  const movs=[...DATOS.movimientos].sort((a,b)=>b.fecha.localeCompare(a.fecha)||b.id-a.id);
+  html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Registro de operaciones</h2><span style="color:var(--muted);font-size:12px;font-family:var(--mono)">${String(movs.length).padStart(3,"0")} OPS</span></div>
+    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>MEP del día</th><th></th></tr></thead><tbody>
+    ${movs.map(m=>{
+      const nombre=m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker;
+      const tot=m.precio/divisorDe(m.tipo)*m.cantidad;
+      return `<tr><td>${m.fecha}</td>
+      <td class="l"><span class="${m.op==="compra"?"op-c":"op-v"}">${m.op}</span></td>
+      <td class="l tk">${nombre}</td>
+      <td class="l"><span class="cta-tag">${m.cuenta}</span></td>
+      <td>${fmt(m.cantidad,m.cantidad%1?2:0)}</td>
+      <td>${m.moneda==="USD"?"US$ ":"$ "}${fmt(m.precio,m.precio<1000?2:0)}</td>
+      <td>${m.moneda==="USD"?"US$ ":"$ "}${fmt(tot,m.moneda==="USD"?2:0)}</td>
+      <td>${fmt(m.mep,1)}</td>
+      <td style="white-space:nowrap"><button class="btn mini" onclick="abrirMov(${m.id})">Editar</button>
+      <button class="btn mini danger" onclick="borrarMov(${m.id})" title="Eliminar">✕</button></td></tr>`;}).join("")}
+    </tbody></table></div>`;
+
+  cont.innerHTML=html;
+}
+function pintarFX(){
+  if(!ESTADO) return; const {fx}=ESTADO;
+  document.getElementById("fx-mep").textContent=fmt(fx["bolsa"],1);
+  document.getElementById("fx-ccl").textContent=fmt(fx["contadoconliqui"],1);
+  document.getElementById("fx-oficial").textContent=fmt(fx["oficial"],1);
+  document.getElementById("fx-blue").textContent=fmt(fx["blue"],1);
+}
+function estadoBackup(){
+  const cell=document.getElementById("bk-cell"), el=document.getElementById("bk");
+  if(!cell||!DATOS.movimientos.length) return;
+  cell.style.display="flex";
+  const ue=DATOS.ultimoExport;
+  if(!ue){ el.textContent="sin backup"; el.style.color="var(--down)"; return; }
+  const d=diasEntre(ue,hoy());
+  const nuevos=DATOS.movimientos.filter(m=>m.fecha>ue).length;
+  el.textContent=d<=1?"al día":`hace ${d}d`+(nuevos?` · ${nuevos} ops nuevas`:"");
+  el.style.color=(d>14||nuevos>0)?"var(--down)":d>7?"var(--white)":"var(--grey)";
+}
+function tick(){
+  const el=document.getElementById("clock");
+  if(el) el.textContent=new Date().toLocaleTimeString("es-AR",{hour12:false});
+}
+function conn(ok){
+  const d=document.getElementById("dot"), c=document.getElementById("conn");
+  if(!d) return;
+  d.classList.toggle("err",!ok);
+  c.textContent=ok?"LIVE":"SIN ENLACE";
+}
+
+/* ══════════════ Cuentas (normalización) ══════════════ */
+const claveCta=s=>(s||"").trim().toLowerCase().replace(/\s+/g," ");
+function cuentasConocidas(){
+  const vistas=new Map();
+  for(const m of DATOS.movimientos) if(m.cuenta&&!vistas.has(claveCta(m.cuenta))) vistas.set(claveCta(m.cuenta),m.cuenta);
+  for(const c of Object.keys(DATOS.saldos||{})) if(!vistas.has(claveCta(c))) vistas.set(claveCta(c),c);
+  return [...vistas.values()].sort((a,b)=>a.localeCompare(b,"es"));
+}
+// Devuelve el nombre canónico si ya existe una cuenta equivalente; si no, el nombre tal cual
+const canonizarCta=n=>cuentasConocidas().find(c=>claveCta(c)===claveCta(n))||(n||"").trim();
+
+/* ══════════════ Paneles BYMA (autocompletado y validación) ══════════════ */
+const PANEL_CACHE={};
+const NOMBRE_PANEL={bono:"Bonos",letra:"Letras",on:"ONs",accion:"Acciones",cedear:"CEDEARs"};
+async function panelDe(t){
+  if(PANEL_CACHE[t]) return PANEL_CACHE[t];
+  const d=await getJSON(EP[t]); const m={};
+  for(const r of d) m[r.symbol]=r;
+  PANEL_CACHE[t]=m; return m;
+}
+async function llenarTickers(){
+  const t=document.getElementById("m-tipo").value;
+  const dl=document.getElementById("dl-tickers");
+  if(!EP[t]){ dl.innerHTML=""; return; }
+  try{
+    const p=await panelDe(t);
+    dl.innerHTML=Object.keys(p).sort().map(s=>`<option value="${s}">`).join("");
+  }catch(e){ dl.innerHTML=""; }
+}
+
+/* ══════════════ Saldos por cuenta ══════════════ */
+function filaSaldo(nombre,s){
+  return `<div class="f-grid" style="margin-bottom:10px;grid-template-columns:1.2fr 1fr 1fr" data-cuenta="${nombre}">
+    <div><label>Cuenta</label><input value="${nombre}" disabled></div>
+    <div><label>Saldo ARS</label><input type="number" step="any" class="s-ars" value="${s.ars??""}" placeholder="0"></div>
+    <div><label>Saldo USD</label><input type="number" step="any" class="s-usd" value="${s.usd??""}" placeholder="0"></div>
+  </div>`;
+}
+function abrirSaldos(){
+  const cuentas=cuentasConocidas();
+  document.getElementById("saldos-rows").innerHTML=cuentas.map(c=>filaSaldo(c,DATOS.saldos[c]||{})).join("");
+  document.getElementById("s-nueva").value="";
+  document.getElementById("r-origen").innerHTML=cuentas.map(c=>`<option value="${c}">${c}</option>`).join("");
+  document.getElementById("r-destino").value="";
+  document.getElementById("modal-saldos").classList.add("open");
+}
+function renombrarCuenta(){
+  const origen=document.getElementById("r-origen").value;
+  const destino=document.getElementById("r-destino").value.trim();
+  if(!origen||!destino) return;
+  if(claveCta(origen)===claveCta(destino)&&origen===destino) return;
+  const nAfectados=DATOS.movimientos.filter(m=>m.cuenta===origen).length;
+  const fusiona=cuentasConocidas().some(c=>c!==origen&&claveCta(c)===claveCta(destino));
+  const msg=fusiona
+    ? `Fusionar "${origen}" con "${destino}"? Se unifican ${nAfectados} movimientos y las posiciones de ambas cuentas pasan a calcularse juntas (costo promedio combinado).`
+    : `Renombrar "${origen}" a "${destino}" en ${nAfectados} movimientos?`;
+  if(!confirm(msg)) return;
+  const final=canonizarCta(destino);
+  DATOS.movimientos.forEach(m=>{ if(m.cuenta===origen) m.cuenta=final; });
+  if(DATOS.saldos[origen]){
+    const s=DATOS.saldos[origen]; delete DATOS.saldos[origen];
+    const d=DATOS.saldos[final]||{ars:0,usd:0};
+    DATOS.saldos[final]={ars:(d.ars||0)+(s.ars||0),usd:(d.usd||0)+(s.usd||0)};
+  }
+  persistir(); cerrarModales(); cargar();
+}
+function agregarCuentaSaldo(){
+  const n=canonizarCta(document.getElementById("s-nueva").value);
+  if(!n) return;
+  if(document.querySelector(`#saldos-rows [data-cuenta="${n.replace(/"/g,'\\"')}"]`)){
+    document.getElementById("s-nueva").value=""; return;
+  }
+  document.getElementById("saldos-rows").insertAdjacentHTML("beforeend",filaSaldo(n,{}));
+  document.getElementById("s-nueva").value="";
+}
+function guardarSaldos(){
+  const nuevo={};
+  document.querySelectorAll("#saldos-rows [data-cuenta]").forEach(row=>{
+    const ars=parseFloat(row.querySelector(".s-ars").value)||0;
+    const usd=parseFloat(row.querySelector(".s-usd").value)||0;
+    if(ars!==0||usd!==0) nuevo[row.dataset.cuenta]={ars,usd};
+  });
+  DATOS.saldos=nuevo;
+  persistirYSync(); cerrarModales();
+  if(ESTADO) render(); else cargar();
+}
+
+/* ══════════════ Formulario de movimientos ══════════════ */
+function abrirMov(id){
+  EDIT_ID=id??null;
+  const ed=id?DATOS.movimientos.find(m=>m.id===id):null;
+  document.getElementById("mov-title").textContent=ed?"Editar movimiento":"Registrar movimiento";
+  document.getElementById("m-guardar").textContent=ed?"Guardar cambios":"Guardar movimiento";
+  document.getElementById("m-fecha").value=ed?ed.fecha:hoy();
+  document.getElementById("m-err").style.display="none";
+  document.getElementById("m-total").value="";
+  const sel=document.getElementById("m-cuenta-sel");
+  const cts=cuentasConocidas();
+  sel.innerHTML=cts.map(c=>`<option value="${c}">${c}</option>`).join("")+`<option value="__nueva__">+ Nueva cuenta…</option>`;
+  if(ed){ if(!cts.includes(ed.cuenta)) sel.insertAdjacentHTML("afterbegin",`<option value="${ed.cuenta}">${ed.cuenta}</option>`); sel.value=ed.cuenta; }
+  else if(cts.length===0) sel.value="__nueva__";
+  cuentaChanged();
+  document.getElementById("m-op").value=ed?ed.op:"compra";
+  document.getElementById("m-tipo").value=ed?ed.tipo:"bono";
+  tipoChanged();
+  if(ed){
+    document.getElementById("m-ticker").value=ed.tipo==="fci"?"":ed.ticker;
+    document.getElementById("m-cant").value=ed.cantidad;
+    document.getElementById("m-precio").value=ed.precio;
+    document.getElementById("m-moneda").value=ed.moneda;
+    if(ed.tipo==="fci"){ document.getElementById("m-cat").value=ed.categoria; cargarFondos().then(()=>{document.getElementById("m-fondo").value=ed.fondo;}); }
+    calcTotal();
+  } else {
+    ["m-ticker","m-cant","m-precio"].forEach(i=>document.getElementById(i).value="");
+    document.getElementById("m-moneda").value="ARS";
+  }
+  document.getElementById("modal-mov").classList.add("open");
+}
+function abrirPrecio(t){
+  document.getElementById("p-ticker").textContent=t;
+  const pm=DATOS.preciosManuales[t];
+  document.getElementById("p-precio").value=pm?pm.precio:"";
+  document.getElementById("p-moneda").value=pm?pm.moneda:"USD";
+  document.getElementById("modal-precio").classList.add("open");
+}
+function cerrarModales(){ document.querySelectorAll(".modal-bg").forEach(m=>m.classList.remove("open")); EDIT_ID=null; }
+document.querySelectorAll(".modal-bg").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) cerrarModales(); }));
+
+function cuentaChanged(){
+  const esNueva=document.getElementById("m-cuenta-sel").value==="__nueva__";
+  const inp=document.getElementById("m-cuenta-nueva");
+  inp.style.display=esNueva?"block":"none";
+  if(esNueva) inp.focus(); else inp.value="";
+}
+function tipoChanged(){
+  const t=document.getElementById("m-tipo").value;
+  document.getElementById("f-fci").style.display=t==="fci"?"block":"none";
+  document.getElementById("f-ticker").style.display=t==="fci"?"none":"block";
+  document.getElementById("h-cant").textContent=
+    ["bono","letra","on"].includes(t)?"Nominales (VN)":t==="fci"?"Cuotapartes":t==="manual"?"Unidades":"Acciones";
+  document.getElementById("h-precio").textContent=
+    ["bono","letra","on"].includes(t)?"Precio cada 100 VN, como cotiza en pantalla":
+    t==="fci"?"VCP por 1.000 cuotapartes (escala CAFCI)":"Precio por unidad";
+  if(t==="fci") cargarFondos();
+  llenarTickers();
+  calcTotal();
+}
+async function cargarFondos(){
+  const cat=document.getElementById("m-cat").value;
+  try{
+    const d=await getJSON("https://api.argentinadatos.com/v1/finanzas/fci/"+cat+"/ultimo");
+    document.getElementById("dl-fondos").innerHTML=d.map(f=>`<option value="${f.fondo.replace(/"/g,'&quot;')}">`).join("");
+  }catch(e){}
+  return true;
+}
+["m-cant","m-precio","m-tipo"].forEach(id=>document.getElementById(id).addEventListener("input",calcTotal));
+function calcTotal(){
+  const t=document.getElementById("m-tipo").value;
+  const c=parseFloat(document.getElementById("m-cant").value), p=parseFloat(document.getElementById("m-precio").value);
+  document.getElementById("m-total").value=(c>0&&p>0)?fmt(p/divisorDe(t)*c,2):"";
+}
+
+async function mepDeFecha(fecha){
+  try{
+    if(fecha===hoy()){
+      if(ESTADO?.MEP) return ESTADO.MEP;
+      const d=await getJSON("https://dolarapi.com/v1/dolares/bolsa"); return (d.compra+d.venta)/2;
+    }
+    const d=await getJSON("https://api.argentinadatos.com/v1/cotizaciones/dolares/bolsa/"+fecha.replaceAll("-","/"));
+    return (d.compra+d.venta)/2;
+  }catch(e){
+    // Fin de semana / feriado sin dato: probar días hábiles previos
+    for(let i=1;i<=5;i++){
+      try{
+        const f=new Date(fecha+"T12:00:00"); f.setDate(f.getDate()-i);
+        const fs=f.toLocaleDateString("sv-SE");
+        const d=await getJSON("https://api.argentinadatos.com/v1/cotizaciones/dolares/bolsa/"+fs.replaceAll("-","/"));
+        return (d.compra+d.venta)/2;
+      }catch(e2){}
+    }
+    if(ESTADO?.MEP) return ESTADO.MEP;
+    throw new Error("No se pudo obtener el MEP de esa fecha");
+  }
+}
+
+async function guardarMov(){
+  const err=document.getElementById("m-err");
+  const tipo=document.getElementById("m-tipo").value;
+  const selCta=document.getElementById("m-cuenta-sel").value;
+  const cuenta=canonizarCta(selCta==="__nueva__"?document.getElementById("m-cuenta-nueva").value:selCta);
+  const m={
+    id:EDIT_ID??Date.now(),
+    fecha:document.getElementById("m-fecha").value,
+    op:document.getElementById("m-op").value,
+    tipo,
+    ticker:tipo==="fci"?"FCI":document.getElementById("m-ticker").value.trim().toUpperCase(),
+    cuenta,
+    cantidad:parseFloat(document.getElementById("m-cant").value),
+    precio:parseFloat(document.getElementById("m-precio").value),
+    moneda:document.getElementById("m-moneda").value,
+  };
+  if(tipo==="fci"){ m.categoria=document.getElementById("m-cat").value; m.fondo=document.getElementById("m-fondo").value.trim(); }
+  // Validaciones
+  const falta=!m.fecha||!m.cuenta||!(m.cantidad>0)||!(m.precio>0)||(tipo==="fci"?!m.fondo:!m.ticker);
+  if(falta){ err.textContent="Completá fecha, cuenta, especie, cantidad y precio."; err.style.display="block"; return; }
+  if(m.fecha>hoy()){ err.textContent="La fecha no puede ser futura."; err.style.display="block"; return; }
+  // Validar que la especie exista en el panel BYMA del tipo elegido
+  if(EP[tipo]){
+    err.textContent="Verificando especie…"; err.style.color="var(--muted)"; err.style.display="block";
+    try{
+      const panel=await panelDe(tipo);
+      if(!panel[m.ticker]){
+        let hallado=null;
+        for(const t2 of Object.keys(EP)){
+          if(t2===tipo) continue;
+          try{ if((await panelDe(t2))[m.ticker]){ hallado=t2; break; } }catch(e){}
+        }
+        err.style.color="var(--down)";
+        err.textContent=hallado
+          ? m.ticker+" no está en el panel de "+NOMBRE_PANEL[tipo]+" — cotiza en "+NOMBRE_PANEL[hallado]+". Cambiá el tipo del movimiento."
+          : m.ticker+" no existe en los paneles BYMA. Revisá el símbolo o cargalo como tipo Manual.";
+        return;
+      }
+    }catch(e){ /* sin conexión: no bloquear la carga */ }
+    err.style.color="var(--down)"; err.style.display="none";
+  }
+  if(m.op==="venta"){
+    const disp=qtyDisponible(tipo,m.ticker,m.fondo,m.cuenta,EDIT_ID);
+    if(m.cantidad>disp+1e-9){ err.textContent="Estás vendiendo "+fmt(m.cantidad)+" pero la posición en esa cuenta es "+fmt(disp)+"."; err.style.display="block"; return; }
+  }
+  const prevMov=EDIT_ID?DATOS.movimientos.find(x=>x.id===EDIT_ID):null;
+  if(prevMov&&prevMov.fecha===m.fecha){ m.mep=prevMov.mep; }
+  else{
+  err.textContent="Obteniendo MEP del "+m.fecha+"…"; err.style.color="var(--grey)"; err.style.display="block";
+  try{ m.mep=Math.round(await mepDeFecha(m.fecha)*100)/100; }
+  catch(e){ err.textContent=e.message; err.style.color="var(--down)"; return; }
+  }
+  err.style.color="var(--down)";
+  if(EDIT_ID){
+    const i=DATOS.movimientos.findIndex(x=>x.id===EDIT_ID);
+    const prev=DATOS.movimientos[i];
+    if(divisorDe(prev.tipo)!==divisorDe(tipo)){
+      const escNueva=divisorDe(tipo)===100?"cada 100 VN":divisorDe(tipo)===1000?"por 1.000 cuotapartes":"por unidad";
+      const escVieja=divisorDe(prev.tipo)===100?"cada 100 VN":divisorDe(prev.tipo)===1000?"por 1.000 cuotapartes":"por unidad";
+      if(!confirm(`Cambiaste el tipo de instrumento y con eso cambia la escala del precio.\n\nAntes: ${escVieja} · Ahora: ${escNueva}\n\nEl precio quedará en ${fmt(m.precio,2)} ${escNueva}. Si no es el valor correcto, cancelá y corregilo.\n\n¿Guardar igual?`)) return;
+    }
+    // Conservar el MEP original si no cambió la fecha
+    if(prev.fecha===m.fecha) m.mep=prev.mep;
+    DATOS.movimientos[i]=m;
+  } else DATOS.movimientos.push(m);
+  EDIT_ID=null;
+  persistirYSync(); cerrarModales(); cargar();
+}
+function borrarMov(id){
+  const m=DATOS.movimientos.find(x=>x.id===id); if(!m) return;
+  if(!confirm("¿Eliminar "+m.op+" de "+(m.tipo==="fci"?m.fondo:m.ticker)+" del "+m.fecha+"? Esto recalcula posiciones y P&L.")) return;
+  DATOS.movimientos=DATOS.movimientos.filter(x=>x.id!==id);
+  persistirYSync(); cargar();
+}
+function guardarPrecio(){
+  const t=document.getElementById("p-ticker").textContent;
+  const p=parseFloat(document.getElementById("p-precio").value);
+  if(!(p>0)) return;
+  DATOS.preciosManuales[t]={precio:p,moneda:document.getElementById("p-moneda").value,fecha:hoy()};
+  persistirYSync(); cerrarModales(); cargar();
+}
+
+
+/* ══════════════ Sincronización vía Gist ══════════════
+   Los datos viven en un gist secreto de GitHub. Cada guardado local marca
+   DATOS.rev (contador) y DATOS.mtime. Al sincronizar se comparan revisiones:
+   si la nube tiene una revisión posterior a la última que este dispositivo
+   conoce, se avisa antes de pisar nada. */
+const LS_SYNC="mi_cartera_sync_v1";
+let SYNC=null;
+try{ const s=localStorage.getItem(LS_SYNC); if(s) SYNC=JSON.parse(s); }catch(e){}
+const guardarSync=()=>{ try{ localStorage.setItem(LS_SYNC,JSON.stringify(SYNC)); }catch(e){} };
+
+async function apiGist(metodo,ruta,body){
+  const r=await fetch("https://api.github.com/gists"+ruta,{
+    method:metodo,
+    headers:{"Authorization":"Bearer "+SYNC.token,"Accept":"application/vnd.github+json","Content-Type":"application/json"},
+    body:body?JSON.stringify(body):undefined
+  });
+  if(r.status===401) throw new Error("Token inválido o sin permiso de gist");
+  if(r.status===404) throw new Error("No se encontró el gist — revisá el ID");
+  if(!r.ok) throw new Error("GitHub respondió "+r.status);
+  return r.json();
+}
+
+async function conectarSync(){
+  const err=document.getElementById("sy-err");
+  const token=document.getElementById("sy-token").value.trim();
+  const gid=document.getElementById("sy-gist").value.trim();
+  if(!token){ err.textContent="Falta el token."; err.style.display="block"; return; }
+  const btn=document.getElementById("sy-conectar");
+  btn.disabled=true; btn.textContent="Conectando…";
+  err.style.display="none";
+  SYNC={token,gist:gid||null,rev:0};
+  try{
+    if(gid){
+      const g=await apiGist("GET","/"+gid);
+      const f=g.files&&g.files["cartera.json"];
+      if(!f) throw new Error("El gist existe pero no tiene cartera.json");
+      const remoto=JSON.parse(f.truncated?await (await fetch(f.raw_url)).text():f.content);
+      const nLocal=DATOS.movimientos.length, nRemoto=(remoto.movimientos||[]).length;
+      if(nLocal>0&&nRemoto>0&&!confirm(`El gist tiene ${nRemoto} movimientos y este dispositivo tiene ${nLocal}.\n\nAl conectar se cargan los datos de la nube y se reemplazan los locales.\n\n¿Continuar?`)){
+        SYNC=null; btn.disabled=false; btn.textContent="Conectar"; return;
+      }
+      if(nRemoto>0){ DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...remoto}; persistir(); }
+      SYNC.rev=remoto.rev||0;
+    } else {
+      const g=await apiGist("POST","",{description:"Cartera — datos de seguimiento",public:false,
+        files:{"cartera.json":{content:JSON.stringify({...DATOS,rev:1},null,2)}}});
+      SYNC.gist=g.id; SYNC.rev=1;
+      DATOS.rev=1; persistir();
+    }
+    SYNC.ultimo=new Date().toISOString();
+    guardarSync();
+    pintarSync(); render(); cargar();
+    document.getElementById("sy-token").value="";
+  }catch(e){
+    err.textContent=e.message; err.style.display="block"; SYNC=null;
+  }
+  btn.disabled=false; btn.textContent="Conectar";
+}
+
+async function subirNube(manual){
+  if(!SYNC?.gist) return;
+  const err=document.getElementById("sy-err2");
+  try{
+    // Chequear que nadie haya subido algo más nuevo. Si el gist ya no existe, avisar.
+    let revR=0;
+    try{
+      const g=await apiGist("GET","/"+SYNC.gist);
+      const f=g.files&&g.files["cartera.json"];
+      if(f){
+        const remoto=JSON.parse(f.truncated?await (await fetch(f.raw_url)).text():f.content);
+        revR=remoto.rev||0;
+        if(revR>SYNC.rev){
+          const nR=(remoto.movimientos||[]).length, nL=DATOS.movimientos.length;
+          if(!confirm(`Otro dispositivo subió cambios después de tu última sincronización.\n\nEn la nube: ${nR} movimientos · Acá: ${nL}\n\nSi subís, se pierden los cambios del otro dispositivo. Conviene traer primero y revisar.\n\n¿Subir igual?`)) return;
+        }
+      }
+    }catch(eGet){
+      if(/no se encontró/i.test(eGet.message)) throw new Error("El gist ya no existe. Desconectá y volvé a conectar para crear uno nuevo.");
+      throw eGet;
+    }
+    DATOS.rev=Math.max(revR,SYNC.rev)+1;
+    DATOS.mtime=new Date().toISOString();
+    await apiGist("PATCH","/"+SYNC.gist,{files:{"cartera.json":{content:JSON.stringify(DATOS,null,2)}}});
+    SYNC.rev=DATOS.rev; SYNC.ultimo=new Date().toISOString(); guardarSync(); persistir();
+    pintarSync();
+    if(manual){ if(err) err.style.display="none"; cerrarModales(); }
+  }catch(e){
+    if(err&&manual){ err.textContent=e.message; err.style.display="block"; }
+    else console.warn("sync:",e.message);
+    SYNC.error=true; pintarSync();
+  }
+}
+
+async function bajarNube(manual){
+  if(!SYNC?.gist) return;
+  const err=document.getElementById("sy-err2");
+  try{
+    const g=await apiGist("GET","/"+SYNC.gist);
+    const f=g.files["cartera.json"];
+    const remoto=JSON.parse(f.truncated?await (await fetch(f.raw_url)).text():f.content);
+    const nR=(remoto.movimientos||[]).length, nL=DATOS.movimientos.length;
+    if(manual&&nL>0&&!confirm(`Traer ${nR} movimientos de la nube y reemplazar los ${nL} de este dispositivo?`)) return;
+    DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...remoto};
+    SYNC.rev=remoto.rev||0; SYNC.ultimo=new Date().toISOString(); SYNC.error=false;
+    guardarSync(); persistir(); purgarSnapshots();
+    pintarSync(); cargar();
+    if(manual) cerrarModales();
+  }catch(e){
+    if(err&&manual){ err.textContent=e.message; err.style.display="block"; }
+    SYNC.error=true; pintarSync();
+  }
+}
+
+function pintarSync(){
+  const cell=document.getElementById("sy-cell"), el=document.getElementById("sy-badge");
+  if(!cell) return;
+  if(!SYNC?.gist){ cell.style.display="none"; return; }
+  cell.style.display="flex";
+  if(SYNC.error){ el.textContent="error"; el.className="v sync-warn"; return; }
+  const u=SYNC.ultimo?new Date(SYNC.ultimo):null;
+  const min=u?Math.round((Date.now()-u.getTime())/60000):null;
+  el.textContent=min==null?"—":min<2?"al día":min<60?`hace ${min}m`:min<1440?`hace ${Math.round(min/60)}h`:`hace ${Math.round(min/1440)}d`;
+  el.className="v"+(min!=null&&min<120?" sync-ok":"");
+}
+
+function abrirSync(){
+  const conectado=!!SYNC?.gist;
+  document.getElementById("sync-setup").style.display=conectado?"none":"block";
+  document.getElementById("sync-panel").style.display=conectado?"block":"none";
+  document.getElementById("sy-err").style.display="none";
+  document.getElementById("sy-err2").style.display="none";
+  if(conectado){
+    document.getElementById("sy-estado").textContent=SYNC.error?"Con errores":"Conectado";
+    document.getElementById("sy-estado").className=SYNC.error?"down":"up";
+    document.getElementById("sy-fecha").textContent=SYNC.ultimo?new Date(SYNC.ultimo).toLocaleString("es-AR",{dateStyle:"short",timeStyle:"short"}):"—";
+    document.getElementById("sy-id").textContent=SYNC.gist;
+  } else {
+    document.getElementById("sy-gist").value="";
+  }
+  document.getElementById("modal-sync").classList.add("open");
+}
+function copiarGist(){
+  navigator.clipboard?.writeText(SYNC.gist);
+  event.target.textContent="Copiado";
+  setTimeout(()=>{event.target.textContent="Copiar";},1500);
+}
+function desconectarSync(){
+  if(!confirm("Desconectar la sincronización?\n\nLos datos quedan en este dispositivo y el gist no se borra. Podés reconectar con el mismo ID cuando quieras.")) return;
+  SYNC=null;
+  try{ localStorage.removeItem(LS_SYNC); }catch(e){}
+  pintarSync(); cerrarModales(); render();
+}
+
+/* ══════════════ Backup ══════════════ */
+function exportar(){
+  DATOS.ultimoExport=hoy();
+  persistir();
+  const blob=new Blob([JSON.stringify(DATOS,null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="mi-cartera-backup-"+hoy()+".json";
+  a.click(); URL.revokeObjectURL(a.href);
+  if(ESTADO) render();
+}
+function importar(ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    try{
+      const d=JSON.parse(r.result);
+      if(!Array.isArray(d.movimientos)) throw new Error("formato inválido");
+      if(!confirm("Importar "+d.movimientos.length+" movimientos reemplazando los datos actuales ("+DATOS.movimientos.length+" movimientos)?")) return;
+      DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...d};
+      persistirYSync(); cargar();
+    }catch(e){ alert("No se pudo importar: "+e.message); }
+  };
+  r.readAsText(f); ev.target.value="";
+}
+
+/* ══════════════ Init ══════════════ */
+restaurar();
+purgarSnapshots();
+if(SYNC?.gist) bajarNube(false);
+tick(); setInterval(tick,1000);
+cargar();
+setInterval(cargar,120000);
+</script>
+</body>
+</html>
