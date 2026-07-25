@@ -344,6 +344,19 @@ footer b{color:var(--grey);font-weight:400}
 .mkt-foot{font-family:var(--din);font-size:11px;letter-spacing:.06em;color:var(--grey-dim);text-transform:uppercase;
   padding:12px 2px 0}
 
+
+/* ══ IMPORTAR OPERACIONES ══ */
+.imp-row{display:grid;grid-template-columns:90px 1fr 90px 110px 100px;gap:10px;align-items:center;
+  padding:8px 4px;border-bottom:1px solid var(--hair);font-family:var(--mono);font-size:12.5px}
+.imp-row.head{font-family:var(--din);font-size:10px;letter-spacing:.08em;color:var(--grey-dim);
+  text-transform:uppercase;border-bottom:1px solid var(--hair-hot)}
+.imp-row select{padding:5px 8px;font-size:12px}
+.imp-scroll{max-height:280px;overflow-y:auto;border:1px solid var(--hair);border-radius:var(--r)}
+.imp-badge{font-family:var(--din);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  padding:2px 8px;border-radius:2px}
+.imp-badge.ok{background:rgba(0,224,138,.12);color:var(--up)}
+.imp-badge.warn{background:rgba(255,159,10,.14);color:#FF9F0A}
+
 /* ══ MODALS ══ */
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.82);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;
   padding:44px 16px;overflow-y:auto;z-index:50}
@@ -366,6 +379,7 @@ select{cursor:pointer}
 .f-err{color:var(--down);font-size:11.5px;margin-top:16px;display:none;letter-spacing:.05em;line-height:1.7}
 @media(max-width:760px){.f-grid{grid-template-columns:1fr}}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -403,6 +417,7 @@ select{cursor:pointer}
         <button onclick="closeMore();abrirSync()"><span id="btn-sync-badge"></span>Sync</button>
         <button onclick="closeMore();exportar()">Export</button>
         <button onclick="closeMore();document.getElementById('imp').click()">Import</button>
+        <button onclick="closeMore();abrirImportBroker()">Importar operaciones</button>
       </div>
     </div>
     <input type="file" id="imp" accept=".json" style="display:none" onchange="importar(event)">
@@ -534,6 +549,36 @@ select{cursor:pointer}
         <button class="btn" onclick="bajarNube(true)">Traer de la nube</button>
         <button class="btn primary" onclick="subirNube(true)">Subir a la nube</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal importar operaciones de un bróker -->
+<div class="modal-bg" id="modal-import">
+  <div class="modal" style="max-width:720px">
+    <h3 id="imp-titulo">Importar operaciones</h3>
+
+    <div id="imp-paso1">
+      <div class="f-grid">
+        <div class="full"><label>Bróker</label>
+          <select id="imp-broker" onchange="onBrokerChange()"></select>
+        </div>
+        <div class="full"><label>Archivo</label>
+          <input type="file" id="imp-file" accept=".xlsx" disabled onchange="onFileImportBroker(event)">
+          <div class="hint" id="imp-broker-hint"></div></div>
+      </div>
+      <div class="f-err" id="imp-err"></div>
+    </div>
+
+    <div id="imp-paso2" style="display:none">
+      <div id="imp-resumen" style="margin-bottom:14px"></div>
+      <div id="imp-revision"></div>
+      <div id="imp-omitidos" class="hint" style="margin-top:14px;line-height:1.8"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="cerrarModales()">Cancelar</button>
+      <button class="btn primary" id="imp-confirmar" style="display:none" onclick="confirmarImportBroker()">Cargar movimientos</button>
     </div>
   </div>
 </div>
@@ -1299,7 +1344,7 @@ const COMAFI={"ABT":{"n":"ABBOTT LABORATORIES","etf":false,"sector":"Consumo"},"
 
 // Nombres de empresas argentinas (acciones BYMA). Comafi no cubre plaza local;
 // mapeo manual, cobertura parcial — lo que no está queda con nombre "—".
-const NOMBRE_AR={"GGAL":{"n":"Grupo Financiero Galicia","sector":"Bancos"},"BMA":{"n":"Banco Macro","sector":"Bancos"},"BBAR":{"n":"BBVA Argentina","sector":"Bancos"},"SUPV":{"n":"Grupo Supervielle","sector":"Bancos"},"VALO":{"n":"Banco de Valores","sector":"Bancos"},"BHIP":{"n":"Banco Hipotecario","sector":"Bancos"},"BPAT":{"n":"Banco Patagonia","sector":"Bancos"},"YPFD":{"n":"YPF","sector":"Energía"},"PAMP":{"n":"Pampa Energía","sector":"Energía"},"CEPU":{"n":"Central Puerto","sector":"Energía"},"CGPA2":{"n":"Central Puerto Preferida","sector":"Energía"},"CAPX":{"n":"Capex","sector":"Energía"},"COME":{"n":"Sociedad Comercial del Plata","sector":"Energía"},"TGSU2":{"n":"Transportadora de Gas del Sur","sector":"Gas/Transporte"},"TGNO4":{"n":"Transportadora de Gas del Norte","sector":"Gas/Transporte"},"TRAN":{"n":"Transener","sector":"Gas/Transporte"},"METR":{"n":"Metrogas","sector":"Gas/Transporte"},"EDN":{"n":"Edenor","sector":"Gas/Transporte"},"DGCU2":{"n":"Distribuidora de Gas Cuyana","sector":"Gas/Transporte"},"GBAN":{"n":"Gas Natural Ban","sector":"Gas/Transporte"},"ALUA":{"n":"Aluar","sector":"Industria"},"TXAR":{"n":"Ternium Argentina","sector":"Industria"},"SAMI":{"n":"S.A. San Miguel","sector":"Industria"},"FERR":{"n":"Ferrum","sector":"Industria"},"LOMA":{"n":"Loma Negra","sector":"Materiales"},"HARG":{"n":"Holcim Argentina","sector":"Materiales"},"CRES":{"n":"Cresud","sector":"Real Estate"},"IRSA":{"n":"IRSA","sector":"Real Estate"},"IRCP":{"n":"IRSA Propiedades Comerciales","sector":"Real Estate"},"TECO2":{"n":"Telecom Argentina","sector":"Telecom"},"CVH":{"n":"Cablevisión Holding","sector":"Telecom"},"MIRG":{"n":"Mirgor","sector":"Industria"},"MOLI":{"n":"Molinos","sector":"Consumo"},"MORI":{"n":"Molinos Agro","sector":"Agro"},"AGRO":{"n":"Agrometal","sector":"Agro"},"CADO":{"n":"Carlos Casado","sector":"Agro"},"BYMA":{"n":"Bolsas y Mercados Argentinos","sector":"Financiero"},"A3":{"n":"IEB (Invertir en Bolsa)","sector":"Financiero"},"IEB":{"n":"IEB Holding","sector":"Financiero"},"AUSO":{"n":"Autopistas del Sol","sector":"Infraestructura"},"OEST":{"n":"Oeste Grupo Concesionario","sector":"Infraestructura"},"RIGO":{"n":"Rigolleau","sector":"Consumo"},"BOLT":{"n":"Boldt","sector":"Industria"},"GARO":{"n":"Garovaglio y Zorraquín","sector":"Holding"},"HAVA":{"n":"Havanna Holding","sector":"Consumo"},"LEDE":{"n":"Ledesma","sector":"Agro"},"INVJ":{"n":"Inversora Juramento","sector":"Holding"},"MOLA":{"n":"Molinos Agro","sector":"—"},"LONG":{"n":"Longvie","sector":"Industria"},"GCLA":{"n":"Grupo Clarín","sector":"Comunicación"},"CTIO":{"n":"Consultatio","sector":"Real Estate"},"PATA":{"n":"Importadora y Exportadora de la Patagonia","sector":"Comercio"},"GCDI":{"n":"GC Dorrego","sector":"Real Estate"},"CARC":{"n":"Carboclor","sector":"Industria"},"GRIM":{"n":"Grimoldi","sector":"Consumo"},"ROSE":{"n":"Instituto Rosenbusch","sector":"Salud"},"POLL":{"n":"Pollería Santa Bárbara","sector":"Agro"},"RICH":{"n":"Laboratorios Richmond","sector":"Salud"},"CELU":{"n":"Celulosa Argentina","sector":"Materiales"},"DOME":{"n":"Domec","sector":"Industria"}};
+const NOMBRE_AR={"GGAL":{"n":"Grupo Financiero Galicia","sector":"Bancos"},"BMA":{"n":"Banco Macro","sector":"Bancos"},"BBAR":{"n":"BBVA Argentina","sector":"Bancos"},"SUPV":{"n":"Grupo Supervielle","sector":"Bancos"},"VALO":{"n":"Banco de Valores","sector":"Bancos"},"BHIP":{"n":"Banco Hipotecario","sector":"Bancos"},"BPAT":{"n":"Banco Patagonia","sector":"Bancos"},"YPFD":{"n":"YPF","sector":"Energía"},"PAMP":{"n":"Pampa Energía","sector":"Energía"},"CEPU":{"n":"Central Puerto","sector":"Energía"},"CGPA2":{"n":"Central Puerto Preferida","sector":"Energía"},"CAPX":{"n":"Capex","sector":"Energía"},"COME":{"n":"Sociedad Comercial del Plata","sector":"Energía"},"TGSU2":{"n":"Transportadora de Gas del Sur","sector":"Gas/Transporte"},"TGNO4":{"n":"Transportadora de Gas del Norte","sector":"Gas/Transporte"},"TRAN":{"n":"Transener","sector":"Gas/Transporte"},"METR":{"n":"Metrogas","sector":"Gas/Transporte"},"EDN":{"n":"Edenor","sector":"Gas/Transporte"},"DGCU2":{"n":"Distribuidora de Gas Cuyana","sector":"Gas/Transporte"},"GBAN":{"n":"Gas Natural Ban","sector":"Gas/Transporte"},"ALUA":{"n":"Aluar","sector":"Industria"},"TXAR":{"n":"Ternium Argentina","sector":"Industria"},"SAMI":{"n":"S.A. San Miguel","sector":"Industria"},"FERR":{"n":"Ferrum","sector":"Industria"},"LOMA":{"n":"Loma Negra","sector":"Materiales"},"HARG":{"n":"Holcim Argentina","sector":"Materiales"},"CRES":{"n":"Cresud","sector":"Real Estate"},"IRSA":{"n":"IRSA","sector":"Real Estate"},"IRCP":{"n":"IRSA Propiedades Comerciales","sector":"Real Estate"},"TECO2":{"n":"Telecom Argentina","sector":"Telecom"},"CVH":{"n":"Cablevisión Holding","sector":"Telecom"},"MIRG":{"n":"Mirgor","sector":"Industria"},"MOLI":{"n":"Molinos","sector":"Consumo"},"MORI":{"n":"Molinos Agro","sector":"Agro"},"AGRO":{"n":"Agrometal","sector":"Agro"},"CADO":{"n":"Carlos Casado","sector":"Agro"},"BYMA":{"n":"Bolsas y Mercados Argentinos","sector":"Financiero"},"A3":{"n":"IEB (Invertir en Bolsa)","sector":"Financiero"},"IEB":{"n":"IEB Holding","sector":"Financiero"},"AUSO":{"n":"Autopistas del Sol","sector":"Infraestructura"},"OEST":{"n":"Oeste Grupo Concesionario","sector":"Infraestructura"},"RIGO":{"n":"Rigolleau","sector":"Consumo"},"ECOG":{"n":"Ecogas","sector":"Gas/Transporte"},"BOLT":{"n":"Boldt","sector":"Industria"},"GARO":{"n":"Garovaglio y Zorraquín","sector":"Holding"},"HAVA":{"n":"Havanna Holding","sector":"Consumo"},"LEDE":{"n":"Ledesma","sector":"Agro"},"INVJ":{"n":"Inversora Juramento","sector":"Holding"},"MOLA":{"n":"Molinos Agro","sector":"—"},"LONG":{"n":"Longvie","sector":"Industria"},"GCLA":{"n":"Grupo Clarín","sector":"Comunicación"},"CTIO":{"n":"Consultatio","sector":"Real Estate"},"PATA":{"n":"Importadora y Exportadora de la Patagonia","sector":"Comercio"},"GCDI":{"n":"GC Dorrego","sector":"Real Estate"},"CARC":{"n":"Carboclor","sector":"Industria"},"GRIM":{"n":"Grimoldi","sector":"Consumo"},"ROSE":{"n":"Instituto Rosenbusch","sector":"Salud"},"POLL":{"n":"Pollería Santa Bárbara","sector":"Agro"},"RICH":{"n":"Laboratorios Richmond","sector":"Salud"},"CELU":{"n":"Celulosa Argentina","sector":"Materiales"},"DOME":{"n":"Domec","sector":"Industria"}};
 
 // Emisor de ONs por prefijo de ticker. Solo prefijos de alta confianza — el resto
 // queda sin emisor identificado antes que arriesgar una atribución incorrecta.
@@ -1981,6 +2026,209 @@ function exportar(){
   a.click(); URL.revokeObjectURL(a.href);
   if(ESTADO) render();
 }
+/* ══════════════ Importar operaciones de un bróker ══════════════ */
+// Registro de bróker → parser. Para sumar uno nuevo (Cocos, etc.) alcanza con
+// agregar una entrada acá y escribir su función de parseo — el resto de la UI
+// (selector, previsualización, revisión de tickers, carga) es genérico.
+const IMPORTADORES={
+  balanz:{nombre:"Balanz",hoja:"ordenes",parser:parseBalanzOrdenes},
+};
+let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[];
+
+function abrirImportBroker(){
+  const sel=document.getElementById("imp-broker");
+  sel.innerHTML=Object.entries(IMPORTADORES).map(([k,v])=>`<option value="${k}">${v.nombre}</option>`).join("")
+    +`<option value="" disabled>Cocos (próximamente)</option>`;
+  document.getElementById("imp-paso1").style.display="block";
+  document.getElementById("imp-paso2").style.display="none";
+  document.getElementById("imp-confirmar").style.display="none";
+  document.getElementById("imp-file").value="";
+  document.getElementById("imp-file").disabled=false;
+  document.getElementById("imp-err").textContent="";
+  document.getElementById("imp-titulo").textContent="Importar operaciones";
+  onBrokerChange();
+  document.getElementById("modal-import").classList.add("open");
+}
+function onBrokerChange(){
+  const b=document.getElementById("imp-broker").value;
+  document.getElementById("imp-broker-hint").textContent=
+    b?`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
+}
+
+async function onFileImportBroker(ev){
+  const f=ev.target.files[0];
+  if(!f) return;
+  const brokerId=document.getElementById("imp-broker").value;
+  const err=document.getElementById("imp-err");
+  err.textContent="";
+  try{
+    const buf=await f.arrayBuffer();
+    const wb=XLSX.read(buf,{type:"array",cellDates:true});
+    const cfg=IMPORTADORES[brokerId];
+    const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(hoja,{defval:null});
+    const {candidatos,omitidos,revisar}=cfg.parser(rows);
+    IMP_CANDIDATOS=candidatos; IMP_OMITIDOS=omitidos; IMP_REVISAR=revisar;
+    renderPreviewImport();
+  }catch(e){
+    err.textContent="No se pudo leer el archivo: "+e.message;
+  }
+}
+
+function fUTC(d){
+  if(d instanceof Date){
+    const p=n=>String(n).padStart(2,"0");
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}`;
+  }
+  if(typeof d==="string"){
+    let m=d.match(/^(\d{4}-\d{2}-\d{2})/); if(m) return m[1];
+    m=d.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+  }
+  if(typeof d==="number"&&window.XLSX?.SSF){
+    const dt=XLSX.SSF.parse_date_code(d);
+    if(dt) return `${dt.y}-${String(dt.m).padStart(2,"0")}-${String(dt.d).padStart(2,"0")}`;
+  }
+  return null;
+}
+
+// ── Clasificador de ticker para especies que la fila no identifica por tipo ──
+function clasificarTickerImport(sym){
+  if(COMAFI[sym]) return "cedear";
+  if(esProvincial(sym)) return "bono";
+  if(/^(AL|GD|AE|BP|TX|TZX|TM|TT|TV|D\d|S\d|T\d|TO|BON|BJ|LE|PR|CUA|DIC|PAR)/.test(sym)) return "bono";
+  if(NOMBRE_AR[sym]) return "accion";
+  return null; // necesita revisión manual
+}
+
+// ── Parser Balanz: hoja "ordenes" ──
+function parseBalanzOrdenes(rows){
+  const candidatos=[], omitidos=[], revisar=[];
+  let sinRevisar=0;
+  for(const r of rows){
+    const op=(r["Operacion"]||"").trim();
+    const estado=(r["Estado"]||"").trim();
+    const ticker=(r["Ticker"]||"").trim();
+    const moneda=(r["Moneda"]||"").trim();
+    const fecha=fUTC(r["Fecha"]);
+    const cantOp=Number(r["Cantidad Operada"]);
+    const precioOp=Number(r["Precio Operado"]);
+    const monto=Number(r["Monto"]);
+
+    // Solo operaciones realmente ejecutadas (total o parcialmente)
+    if(!["Ejecutada","Parcialmente Cancelada","Finalizada"].includes(estado)){
+      omitidos.push({fecha,op,ticker,motivo:"no ejecutada ("+estado+")"}); continue;
+    }
+
+    const monedaApp=/d[oó]lar|dollar/i.test(moneda)?"USD":"ARS";
+
+    if(op==="Compra Dólar Bolsa"||op==="Venta Dólar Bolsa"){
+      omitidos.push({fecha,op,ticker,motivo:"conversión MEP — ya reflejada en las patas de bono a la misma hora"}); continue;
+    }
+    if(op.startsWith("Caución")){
+      omitidos.push({fecha,op,ticker,motivo:"colocación a plazo, no es una posición de cartera"}); continue;
+    }
+    if(op==="Transferencia"||op==="Depósito"){
+      candidatos.push({fecha,tipo:"cash",op:"deposito",ticker:"",cantidad:1,precio:monto,moneda:monedaApp,origen:op});
+      continue;
+    }
+    if(op.startsWith("Suscripción")){
+      candidatos.push({fecha,tipo:"fci",op:"compra",ticker,fondo:ticker,cantidad:cantOp,precio:precioOp*1000,moneda:monedaApp,origen:op});
+      continue;
+    }
+    if(op.startsWith("Rescate")){
+      candidatos.push({fecha,tipo:"fci",op:"venta",ticker,fondo:ticker,cantidad:cantOp,precio:precioOp*1000,moneda:monedaApp,origen:op});
+      continue;
+    }
+    if(op.startsWith("Compra")||op.startsWith("Venta")){
+      if(!cantOp||cantOp<=0||!precioOp||precioOp<=0){
+        omitidos.push({fecha,op,ticker,motivo:"sin cantidad/precio operado válido"}); continue;
+      }
+      let tipo=clasificarTickerImport(ticker);
+      const item={fecha,op:op.startsWith("Compra")?"compra":"venta",ticker,cantidad:cantOp,
+        precioBruto:precioOp,moneda:monedaApp,origen:op,tipo};
+      if(!tipo){ item.tipo="accion"; item.sinClasificar=true; sinRevisar++; revisar.push(item); }
+      else candidatos.push(item);
+      continue;
+    }
+    omitidos.push({fecha,op,ticker,motivo:"tipo de operación no reconocido"});
+  }
+  return {candidatos,omitidos,revisar};
+}
+
+function renderPreviewImport(){
+  document.getElementById("imp-paso1").style.display="none";
+  const paso2=document.getElementById("imp-paso2");
+  paso2.style.display="block";
+  document.getElementById("imp-confirmar").style.display="inline-flex";
+
+  const porTipo={};
+  for(const c of IMP_CANDIDATOS) porTipo[c.op+"·"+c.tipo]=(porTipo[c.op+"·"+c.tipo]||0)+1;
+  const resumen=Object.entries(porTipo).map(([k,n])=>{
+    const [op,tipo]=k.split("·");
+    return `<span class="imp-badge ok">${n} ${op} · ${tipo}</span>`;
+  }).join(" ");
+  document.getElementById("imp-resumen").innerHTML=
+    `<div style="margin-bottom:8px">${resumen||'<span class="hint">No se encontraron operaciones para cargar.</span>'}</div>`;
+
+  const tiposSel=["bono","letra","on","accion","cedear","fci"];
+  if(IMP_REVISAR.length){
+    document.getElementById("imp-revision").innerHTML=`
+      <div class="hint" style="margin-bottom:8px">
+        ${IMP_REVISAR.length} especie(s) sin clasificar automáticamente — confirmá el tipo antes de cargar:</div>
+      <div class="imp-scroll"><div class="imp-row head"><span>Fecha</span><span>Especie</span><span>Cant.</span><span>Precio</span><span>Tipo</span></div>
+      ${IMP_REVISAR.map((r,i)=>`<div class="imp-row">
+        <span>${r.fecha}</span><span class="tk">${r.ticker}</span><span>${r.cantidad}</span><span>${fmt(r.precioBruto,2)}</span>
+        <select onchange="IMP_REVISAR[${i}].tipo=this.value">
+          ${tiposSel.map(t=>`<option value="${t}" ${t===r.tipo?"selected":""}>${t}</option>`).join("")}
+        </select></div>`).join("")}</div>`;
+  } else document.getElementById("imp-revision").innerHTML="";
+
+  if(IMP_OMITIDOS.length){
+    const resumenOm={};
+    for(const o of IMP_OMITIDOS) resumenOm[o.motivo]=(resumenOm[o.motivo]||0)+1;
+    document.getElementById("imp-omitidos").innerHTML=
+      `<b>${IMP_OMITIDOS.length} fila(s) omitidas:</b><br>`+
+      Object.entries(resumenOm).map(([m,n])=>`· ${n} — ${m}`).join("<br>");
+  } else document.getElementById("imp-omitidos").innerHTML="";
+}
+
+async function confirmarImportBroker(){
+  const btn=document.getElementById("imp-confirmar");
+  btn.disabled=true; btn.textContent="Cargando…";
+  const todos=[...IMP_CANDIDATOS,...IMP_REVISAR];
+  const cuenta=canonizarCta(IMPORTADORES[document.getElementById("imp-broker").value].nombre.toUpperCase());
+
+  // MEP por fecha: se resuelve una sola vez por día, no por movimiento
+  const fechasUnicas=[...new Set(todos.map(m=>m.fecha))];
+  const mepPorFecha={};
+  for(const f of fechasUnicas){
+    try{ mepPorFecha[f]=Math.round(await mepDeFecha(f)*100)/100; }
+    catch(e){ mepPorFecha[f]=null; }
+  }
+
+  let cargados=0, sinMep=0;
+  for(const m of todos){
+    if(m.tipo==="cash"){
+      DATOS.movimientos.push({id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:"cash",
+        ticker:m.op==="deposito"?"DEPOSITO":"RETIRO",cuenta,cantidad:1,precio:m.precio,moneda:m.moneda,
+        mep:mepPorFecha[m.fecha]});
+    } else {
+      const div=divisorDe(m.tipo);
+      const precio=m.tipo==="fci"?m.precio:(m.precioBruto!=null?m.precioBruto*div:m.precio);
+      if(mepPorFecha[m.fecha]==null) sinMep++;
+      const mv={id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:m.tipo,cuenta,
+        cantidad:m.cantidad,precio,moneda:m.moneda,mep:mepPorFecha[m.fecha]??1};
+      if(m.tipo==="fci") mv.fondo=m.fondo; else mv.ticker=m.ticker;
+      DATOS.movimientos.push(mv);
+    }
+    cargados++;
+  }
+  persistirYSync();
+  cerrarModales();
+  cargar();
+  alert(`Se cargaron ${cargados} movimientos${sinMep?` (${sinMep} sin MEP de esa fecha — se usó 1 como referencia, editalos a mano si hace falta)`:""}.`);
+}
+
 function importar(ev){
   const f=ev.target.files[0]; if(!f) return;
   const r=new FileReader();
