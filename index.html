@@ -283,6 +283,27 @@ footer b{color:var(--grey);font-weight:400}
 .st-cell .v.sync-warn{color:var(--down)}
 
 
+
+/* ══ PANEL MACRO ══ */
+.macro{margin-bottom:28px}
+.macro-sec{margin-bottom:16px}
+.macro-h{font-family:var(--din);font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--grey);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.macro-h::before{content:"";width:14px;height:2px;background:var(--warm);display:inline-block}
+.macro-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(146px,1fr));gap:1px;
+  background:var(--hair);border:1px solid var(--hair);border-radius:var(--r);overflow:hidden}
+.mc{background:var(--surf);padding:11px 13px 9px;position:relative}
+.mc::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--surf-edge),transparent);opacity:.4}
+.mc-k{font-family:var(--din);font-size:10px;font-weight:600;letter-spacing:.09em;color:var(--grey-dim);
+  text-transform:uppercase;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mc-v{font-size:17px;font-weight:500;letter-spacing:-.01em;line-height:1.1;margin-bottom:4px}
+.mc-b{display:flex;align-items:center;gap:7px;min-height:15px;flex-wrap:wrap}
+.mc-var{font-size:11.5px;font-weight:500}
+.mc-chip{font-family:var(--din);font-size:8.5px;font-weight:600;letter-spacing:.08em;color:var(--grey-dim);
+  border:1px solid var(--hair);padding:1px 6px;border-radius:2px;text-transform:uppercase;white-space:nowrap}
+@media(max-width:700px){.macro-grid{grid-template-columns:repeat(auto-fill,minmax(118px,1fr))}.mc-v{font-size:15px}}
+
 /* ══ MERCADO ══ */
 .submenu{display:flex;gap:1px;background:var(--hair);border:1px solid var(--hair);border-radius:var(--r);
   overflow:hidden;margin-bottom:20px;flex-wrap:wrap}
@@ -551,6 +572,19 @@ let MONEDA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio";
 /* ── Benchmark S&P 500: serie embebida + extensión en vivo vía CEDEAR SPY ── */
 const SP500_HIST={"2025-12-01":6812.63,"2025-12-02":6829.37,"2025-12-03":6849.72,"2025-12-04":6857.12,"2025-12-05":6870.4,"2025-12-08":6846.51,"2025-12-09":6840.51,"2025-12-10":6886.68,"2025-12-11":6901.0,"2025-12-12":6827.41,"2025-12-15":6816.51,"2025-12-16":6800.26,"2025-12-17":6721.43,"2025-12-18":6774.76,"2025-12-19":6834.5,"2025-12-22":6878.49,"2025-12-23":6909.79,"2025-12-24":6932.05,"2025-12-26":6929.94,"2025-12-29":6905.74,"2025-12-30":6896.24,"2025-12-31":6845.5,"2026-01-02":6858.47,"2026-01-05":6902.05,"2026-01-06":6944.82,"2026-01-07":6920.93,"2026-01-08":6921.46,"2026-01-09":6966.28,"2026-01-12":6977.27,"2026-01-13":6963.74,"2026-01-14":6926.6,"2026-01-15":6944.47,"2026-01-16":6940.01,"2026-01-20":6796.86,"2026-01-21":6875.62,"2026-01-22":6913.35,"2026-01-23":6915.61,"2026-01-26":6950.23,"2026-01-27":6978.6,"2026-01-28":6978.03,"2026-01-29":6969.01,"2026-01-30":6939.03,"2026-02-02":6976.44,"2026-02-03":6917.81,"2026-02-04":6882.72,"2026-02-05":6798.4,"2026-02-06":6932.3,"2026-02-09":6964.82,"2026-02-10":6941.81,"2026-02-11":6941.47,"2026-02-12":6832.76,"2026-02-13":6836.17,"2026-02-17":6843.22,"2026-02-18":6881.31,"2026-02-19":6861.89,"2026-02-20":6909.51,"2026-02-23":6837.75,"2026-02-24":6890.07,"2026-02-25":6946.13,"2026-02-26":6908.86,"2026-02-27":6878.88,"2026-03-02":6881.62,"2026-03-03":6816.63,"2026-03-04":6869.5,"2026-03-05":6830.71,"2026-03-06":6740.02,"2026-03-09":6795.99,"2026-03-10":6781.48,"2026-03-11":6775.8,"2026-03-12":6672.62,"2026-03-13":6632.19,"2026-03-16":6699.38,"2026-03-17":6716.09,"2026-03-18":6624.7,"2026-03-19":6606.49,"2026-03-20":6506.48,"2026-03-23":6581.0,"2026-03-24":6556.37,"2026-03-25":6591.9,"2026-03-26":6477.16,"2026-03-27":6368.85,"2026-03-30":6343.72,"2026-03-31":6528.52,"2026-04-01":6575.32,"2026-04-02":6582.69,"2026-04-06":6611.83,"2026-04-07":6616.85,"2026-04-08":6782.81,"2026-04-09":6824.66,"2026-04-10":6816.89,"2026-04-13":6886.24,"2026-04-14":6967.38,"2026-04-15":7022.95,"2026-04-16":7041.28,"2026-04-17":7126.06,"2026-04-20":7109.14,"2026-04-21":7064.01,"2026-04-22":7137.9,"2026-04-23":7108.4,"2026-04-24":7165.08,"2026-04-27":7173.91,"2026-04-28":7138.8,"2026-04-29":7135.95,"2026-04-30":7209.01,"2026-05-01":7230.12,"2026-05-04":7200.75,"2026-05-05":7259.22,"2026-05-06":7365.12,"2026-05-07":7337.11,"2026-05-08":7398.93,"2026-05-11":7412.84,"2026-05-12":7400.96,"2026-05-13":7444.25,"2026-05-14":7501.24,"2026-05-15":7408.5,"2026-05-18":7403.05,"2026-05-19":7353.61,"2026-05-20":7432.97,"2026-05-21":7445.72,"2026-05-22":7473.47,"2026-05-26":7519.12,"2026-05-27":7520.36,"2026-05-28":7563.63,"2026-05-29":7580.06,"2026-06-01":7599.96,"2026-06-02":7609.78,"2026-06-03":7553.68,"2026-06-04":7584.31,"2026-06-05":7383.74,"2026-06-08":7405.73,"2026-06-09":7386.65,"2026-06-10":7266.99,"2026-06-11":7394.3,"2026-06-12":7431.46,"2026-06-15":7554.29,"2026-06-16":7511.35,"2026-06-17":7420.1,"2026-06-18":7500.58,"2026-06-22":7472.79,"2026-06-23":7365.46,"2026-06-24":7358.22,"2026-06-25":7357.49,"2026-06-26":7354.02,"2026-06-29":7440.43,"2026-06-30":7499.36,"2026-07-01":7483.23,"2026-07-02":7483.24,"2026-07-06":7537.43,"2026-07-07":7503.85,"2026-07-08":7482.71,"2026-07-09":7543.64,"2026-07-10":7575.39,"2026-07-13":7515.34,"2026-07-14":7543.59,"2026-07-15":7572.4,"2026-07-16":7533.77,"2026-07-17":7457.69,"2026-07-20":7443.28,"2026-07-21":7509.2,"2026-07-22":7498.96,"2026-07-23":7408.3};
 const SPY_K=573.4;
+
+/* ── Panel macro: calibración de niveles (vehículo en vivo × K = nivel de referencia) ──
+   K calibrados al 2026-07-24 contra futuros/índices reales; se refrescan con cada
+   actualización del archivo. Tasas, Brent y trigo son referencia estática con fecha. */
+const MACRO_K={"sp": 573.4, "ndx": 787.35, "dji": 1911.93, "rut": 96.066, "eem": 4.7905, "oro": 521.3, "plata": 6.413, "plat": 110.82, "wti": 9.604, "soja": 17.485, "maiz": 10.471};
+const MACRO_REF={"fecha": "2026-07-24", "tasasAl": "2026-07-23", "ust1": 4.15, "ust5": 4.46, "ust10": 4.71, "tips5": 2.17, "tips10": 2.43, "brent": 98.38, "trigo": 249.5};
+let FX_DATA=null, FX_TS=0;
+function calcDXY(r){
+  // Fórmula ICE del índice dólar sobre tipos de cambio BCE (Frankfurter, base USD)
+  const eur=1/r.EUR, gbp=1/r.GBP;
+  return 50.14348112*Math.pow(eur,-0.576)*Math.pow(r.JPY,0.136)*Math.pow(gbp,-0.119)
+    *Math.pow(r.CAD,0.091)*Math.pow(r.SEK,0.042)*Math.pow(r.CHF,0.036);
+}
 const SP500_FECHAS=Object.keys(SP500_HIST).sort();
 function sp500En(f){
   if(SP500_HIST[f]!=null) return SP500_HIST[f];
@@ -1261,6 +1295,59 @@ const MKT_MENU=[
   {k:"ons",        n:"ONs"},
 ];
 
+function panelMacro(){
+  const cd=s=>MKT.cedear?.[s], us=s=>MKT.usa?.[s];
+  const lvl=(r,k,dec=0)=>r?fmt(r.c*k,dec):null;
+  const mc=(nom,val,vr,extra)=>`<div class="mc"><div class="mc-k">${nom}</div>
+    <div class="mc-v">${val??"—"}</div>
+    <div class="mc-b">${vr!=null?`<span class="mc-var ${cls(vr)}">${sgn(vr)}</span>`:""}${extra||""}</div></div>`;
+  const chip=t=>`<span class="mc-chip">${t}</span>`;
+
+  // Merval: proxy por variación ponderada (volumen × precio) del panel líder
+  let merv=null;
+  const acc=Object.values(MKT.accion||{}).filter(r=>!esEspecieUSD(r.symbol,MKT.accion)&&r.pct_change!=null&&r.v&&r.c);
+  if(acc.length){ const W=acc.reduce((s,r)=>s+r.v*r.c,0); merv=acc.reduce((s,r)=>s+r.pct_change*r.v*r.c,0)/W; }
+
+  const idx = mc("S&P 500",lvl(cd("SPYD"),MACRO_K.sp),cd("SPYD")?.pct_change)
+    + mc("Nasdaq 100",lvl(cd("QQQD"),MACRO_K.ndx),cd("QQQD")?.pct_change)
+    + mc("Dow Jones",lvl(cd("DIAD"),MACRO_K.dji),cd("DIAD")?.pct_change)
+    + mc("Russell 2000",lvl(cd("IWMD"),MACRO_K.rut),cd("IWMD")?.pct_change)
+    + mc("Emergentes · EEM",lvl(cd("EEMD"),MACRO_K.eem,2),cd("EEMD")?.pct_change)
+    + mc("Merval",merv!=null?sgn(merv):null,null,chip("panel líder · proxy"));
+
+  const rf=MACRO_REF, fT=rf.tasasAl.slice(8,10)+"/"+rf.tasasAl.slice(5,7);
+  const tasas = mc("UST 1 año",fmt(rf.ust1,2)+"%",null,chip(fT))
+    + mc("UST 5 años",fmt(rf.ust5,2)+"%",null,chip(fT))
+    + mc("UST 10 años",fmt(rf.ust10,2)+"%",null,chip(fT))
+    + mc("TIPS 5 años",fmt(rf.tips5,2)+"%",null,chip(fT))
+    + mc("TIPS 10 años",fmt(rf.tips10,2)+"%",null,chip(fT));
+
+  const fB=rf.fecha.slice(8,10)+"/"+rf.fecha.slice(5,7);
+  const cmd = mc("WTI",lvl(cd("USOD"),MACRO_K.wti,1),cd("USOD")?.pct_change)
+    + mc("Brent","US$ "+fmt(rf.brent,1),null,chip(fB))
+    + mc("Oro",lvl(cd("GLDD"),MACRO_K.oro),cd("GLDD")?.pct_change)
+    + mc("Plata",lvl(cd("SLVD"),MACRO_K.plata,1),cd("SLVD")?.pct_change)
+    + mc("Platino",lvl(us("PPLT"),MACRO_K.plat),us("PPLT")?.pct_change)
+    + mc("Soja · US$/t",lvl(us("SOYB"),MACRO_K.soja,1),us("SOYB")?.pct_change)
+    + mc("Maíz · US$/t",lvl(us("CORN"),MACRO_K.maiz,1),us("CORN")?.pct_change)
+    + mc("Trigo · US$/t",fmt(rf.trigo,1),null,chip(fB));
+
+  let fxs="";
+  if(FX_DATA?.rates){
+    const r=FX_DATA.rates, fF=FX_DATA.date.slice(8,10)+"/"+FX_DATA.date.slice(5,7);
+    fxs = mc("DXY",fmt(calcDXY(r),1),null,chip("BCE "+fF))
+      + mc("EUR/USD",fmt(1/r.EUR,4),null,chip("BCE "+fF))
+      + mc("USD/JPY",fmt(r.JPY,2),null,chip("BCE "+fF))
+      + mc("GBP/USD",fmt(1/r.GBP,4),null,chip("BCE "+fF));
+  } else {
+    fxs = mc("DXY",null)+mc("EUR/USD",null)+mc("USD/JPY",null)+mc("GBP/USD",null);
+  }
+
+  const sec=(t,cards)=>`<div class="macro-sec"><div class="macro-h">${t}</div><div class="macro-grid">${cards}</div></div>`;
+  return `<div class="macro">${sec("Índices",idx)}${sec("Tasas USA",tasas)}${sec("Commodities",cmd)}${sec("Monedas",fxs)}
+    <div class="mkt-foot">Niveles estimados desde vehículos BYMA en vivo (CEDEARs / ETFs) con calibración al ${fB}. Tasas, Brent y trigo: referencia con fecha. Merval: variación ponderada del panel líder, no el índice oficial.</div></div>`;
+}
+
 async function renderMercado(){
   const cont=document.getElementById("contenido");
   const stale=Date.now()-MKT_TS>120000;
@@ -1270,6 +1357,18 @@ async function renderMercado(){
       const [bo,le,co,ac,ce]=await Promise.all(["bono","letra","on","accion","cedear"].map(t=>panelDe(t,true)));
       MKT={bono:bo,letra:le,on:co,accion:ac,cedear:ce}; MKT_TS=Date.now();
     }catch(e){ cont.innerHTML='<div class="chart-warn">No se pudieron cargar los paneles ('+e.message+').</div>'; return; }
+    // Panel USA (PPLT/CORN/SOYB) y FX — si fallan, el panel macro degrada a "—" sin romper nada
+    try{
+      const usa=await (await fetch("https://data912.com/live/usa_stocks")).json();
+      MKT.usa={};
+      for(const r of usa) if(["PPLT","CORN","SOYB"].includes(r.symbol)) MKT.usa[r.symbol]=r;
+    }catch(e){ MKT.usa={}; }
+    if(Date.now()-FX_TS>43200000){
+      try{
+        const fx=await (await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,JPY,GBP,CAD,SEK,CHF")).json();
+        FX_DATA=fx; FX_TS=Date.now();
+      }catch(e){}
+    }
   }
   if(TAB!=="mercado") return;
 
@@ -1291,7 +1390,7 @@ async function renderMercado(){
   else if(MKT_SUB==="provinciales") cuerpo=vistaProvinciales(F);
   else if(MKT_SUB==="ons") cuerpo=vistaONs(F);
 
-  cont.innerHTML=menu+buscador+cuerpo;
+  cont.innerHTML=panelMacro()+menu+buscador+cuerpo;
   const inp=document.getElementById("mkt-q");
   if(q&&inp){ inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length); }
 }
