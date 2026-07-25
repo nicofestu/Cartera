@@ -2,8 +2,8 @@ name: Snapshot historial de mercado
 
 on:
   schedule:
-    # 21:00 UTC = 18:00 en Argentina (BYMA cierra 17:00 ART) — corre de lunes a viernes
-    - cron: '0 21 * * 1-5'
+    # 21:30 UTC = 18:30 en Argentina (BYMA cierra 17:00 ART; media hora de margen por delay) — lunes a viernes
+    - cron: '30 21 * * 1-5'
   workflow_dispatch: {}   # permite disparar manualmente desde la pestana Actions, para probar
 
 permissions:
