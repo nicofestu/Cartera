@@ -2031,7 +2031,7 @@ function exportar(){
 // agregar una entrada acá y escribir su función de parseo — el resto de la UI
 // (selector, previsualización, revisión de tickers, carga) es genérico.
 const IMPORTADORES={
-  balanz:{nombre:"Balanz",hoja:"ordenes",parser:parseBalanzOrdenes},
+  balanz:{nombre:"Balanz",hoja:"movimientos",parser:parseBalanzMovimientos},
 };
 let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[];
 
@@ -2051,8 +2051,11 @@ function abrirImportBroker(){
 }
 function onBrokerChange(){
   const b=document.getElementById("imp-broker").value;
-  document.getElementById("imp-broker-hint").textContent=
-    b?`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
+  const hints={
+    balanz:`En tu cuenta de Balanz: <b>Actividad → Movimientos</b> → filtrá el rango de fechas desde el inicio de tus operaciones → botón <b>Descargar</b>.<br>
+      <span style="color:var(--down)">No uses el botón "Reportes"</span> — descarga en un formato distinto que esta app no puede leer.`,
+  };
+  document.getElementById("imp-broker-hint").innerHTML=b?hints[b]||`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
 }
 
 async function onFileImportBroker(ev){
@@ -2098,6 +2101,95 @@ function clasificarTickerImport(sym){
   if(/^(AL|GD|AE|BP|TX|TZX|TM|TT|TV|D\d|S\d|T\d|TO|BON|BJ|LE|PR|CUA|DIC|PAR)/.test(sym)) return "bono";
   if(NOMBRE_AR[sym]) return "accion";
   return null; // necesita revisión manual
+}
+
+// ── Parser Balanz: hoja "movimientos" (Actividad → Movimientos → Descargar) ──
+// Formato de doble asiento: cada operación puede generar varias filas (la pata
+// real de la operación + patas de comisión/eco interno). Importe viene con
+// signo, así que depósitos y retiros se distinguen directo, sin adivinar.
+function parseBalanzMovimientos(rows){
+  const candidatos=[], omitidos=[], revisar=[];
+  const monedaApp=m=>/d[oó]lar|dollar/i.test(m||"")?"USD":"ARS";
+  const TIPO_MAP={Bonos:"bono",Cedears:"cedear",Acciones:"accion",Fondos:"fci"};
+  const boletoDe=s=>{ const m=/Boleto \/ (\d+)/.exec(s||""); return m?m[1]:null; };
+
+  for(const r of rows){
+    const desc=(r["Descripcion"]||"").trim();
+    const ticker=(r["Ticker"]||"").trim().replace(/\s+/g,""); // Balanz a veces separa "BCAH A" con espacio
+    const tipoInstr=(r["Tipo de Instrumento"]||"").trim();
+    const fecha=fUTC(r["Concertacion"]);
+    const moneda=(r["Moneda"]||"").trim();
+    const cantidad=Number(r["Cantidad"]);
+    const precio=Number(r["Precio"]);
+    const importe=Number(r["Importe"]);
+    const monApp=monedaApp(moneda);
+    const bol=boletoDe(desc);
+
+    if(!fecha){ omitidos.push({fecha:"—",op:desc.slice(0,28),ticker,motivo:"sin fecha reconocible"}); continue; }
+
+    // Depósitos, retiros, dividendos y ajustes manuales (retenciones de
+    // impuestos, reclasificación entre sub-monedas de USD): todos mueven
+    // plata real de la cuenta, y el signo de Importe ya dice para qué lado.
+    // Las reclasificaciones internas (p.ej. Cable↔CV7000) quedan en pares que
+    // se cancelan solos al sumarse, así que no hace falta tratarlas aparte.
+    if(desc.startsWith("Comprobante de Pago")||desc.startsWith("Recibo de Cobro")
+       ||desc.startsWith("Movimiento Manual")||desc.startsWith("Dividendo")){
+      if(!importe){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"deposito":"retiro",cantidad:1,
+        precio:Math.abs(importe),moneda:monApp,origen:desc});
+      continue;
+    }
+    // Eco interno de una Liquidación de Rescate/Suscripción — mismo monto, signo
+    // opuesto, no representa un movimiento real adicional.
+    if(desc==="Rescate a Balanz"||desc==="Suscripción desde Balanz"){
+      omitidos.push({fecha,op:desc,ticker,motivo:"eco interno de la Liquidación — mismo monto, no se duplica"}); continue;
+    }
+    // Caución (colocación a plazo): boleto sin ticker.
+    if(bol&&!ticker){
+      omitidos.push({fecha,op:desc.slice(0,28),ticker:"",motivo:"colocación a plazo, no es una posición de cartera"}); continue;
+    }
+    // Pata de comisión/impuesto de un boleto en una moneda secundaria (Precio
+    // sentinel -1): importe menor, se omite en vez de repartirlo entre monedas.
+    if(bol&&precio===-1){
+      omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"comisión/impuesto en otra moneda, monto menor"}); continue;
+    }
+    // Rescate a un banco externo (sin "Liquidación de" ni eco "a Balanz"): la
+    // plata sale de lo que este dashboard sigue, así que además de vender el
+    // fondo se registra un retiro por el mismo importe.
+    if(desc==="Rescate"){
+      if(!ticker||!cantidad||!precio||precio===-1){ omitidos.push({fecha,op:desc,ticker,motivo:"sin datos suficientes"}); continue; }
+      const precioEf=Math.abs(importe)/Math.abs(cantidad); // precio efectivo real (Importe), no el "de pizarra"
+      candidatos.push({fecha,tipo:"fci",op:"venta",ticker,fondo:ticker,cantidad:Math.abs(cantidad),precio:precioEf*1000,moneda:monApp,origen:desc});
+      candidatos.push({fecha,tipo:"cash",op:"retiro",cantidad:1,precio:Math.abs(importe),moneda:monApp,origen:desc+" (retiro a banco)"});
+      continue;
+    }
+    if(desc.startsWith("Liquidación de Rescate")){
+      if(!ticker||!cantidad||!precio||precio===-1){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"sin datos suficientes"}); continue; }
+      const precioEf=Math.abs(importe)/Math.abs(cantidad);
+      candidatos.push({fecha,tipo:"fci",op:"venta",ticker,fondo:ticker,cantidad:Math.abs(cantidad),precio:precioEf*1000,moneda:monApp,origen:desc});
+      continue;
+    }
+    if(desc.startsWith("Liquidación de Suscripción")){
+      if(!ticker||!cantidad||!precio||precio===-1){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"sin datos suficientes"}); continue; }
+      const precioEf=Math.abs(importe)/Math.abs(cantidad);
+      candidatos.push({fecha,tipo:"fci",op:"compra",ticker,fondo:ticker,cantidad:Math.abs(cantidad),precio:precioEf*1000,moneda:monApp,origen:desc});
+      continue;
+    }
+    // Pata real de un boleto de compra/venta (bonos/cedears/acciones). El precio
+    // efectivo sale del Importe real (incluye comisiones/aranceles), no del
+    // precio "de pizarra" — es el costo real que salió/entró de la cuenta.
+    if(bol&&ticker&&precio!==-1&&cantidad){
+      const tipo=TIPO_MAP[tipoInstr]||clasificarTickerImport(ticker);
+      const precioEf=Math.abs(importe)/Math.abs(cantidad);
+      const item={fecha,op:cantidad>0?"compra":"venta",ticker,cantidad:Math.abs(cantidad),
+        precioBruto:precioEf,moneda:monApp,origen:desc,tipo};
+      if(!tipo){ item.tipo="accion"; item.sinClasificar=true; revisar.push(item); }
+      else candidatos.push(item);
+      continue;
+    }
+    omitidos.push({fecha,op:desc.slice(0,30),ticker,motivo:"patrón no reconocido"});
+  }
+  return {candidatos,omitidos,revisar};
 }
 
 // ── Parser Balanz: hoja "ordenes" ──
