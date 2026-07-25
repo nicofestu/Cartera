@@ -56,7 +56,7 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
   background:radial-gradient(ellipse 900px 500px at 15% -10%,var(--warm-soft),transparent 60%),
     radial-gradient(ellipse 700px 400px at 90% 0%,var(--cool-soft),transparent 60%);}
 @media(prefers-reduced-motion:reduce){body::before{display:none}}
-.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+.wrap{max-width:1800px;margin:0 auto;padding:0 32px}
 @media(max-width:700px){.wrap{padding:0 14px}}
 
 /* ══ Etiquetas técnicas ══ */
@@ -1328,7 +1328,53 @@ function clasificarPeso(s){
   return "otros";
 }
 const esProvincial=s=>/^(BA|PB|BP|PM|MD|MG|MZ|CO|CH|NE|RN|SL|SA|TF|TU|ER|CE|FE)/.test(s)&&!/^BON/.test(s);
-const esEspecieUSD=(sym,panel)=>/[DC]$/.test(sym)&&panel[sym.slice(0,-1)]!=null;
+// Algunas especies no siguen el patrón "ticker de pesos + D/C" para su
+// variante en dólares (irregularidad puntual de nomenclatura de BYMA).
+// Mapeo manual solo para esos casos conocidos — el resto sigue el patrón normal.
+const ALIAS_USD={GOOGL:"GOGL"};
+function raizUSD(sym){
+  const recorte=sym.slice(0,-1);
+  const alias=Object.entries(ALIAS_USD).find(([,r])=>r===recorte);
+  return alias?alias[0]:recorte;
+}
+const esEspecieUSD=(sym,panel)=>/[DC]$/.test(sym)&&panel[raizUSD(sym)]!=null;
+
+/* ══ Precio/variación según el toggle ARS/USD global (misma variable MONEDA
+   que usa el resto de la app) ══
+   Nunca convierte por MEP/CCL: siempre muestra una cotización real de la
+   especie. Si el toggle pide una moneda que esa especie no tiene cotizada
+   por separado, sigue mostrando la única que existe, marcada como tal. */
+function nativoDe(row){
+  // Algunos bonos (p.ej. provinciales) solo existen en su liquidación en
+  // dólares, sin par en pesos — se detectan por sufijo D/C + escala de precio.
+  if(/[DC]$/.test(row.symbol)&&row.c<1000) return "USD";
+  return "ARS";
+}
+function dualPV(row,panel){
+  const nat=nativoDe(row);
+  if(MONEDA===nat) return {c:row.c,pct:row.pct_change,bid:row.px_bid,ask:row.px_ask,moneda:nat,nativo:true};
+  let otro=null;
+  if(MONEDA==="USD"&&nat==="ARS"&&panel){
+    const raiz=ALIAS_USD[row.symbol]||row.symbol;
+    otro=panel[raiz+"D"]||panel[raiz+"C"];
+    // Las ONs cotizan en pesos con sufijo "O" (no se le agrega la D, se la
+    // reemplaza): MGCRO → MGCRD, no MGCROD.
+    if(!otro&&/O$/.test(row.symbol)){
+      const raizON=row.symbol.slice(0,-1);
+      otro=panel[raizON+"D"]||panel[raizON+"C"];
+    }
+  }
+  if(MONEDA==="ARS"&&nat==="USD"&&panel){
+    const base=panel[raizUSD(row.symbol)];
+    if(base&&nativoDe(base)==="ARS") otro=base;
+  }
+  if(otro) return {c:otro.c,pct:otro.pct_change,bid:otro.px_bid,ask:otro.px_ask,moneda:MONEDA,nativo:true};
+  return {c:row.c,pct:row.pct_change,bid:row.px_bid,ask:row.px_ask,moneda:nat,nativo:false};
+}
+function tagMoneda(pv){
+  return !pv.nativo?`<span class="mc-chip" style="margin-left:6px">solo ${pv.moneda}</span>`:"";
+}
+
 
 const MKT_MENU=[
   {k:"acciones",   n:"Acciones"},
@@ -1394,7 +1440,7 @@ async function renderMercado(){
 
   const buscador=`<div class="mkt-bar">
     <input id="mkt-q" placeholder="Buscar especie…" value="${MKT_Q.replace(/"/g,'&quot;')}" oninput="MKT_Q=this.value;renderMercado()">
-    <span class="mkt-ts">BYMA · ${new Date(MKT_TS).toLocaleTimeString("es-AR",{hour12:false})}</span>
+    <span class="mkt-ts">BYMA · ${new Date(MKT_TS).toLocaleTimeString("es-AR",{hour12:false})} · mostrando en ${MONEDA}</span>
   </div>`;
 
   const q=MKT_Q.trim().toUpperCase();
@@ -1439,12 +1485,15 @@ function vistaRV(panel,tipo,F,q){
   const filas=vis.map(r=>{
     const info=infoDe(r.symbol)||{};
     const rubro=info.etf?(info.rubro||"ETF"):(info.sector||"—");
+    const pv=dualPV(r,panel);
+    const simbolo=pv.moneda==="USD"?"US$ ":"$ ";
+    const dec=pv.moneda==="USD"?2:(pv.c<100?2:0);
     return `<tr>
-    <td class="tk">${r.symbol}</td>
+    <td class="tk">${r.symbol}${tagMoneda(pv)}</td>
     <td class="l"><span class="nom-emp">${info.n||"—"}</span></td>
     <td class="l"><span class="sector">${rubro}</span></td>
-    <td>$ ${fmt(r.c,r.c<100?2:0)}</td>
-    <td class="${cls(r.pct_change)}">${r.pct_change==null?"—":sgn(r.pct_change)}</td>
+    <td>${simbolo}${fmt(pv.c,dec)}</td>
+    <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td>
     <td>${r.v?fmt(r.v*r.c/1e6,1)+" M":"—"}</td></tr>`;}).join("");
   return chips+`<div class="tbl-scroll"><table><thead><tr>
     <th>Especie</th><th class="l">Nombre</th><th class="l">${esCedear?"Sector / Rubro":"Sector"}</th><th>Último</th><th>Var %</th><th>Vol. $</th></tr></thead>
@@ -1455,80 +1504,76 @@ function vistaRV(panel,tipo,F,q){
 // ── Soberanos, clasificados por tipo ──
 function vistaSoberanos(F){
   const grupos={usd:[],fija:[],cer:[],tamar:[],dual:[],dlk:[],otros:[]};
-  const usdRows=[];
+  const panelOf={};
   for(const t of ["bono","letra"]){
     for(const r of Object.values(MKT[t]||{})){
       if(esEspecieUSD(r.symbol,MKT[t])) continue;
       if(esProvincial(r.symbol)) continue;
-      const c=clasificarPeso(r.symbol);
-      if(c==="usd"){ const d=MKT[t][r.symbol+"D"]; usdRows.push({symbol:r.symbol,ars:r.c,usd:d?.c,pct:d?.pct_change??r.pct_change}); }
-      else grupos[c].push(r);
+      if(!F(r.symbol)) continue;
+      grupos[clasificarPeso(r.symbol)].push(r);
+      panelOf[r.symbol]=MKT[t];
     }
   }
-  const nom={fija:"Tasa fija",cer:"CER",tamar:"TAMAR",dual:"Duales",dlk:"Dólar linked",otros:"Otros"};
+  const nom={usd:"Hard dollar",fija:"Tasa fija",cer:"CER",tamar:"TAMAR",dual:"Duales",dlk:"Dólar linked",otros:"Otros"};
   let out="";
-  if(usdRows.filter(r=>F(r.symbol)).length){
-    out+=secTabla("Hard dollar (USD)",`<th>Especie</th><th>USD (D)</th><th>ARS</th><th>Var %</th>`,
-      usdRows.filter(r=>F(r.symbol)).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(r=>
-      `<tr><td class="tk">${r.symbol}</td><td>${r.usd?"US$ "+fmt(r.usd,2):"—"}</td>
-      <td>$ ${fmt(r.ars,0)}</td><td class="${cls(r.pct)}">${r.pct==null?"—":sgn(r.pct)}</td></tr>`).join(""));
-  }
-  for(const k of ["fija","cer","tamar","dual","dlk","otros"]){
-    const rs=grupos[k].filter(r=>F(r.symbol));
-    if(rs.length) out+=secTabla("Pesos · "+nom[k],`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,rowsBono(rs));
+  for(const k of ["usd","fija","cer","tamar","dual","dlk","otros"]){
+    const rs=grupos[k];
+    if(rs.length) out+=secTabla(nom[k],theadBono(),rowsBono(rs,panelOf));
   }
   return out||'<div class="mkt-foot">Sin resultados.</div>';
 }
 
 function vistaProvinciales(F){
-  // Provinciales en USD (especie D/C) y en pesos, agrupados.
-  // El sufijo D no basta: BA37D cotiza en pesos pese a terminar en D, así que
-  // desempatamos por magnitud de precio (las especies hard-dollar cotizan < 1.000).
-  const usdP=[], pesosP=[];
+  const rows=[], panelOf={};
   for(const t of ["bono","letra"]){
     for(const r of Object.values(MKT[t]||{})){
       if(!esProvincial(r.symbol)||!F(r.symbol)) continue;
-      if(/D$/.test(r.symbol)&&MKT[t][r.symbol.slice(0,-1)]!=null) continue; // evitar duplicar la especie D
-      const pareceUSD=/[DC]$/.test(r.symbol)&&r.c<1000;
-      if(pareceUSD) usdP.push(r); else pesosP.push(r);
+      // Evitar listar dos veces la misma especie: si esta fila es la variante
+      // D de un par con base en pesos, se salta (dualPV la encuentra sola).
+      if(/D$/.test(r.symbol)&&MKT[t][r.symbol.slice(0,-1)]!=null) continue;
+      rows.push(r); panelOf[r.symbol]=MKT[t];
     }
   }
-  let out="";
-  if(usdP.length) out+=secTabla("Provinciales · Hard dollar",`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,
-    rowsBono(usdP.sort((a,b)=>a.symbol.localeCompare(b.symbol))));
-  if(pesosP.length) out+=secTabla("Provinciales · Pesos",`<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`,
-    rowsBono(pesosP.sort((a,b)=>a.symbol.localeCompare(b.symbol))));
-  return out||'<div class="mkt-foot">Sin resultados en bonos provinciales.</div>';
+  if(!rows.length) return '<div class="mkt-foot">Sin resultados en bonos provinciales.</div>';
+  return secTabla("Bonos provinciales",theadBono(),
+    rowsBono(rows.sort((a,b)=>a.symbol.localeCompare(b.symbol)),panelOf));
 }
 
 function vistaONs(F){
   // Cada ON cotiza en pesos con sufijo "O" y, si paga en dólares, también con
-  // sufijo D/C. Se lista una fila por especie (la de pesos) y la existencia de
-  // la variante D/C —un hecho observable, no una suposición— define la moneda de pago.
+  // sufijo D/C. Se lista una fila por especie y la existencia de la variante
+  // D/C —un hecho observable, no una suposición— define la moneda de pago.
   const base=Object.values(MKT.on||{}).filter(r=>/O$/.test(r.symbol)).filter(r=>F(r.symbol));
   if(!base.length) return '<div class="mkt-foot">Sin resultados en ONs.</div>';
   const filas=base.sort((a,b)=>(b.v||0)-(a.v||0)).map(r=>{
     const raiz=r.symbol.slice(0,-1);
     const usd=MKT.on[raiz+"D"]||MKT.on[raiz+"C"];
     const emisor=emisorDeON(r.symbol);
-    return `<tr><td class="tk">${r.symbol}</td>
+    const pv=dualPV(r,MKT.on);
+    const simbolo=pv.moneda==="USD"?"US$ ":"$ ";
+    return `<tr><td class="tk">${r.symbol}${tagMoneda(pv)}</td>
       <td class="l"><span class="nom-emp">${emisor||"—"}</span></td>
       <td class="l"><span class="sector">${usd?"USD":"ARS"}</span></td>
-      <td>$ ${fmt(r.c,r.c<1000?2:0)}</td>
-      <td class="${cls(r.pct_change)}">${r.pct_change==null?"—":sgn(r.pct_change)}</td>
-      <td>${usd?"US$ "+fmt(usd.c,2):(r.px_bid?fmt(r.px_bid,0)+" / "+fmt(r.px_ask,0):"—")}</td></tr>`;}).join("");
+      <td>${simbolo}${fmt(pv.c,pv.moneda==="USD"?2:(pv.c<1000?2:0))}</td>
+      <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td></tr>`;}).join("");
   return `<div class="grupo"><div class="grupo-h"><h2>Obligaciones negociables</h2></div>
     <div class="tbl-scroll"><table><thead><tr>
-    <th>Especie</th><th class="l">Emisor</th><th class="l">Moneda de pago</th><th>Últ. (ARS)</th><th>Var %</th><th>Últ. USD / Bid-Ask</th></tr></thead>
+    <th>Especie</th><th class="l">Emisor</th><th class="l">Moneda de pago</th><th>Último</th><th>Var %</th></tr></thead>
     <tbody>${filas}</tbody></table></div></div>
-    <div class="mkt-foot">Moneda de pago: USD si la especie también cotiza en dólares; si no, ARS. Emisor identificado para prefijos de alta confianza — el resto figura como "—".</div>`;
+    <div class="mkt-foot">"Moneda de pago" es un dato fijo del bono (si también cotiza en dólares o no). "Último" y "Var %" siguen el toggle ARS/USD de arriba. Emisor identificado para prefijos de alta confianza — el resto figura como "—".</div>`;
 }
 
-function rowsBono(arr){
-  return arr.map(r=>`<tr><td class="tk">${r.symbol}</td>
-    <td>$ ${fmt(r.c,r.c<1000?2:0)}</td>
-    <td class="${cls(r.pct_change)}">${r.pct_change==null?"—":sgn(r.pct_change)}</td>
-    <td>${r.px_bid?fmt(r.px_bid,r.px_bid<1000?2:0):"—"} / ${r.px_ask?fmt(r.px_ask,r.px_ask<1000?2:0):"—"}</td></tr>`).join("");
+function theadBono(){ return `<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`; }
+function rowsBono(arr,panelOf){
+  return arr.map(r=>{
+    const pv=dualPV(r,panelOf?panelOf[r.symbol]:null);
+    const simbolo=pv.moneda==="USD"?"US$ ":"$ ";
+    const dec=pv.moneda==="USD"?2:(pv.c<1000?2:0);
+    return `<tr><td class="tk">${r.symbol}${tagMoneda(pv)}</td>
+    <td>${simbolo}${fmt(pv.c,dec)}</td>
+    <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td>
+    <td>${pv.bid?fmt(pv.bid,dec):"—"} / ${pv.ask?fmt(pv.ask,dec):"—"}</td></tr>`;
+  }).join("");
 }
 function secTabla(titulo,ths,filas){
   return `<div class="grupo"><div class="grupo-h"><h2>${titulo}</h2></div>
