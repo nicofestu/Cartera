@@ -1,0 +1,31 @@
+name: Snapshot historial de mercado
+
+on:
+  schedule:
+    # 21:00 UTC = 18:00 en Argentina (BYMA cierra 17:00 ART) — corre de lunes a viernes
+    - cron: '0 21 * * 1-5'
+  workflow_dispatch: {}   # permite disparar manualmente desde la pestana Actions, para probar
+
+permissions:
+  contents: write   # necesario para que el job pueda comitear el archivo actualizado
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Tomar snapshot de precios (bonos, letras, acciones, cedears)
+        run: python scripts/snapshot_historial.py
+
+      - name: Comitear si hubo cambios
+        run: |
+          git config user.name "snapshot-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add historial/
+          git diff --staged --quiet || git commit -m "Snapshot de mercado $(date -u +%Y-%m-%d)"
+          git push
