@@ -297,6 +297,16 @@ footer b{color:var(--grey);font-weight:400}
 .chart-warn{font-size:12px;color:var(--down);line-height:1.8;padding:22px 2px 6px;max-width:760px}
 .chart-warn b{color:var(--white)}
 .chart-note{font-size:11px;color:var(--grey-dim);line-height:1.8;margin-top:12px;border-top:1px solid var(--hair);padding-top:11px}
+.chart-card svg{cursor:crosshair}
+.chart-tooltip{position:absolute;pointer-events:none;background:#0D0D0D;border:1px solid var(--hair-hot);
+  border-radius:var(--r);padding:8px 12px;font-size:11.5px;color:var(--white);line-height:1.7;
+  box-shadow:0 6px 18px rgba(0,0,0,.55);white-space:nowrap;z-index:6;transform:translate(-50%,-100%);
+  font-family:var(--mono);display:none}
+.chart-tooltip .tt-date{color:var(--grey-dim);font-size:10px;letter-spacing:.05em;text-transform:uppercase;margin-bottom:4px}
+.chart-tooltip .tt-row{display:flex;align-items:center;gap:7px}
+.chart-tooltip .tt-row+.tt-row{margin-top:2px}
+.chart-tooltip .tt-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
+.chart-tooltip b{font-weight:500;margin-left:auto;padding-left:10px}
 
 .sync-row{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--hair);font-size:12.5px}
 .sync-row .lbl{color:var(--grey)}
@@ -1320,6 +1330,62 @@ function filasGrid(cards,clase,maxFila){
   return g(cards.slice(0,a),a,"top")+g(cards.slice(a),n-a,"bot");
 }
 
+// Tooltip hover del gráfico de rendimiento: recibe los puntos ya calculados
+// (fracción X 0..1 + retorno) de la cartera y del benchmark, e interpola
+// linealmente sobre esas mismas curvas para mostrar fecha + rendimiento de
+// ambas series en la posición del mouse (o del dedo, en touch).
+function initChartTooltip(d){
+  const svg=document.getElementById("rend-chart-svg");
+  const card=document.getElementById("rend-chart-card");
+  const tip=document.getElementById("rend-tooltip");
+  const cross=document.getElementById("rend-crosshair");
+  const dotNav=document.getElementById("rend-hover-nav");
+  const dotSp=document.getElementById("rend-hover-sp");
+  if(!svg||!card||!tip||!cross||!d||!d.pts||d.pts.length<2) return;
+  const interp=(arr,x)=>{
+    if(!arr||!arr.length) return null;
+    if(x<=arr[0].x) return arr[0].ret;
+    if(x>=arr[arr.length-1].x) return arr[arr.length-1].ret;
+    for(let i=1;i<arr.length;i++){
+      if(arr[i].x>=x){
+        const a=arr[i-1],b=arr[i],t=(x-a.x)/((b.x-a.x)||1);
+        return a.ret+(b.ret-a.ret)*t;
+      }
+    }
+    return arr[arr.length-1].ret;
+  };
+  const px=x=>d.pl+x*(d.W-2*d.pl);
+  const py=y=>d.H-d.pb-(y-d.mn)/d.rg*(d.H-d.pt-d.pb);
+  const fechaEnX=x=>new Date(d.t0+x*d.span).toLocaleDateString("es-AR",{day:"2-digit",month:"short",year:"numeric"});
+  function mover(clientX,clientY){
+    const r=svg.getBoundingClientRect();
+    if(!r.width) return;
+    let xFrac=(clientX-r.left)/r.width;
+    xFrac=Math.max(0,Math.min(1,xFrac));
+    const retC=interp(d.pts,xFrac), retS=d.bpts.length?interp(d.bpts,xFrac):null;
+    const xPix=px(xFrac);
+    cross.setAttribute("x1",xPix); cross.setAttribute("x2",xPix); cross.style.display="block";
+    if(retC!=null){ dotNav.setAttribute("cx",xPix); dotNav.setAttribute("cy",py(retC)); dotNav.style.display="block"; }
+    else dotNav.style.display="none";
+    if(retS!=null){ dotSp.setAttribute("cx",xPix); dotSp.setAttribute("cy",py(retS)); dotSp.style.display="block"; }
+    else dotSp.style.display="none";
+    let html=`<div class="tt-date">${fechaEnX(xFrac)}</div>`;
+    if(retC!=null) html+=`<div class="tt-row"><span class="tt-dot" style="background:#FFFFFF"></span>Cartera <b class="${cls(retC)}">${sgn(retC*100)}</b></div>`;
+    if(retS!=null) html+=`<div class="tt-row"><span class="tt-dot" style="background:#8E8E8E"></span>S&amp;P 500 <b style="color:var(--grey)">${sgn(retS*100)}</b></div>`;
+    tip.innerHTML=html;
+    const cr=card.getBoundingClientRect();
+    tip.style.left=(clientX-cr.left)+"px";
+    tip.style.top=Math.max(0,clientY-cr.top-14)+"px";
+    tip.style.display="block";
+  }
+  function salir(){ tip.style.display="none"; cross.style.display="none"; dotNav.style.display="none"; dotSp.style.display="none"; }
+  svg.addEventListener("mousemove",e=>mover(e.clientX,e.clientY));
+  svg.addEventListener("mouseleave",salir);
+  svg.addEventListener("touchmove",e=>{ if(e.touches[0]){ mover(e.touches[0].clientX,e.touches[0].clientY); e.preventDefault(); } },{passive:false});
+  svg.addEventListener("touchend",salir);
+  svg.addEventListener("touchcancel",salir);
+}
+
 function render(soloEstructura){
   if(TAB==="mercado"){ renderMercado(); return; }
   const cont=document.getElementById("contenido");
@@ -1429,6 +1495,7 @@ function render(soloEstructura){
   const sinPx=pos.filter(p=>p.valARS==null);
   const tituloMoneda=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
   let chartHtml="";
+  let chartTipData=null; // datos livianos para el tooltip hover del gráfico (ver initChartTooltip)
   if(TAB==="rendimientos"&&sinPx.length){
     chartHtml+=`<div class="chart-card"><div class="chart-head"><div class="k">Rendimiento acumulado</div></div>
       <div class="chart-warn">No se puede calcular el rendimiento porque ${sinPx.length===1?"una posición no tiene":sinPx.length+" posiciones no tienen"} precio:
@@ -1438,16 +1505,20 @@ function render(soloEstructura){
     const retHoy=(total+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
     const pts=sr.puntos.filter(p=>p.fecha!==hoy());
     pts.push({fecha:hoy(),ret:retHoy});
-    // Benchmark S&P 500 en los mismos puntos
+    // Benchmark S&P 500: resolución diaria real (SP500_HIST), independiente
+    // de los hitos dispersos de la cartera — antes se graficaba solo en esos
+    // mismos puntos y por eso salía una línea recta hasta que la cartera
+    // ganaba resolución propia.
     const mepHoy=ESTADO.MEP;
-    const bPts=pts.map(p=>{
-      if(p.fecha===sr.desde) return {fecha:p.fecha,ret:0};
-      const mepF=p.fecha===hoy()?mepHoy:p.mep;
-      const spF=p.fecha===hoy()?sp500Hoy():p.sp;
-      const b=sr.benchEn(p.fecha,mepF,spF);
-      return b==null?null:{fecha:p.fecha,ret:b};
-    }).filter(Boolean);
+    const diasBench=SP500_FECHAS.filter(f=>f>sr.desde&&f<hoy());
+    const bPts=[{fecha:sr.desde,ret:0},
+      ...diasBench.map(f=>{
+        const mepF=VISTA==="ARS"?mepHistorial(f):null;
+        const b=sr.benchEn(f,mepF,sp500En(f));
+        return b==null?null:{fecha:f,ret:b};
+      }).filter(Boolean)];
     const benchHoy=sr.benchEn(hoy(),mepHoy,sp500Hoy());
+    if(benchHoy!=null) bPts.push({fecha:hoy(),ret:benchHoy});
     const t0=new Date(sr.desde+"T12:00").getTime(), t1=new Date(hoy()+"T12:00").getTime();
     const span=Math.max(1,t1-t0);
     const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
@@ -1471,13 +1542,13 @@ function render(soloEstructura){
     }
     // Escala Y: 4 niveles
     const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
-    chartHtml+=`<div class="chart-card">
+    chartHtml+=`<div class="chart-card" id="rend-chart-card">
       <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}</div>
         <div class="chart-key">
           <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
           ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
         </div></div>
-      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera">
+      <svg id="rend-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera">
         ${ticks.map(t=>`<line x1="0" y1="${t.y}" x2="${W}" y2="${t.y}" stroke="#161616" stroke-width="1"/>`).join("")}
         ${meses.map(m=>`<line x1="${px(m.x)}" y1="${pt}" x2="${px(m.x)}" y2="${H-pb}" stroke="#141414" stroke-width="1"/>`).join("")}
         <path d="${dLine} L ${px(1)} ${yCero} L ${px(X(pts[0].fecha))} ${yCero} Z" fill="${gan?"#00E08A":"#FF3B30"}" opacity="0.09"/>
@@ -1486,7 +1557,11 @@ function render(soloEstructura){
         <path d="${dLine}" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
         ${sr.hitos.map(hh=>hh.fecha>sr.desde?`<line x1="${px(X(hh.fecha))}" y1="${H-pb}" x2="${px(X(hh.fecha))}" y2="${H-pb+4}" stroke="#5E5E5E" stroke-width="1"/>`:"").join("")}
         <circle cx="${px(1)}" cy="${py(retHoy)}" r="3.5" fill="${gan?"#00E08A":"#FF3B30"}"/>
+        <line id="rend-crosshair" x1="0" y1="${pt}" x2="0" y2="${H-pb}" stroke="#3A3A3A" stroke-width="1" style="display:none"/>
+        <circle id="rend-hover-nav" r="3" fill="#FFFFFF" style="display:none"/>
+        <circle id="rend-hover-sp" r="3" fill="#8E8E8E" style="display:none"/>
       </svg>
+      <div class="chart-tooltip" id="rend-tooltip"></div>
       <div class="chart-yaxis">${ticks.slice().reverse().map(t=>`<span>${sgn(t.v*100)}</span>`).join("")}</div>
       <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
       <div class="chart-meta"><span>Desde ${sr.desde} · ${diasEntre(sr.desde,hoy())} días</span>
@@ -1494,6 +1569,8 @@ function render(soloEstructura){
         <span class="${cls(retHoy)}">${signoMoney(total+sr.retirado-sr.aporte)}</span></div>
       ${pts.length<4?`<div class="chart-note">La curva se dibuja sobre hitos ciertos: el inicio, cada operación y los cierres que registra el dashboard. Gana resolución a medida que lo abrís en días sucesivos.</div>`:""}
     </div>`;
+    chartTipData={pts:pts.map(p=>({x:X(p.fecha),ret:p.ret})),bpts:dBench?bPts.map(p=>({x:X(p.fecha),ret:p.ret})):[],
+      t0,span,mn,rg,W,H,pl,pt,pb};
   } else if(TAB==="rendimientos"&&sr&&sr.aporte>0){
     // Cualquier otro período: retorno time-weighted acumulado DENTRO de la
     // ventana elegida (rebasado a 0% al arrancar), reconstruido sobre la
@@ -1503,13 +1580,37 @@ function render(soloEstructura){
       chartHtml+=`<div class="chart-card"><div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda} · ${rango.etiqueta}</div></div>
         <div class="chart-warn">Todavía no hay suficientes cierres diarios en ${rango.etiqueta.toLowerCase()} para dibujar la curva. Probá "Histórico completo" o esperá a que se acumulen más días.</div></div>`;
     } else {
-      let c=1, csp=1, haySp=false;
-      const pts=[{fecha:rango.desde,ret:0}], bPts=[{fecha:rango.desde,ret:0}];
-      for(const d of tramo){
-        c*=(1+d.r); pts.push({fecha:d.fecha,ret:c-1});
-        if(d.rsp!=null){ csp*=(1+d.rsp); haySp=true; bPts.push({fecha:d.fecha,ret:csp-1}); }
+      let c=1;
+      const pts=[{fecha:rango.desde,ret:0}];
+      for(const d of tramo){ c*=(1+d.r); pts.push({fecha:d.fecha,ret:c-1}); }
+      const retHoy=c-1;
+      // Benchmark S&P 500: resolución diaria real (SP500_HIST) en vez de solo
+      // los días en que hay cierre de cartera — mismo criterio que en el
+      // gráfico de histórico completo.
+      let haySp=false, benchHoy=null;
+      const bPts=[{fecha:rango.desde,ret:0}];
+      const spDesde=sp500En(rango.desde), mepDesde=VISTA==="ARS"?mepHistorial(rango.desde):null;
+      if(spDesde&&(VISTA!=="ARS"||mepDesde)){
+        const diasBenchP=SP500_FECHAS.filter(f=>f>rango.desde&&f<=rango.hasta&&f!==hoy());
+        for(const f of diasBenchP){
+          const spF=sp500En(f);
+          if(spF==null) continue;
+          let ret;
+          if(VISTA==="ARS"){
+            const mepF=mepHistorial(f);
+            if(!mepF) continue;
+            ret=(spF*mepF)/(spDesde*mepDesde)-1;
+          } else ret=spF/spDesde-1;
+          bPts.push({fecha:f,ret});
+        }
+        if(rango.hasta===hoy()){
+          const mepF=VISTA==="ARS"?ESTADO.MEP:null;
+          const spF=sp500Hoy();
+          const ret=VISTA==="ARS"?(spF*mepF)/(spDesde*mepDesde)-1:spF/spDesde-1;
+          bPts.push({fecha:hoy(),ret});
+        }
+        haySp=bPts.length>1; benchHoy=haySp?bPts[bPts.length-1].ret:null;
       }
-      const retHoy=c-1, benchHoy=haySp?csp-1:null;
       const desdeCh=rango.desde, hastaCh=tramo[tramo.length-1].fecha;
       const t0=new Date(desdeCh+"T12:00").getTime(), t1=new Date(hastaCh+"T12:00").getTime();
       const span=Math.max(1,t1-t0);
@@ -1532,13 +1633,13 @@ function render(soloEstructura){
         cur.setMonth(cur.getMonth()+1);
       }
       const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
-      chartHtml+=`<div class="chart-card">
+      chartHtml+=`<div class="chart-card" id="rend-chart-card">
         <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda} · ${rango.etiqueta}</div>
           <div class="chart-key">
             <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
             ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
           </div></div>
-        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera en el período elegido">
+        <svg id="rend-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera en el período elegido">
           ${ticks.map(t=>`<line x1="0" y1="${t.y}" x2="${W}" y2="${t.y}" stroke="#161616" stroke-width="1"/>`).join("")}
           ${meses.map(m=>`<line x1="${px(m.x)}" y1="${pt}" x2="${px(m.x)}" y2="${H-pb}" stroke="#141414" stroke-width="1"/>`).join("")}
           <path d="${dLine} L ${px(1)} ${yCero} L ${px(X(pts[0].fecha))} ${yCero} Z" fill="${gan?"#00E08A":"#FF3B30"}" opacity="0.09"/>
@@ -1546,13 +1647,19 @@ function render(soloEstructura){
           ${dBench?`<path d="${dBench}" fill="none" stroke="#8E8E8E" stroke-width="1.5" stroke-dasharray="5 4" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`:""}
           <path d="${dLine}" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
           <circle cx="${px(1)}" cy="${py(retHoy)}" r="3.5" fill="${gan?"#00E08A":"#FF3B30"}"/>
+          <line id="rend-crosshair" x1="0" y1="${pt}" x2="0" y2="${H-pb}" stroke="#3A3A3A" stroke-width="1" style="display:none"/>
+          <circle id="rend-hover-nav" r="3" fill="#FFFFFF" style="display:none"/>
+          <circle id="rend-hover-sp" r="3" fill="#8E8E8E" style="display:none"/>
         </svg>
+        <div class="chart-tooltip" id="rend-tooltip"></div>
         <div class="chart-yaxis">${ticks.slice().reverse().map(t=>`<span>${sgn(t.v*100)}</span>`).join("")}</div>
         <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
         <div class="chart-meta"><span>${rango.etiqueta} · ${tramo.length} día${tramo.length>1?"s":""}</span>
           <span>time-weighted</span>
           <span class="${cls(retHoy)}">${sgn(retHoy*100)}</span></div>
       </div>`;
+      chartTipData={pts:pts.map(p=>({x:X(p.fecha),ret:p.ret})),bpts:dBench?bPts.map(p=>({x:X(p.fecha),ret:p.ret})):[],
+        t0,span,mn,rg,W,H,pl,pt,pb};
     }
   }
   // Ensamblado: columna izquierda (selector de período + rendimiento de hoy,
@@ -1786,6 +1893,7 @@ function render(soloEstructura){
     const nc=document.getElementById("nav-card");
     if(nc){ nc.classList.add(total>navPrev?"flash-up":"flash-dn"); setTimeout(()=>nc.classList.remove("flash-up","flash-dn"),800); }
   }
+  if(TAB==="rendimientos"&&chartTipData) initChartTooltip(chartTipData);
 }
 function pintarFX(){
   if(!ESTADO) return; const {fx}=ESTADO;
