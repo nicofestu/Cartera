@@ -450,6 +450,7 @@ select{cursor:pointer}
       <div><label>Operación</label><select id="m-op" onchange="opChanged()">
         <option value="compra">Compra</option><option value="venta">Venta</option>
         <option value="deposito">Depósito de dinero</option><option value="retiro">Retiro de dinero</option>
+        <option value="dividendo">Dividendo / renta cobrada</option><option value="gasto">Gasto / comisión / impuesto</option>
       </select></div>
       <div id="f-tipo"><label>Tipo</label>
         <select id="m-tipo" onchange="tipoChanged()">
@@ -689,13 +690,15 @@ function persistir(){
 function purgarSnapshots(){
   // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
   // Se detectan porque quedan muy por debajo del capital aportado a esa fecha.
-  const movs=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.id-b.id);
+  const movs=[...DATOS.movimientos].sort(cmpCaja);
   if(!movs.length||!DATOS.snapshots?.length) return;
   let caja=0,apor=0; const hitos=[];
   for(const m of movs){
     const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
     const a=m.moneda==="USD"?bruto*m.mep:bruto;
-    if(m.op==="compra"){ const d=Math.min(caja,a); caja-=d; apor+=a-d; } else caja+=a;
+    if(m.op==="compra"){ const d=Math.min(caja,a); caja-=d; apor+=a-d; }
+    else if(m.op==="retiro"||m.op==="gasto") caja-=a;
+    else caja+=a;
     hitos.push({fecha:m.fecha,apor,caja});
   }
   DATOS.snapshots=DATOS.snapshots.filter(s=>{
@@ -703,6 +706,16 @@ function purgarSnapshots(){
     return (s.ars+hh.caja)/hh.apor-1 > -0.5; // −50% en un mes es casi seguro dato roto
   });
 }
+/* Orden de las operaciones para el cálculo de caja. Dentro de un mismo día no
+   hay hora, y el export del bróker viene del movimiento más nuevo al más viejo,
+   así que el orden de carga no sirve. Se asume que lo que acredita plata liquida
+   antes que lo que la gasta: no se puede comprar con plata que todavía no entró.
+   Sin esto, una compra financiada por una venta del mismo día se contabiliza
+   como capital nuevo que entró de afuera y deja una caja fantasma del mismo
+   tamaño — infla el aportado y el denominador del retorno. */
+const ORDEN_CAJA={venta:0,deposito:0,dividendo:0,compra:1,retiro:1,gasto:1};
+const cmpCaja=(a,b)=> a.fecha.localeCompare(b.fecha)
+  ||(ORDEN_CAJA[a.op]??1)-(ORDEN_CAJA[b.op]??1)||a.id-b.id;
 let syncTimer=null;
 function persistirYSync(){
   persistir();
@@ -734,7 +747,10 @@ function setMoneda(m){
 /* ══════════════ Derivación de posiciones (CPP) ══════════════ */
 function derivarPosiciones(excluirId){
   const map={}; let realARS=0, realUSD=0;
-  const movs=[...DATOS.movimientos].filter(m=>m.id!==excluirId).sort((a,b)=> a.fecha.localeCompare(b.fecha)||a.id-b.id);
+  // Al revés que la caja: para el precio promedio hay que tener el papel antes
+  // de venderlo, así que dentro del mismo día las compras van primero.
+  const movs=[...DATOS.movimientos].filter(m=>m.id!==excluirId)
+    .sort((a,b)=> a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
   for(const m of movs){
     if(m.tipo==="cash") continue;
     const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
@@ -771,7 +787,7 @@ function qtyDisponible(tipo,ticker,fondo,cuenta,excluirId){
    precios históricos por especie disponibles en fuentes gratuitas, así que
    la serie se ancla en los hitos ciertos: cada operación y cada cierre. */
 function serieRendimiento(){
-  const movs=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.id-b.id);
+  const movs=[...DATOS.movimientos].sort(cmpCaja);
   if(!movs.length) return null;
   const K=MONEDA==="ARS"?"ars":"usd";
   let cajaA=0, cajaU=0, aporA=0, aporU=0, retA=0, retU=0;
@@ -787,6 +803,12 @@ function serieRendimiento(){
     } else if(m.op==="venta"){ cajaA+=a; cajaU+=u; }
     else if(m.op==="deposito"){ cajaA+=a; cajaU+=u; aporA+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); }
     else if(m.op==="retiro"){ cajaA-=a; cajaU-=u; retA+=a; retU+=u; }
+    // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
+    // retenciones, impuestos): mueven la caja pero NO son capital que entró o
+    // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
+    // el denominador del retorno; contarlos como retiro lo infla al revés.
+    else if(m.op==="dividendo"){ cajaA+=a; cajaU+=u; }
+    else if(m.op==="gasto"){ cajaA-=a; cajaU-=u; }
     const prev=hitos[hitos.length-1];
     const snap={fecha:m.fecha,aporA,aporU,cajaA,cajaU,retA,retU};
     if(prev&&prev.fecha===m.fecha) hitos[hitos.length-1]=snap; else hitos.push(snap);
@@ -1382,9 +1404,9 @@ function render(soloEstructura){
     </div></div>
     <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>MEP del día</th><th></th></tr></thead><tbody>
     ${movs.map(m=>{
-      const nombre=m.tipo==="cash"?(m.op==="deposito"?"DEPÓSITO":"RETIRO"):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker;
+      const nombre=m.tipo==="cash"?(ETIQ_CASH[m.op]||String(m.op||"").toUpperCase()):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker;
       const tot=m.precio/divisorDe(m.tipo)*m.cantidad;
-      const opCls=(m.op==="compra"||m.op==="deposito")?"op-c":"op-v";
+      const opCls=(m.op==="compra"||m.op==="deposito"||m.op==="dividendo")?"op-c":"op-v";
       return `<tr><td>${m.fecha}</td>
       <td class="l"><span class="${opCls}">${m.op}</span></td>
       <td class="l tk">${nombre}</td>
@@ -1859,7 +1881,9 @@ function cuentaChanged(){
   inp.style.display=esNueva?"block":"none";
   if(esNueva) inp.focus(); else inp.value="";
 }
-function esCash(){ const o=document.getElementById("m-op").value; return o==="deposito"||o==="retiro"; }
+const OPS_CASH=["deposito","retiro","dividendo","gasto"];
+const ETIQ_CASH={deposito:"DEPÓSITO",retiro:"RETIRO",dividendo:"RENTA",gasto:"GASTO"};
+function esCash(){ return OPS_CASH.includes(document.getElementById("m-op").value); }
 function opChanged(){
   const cash=esCash();
   ["f-tipo","f-cant"].forEach(i=>document.getElementById(i).style.display=cash?"none":"block");
@@ -2180,7 +2204,7 @@ async function guardarCash(){
     id:EDIT_ID??Date.now(),
     fecha:document.getElementById("m-fecha").value,
     op, tipo:"cash",
-    ticker:op==="deposito"?"DEPOSITO":"RETIRO",
+    ticker:(ETIQ_CASH[op]||"MOVIMIENTO").replace("Ó","O"),
     cuenta, cantidad:1,
     precio:parseFloat(document.getElementById("m-precio").value),
     moneda:document.getElementById("m-moneda").value,
@@ -2325,13 +2349,35 @@ function parseBalanzMovimientos(rows){
 
     if(!fecha){ omitidos.push({fecha:"—",op:desc.slice(0,28),ticker,motivo:"sin fecha reconocible"}); continue; }
 
-    // Depósitos, retiros, dividendos y ajustes manuales (retenciones de
-    // impuestos, reclasificación entre sub-monedas de USD): todos mueven
-    // plata real de la cuenta, y el signo de Importe ya dice para qué lado.
-    // Las reclasificaciones internas (p.ej. Cable↔CV7000) quedan en pares que
-    // se cancelan solos al sumarse, así que no hace falta tratarlas aparte.
-    if(desc.startsWith("Comprobante de Pago")||desc.startsWith("Recibo de Cobro")
-       ||desc.startsWith("Movimiento Manual")||desc.startsWith("Dividendo")){
+    // Dividendo en acciones / cambio de ratio del CEDEAR: entran unidades
+    // nuevas SIN costo (Cantidad > 0, Importe 0). Es un evento de cartera, no
+    // de caja. Si se ignora, el precio promedio queda calculado sobre menos
+    // unidades de las que hay realmente y la posición muestra una pérdida
+    // fantasma del tamaño del ratio (un 1:3 aparenta −67%). Se carga como
+    // compra a precio cero, que es justo lo que rebaja el promedio al valor
+    // correcto sin inventar un aporte de capital.
+    if(desc.startsWith("Dividendo en acciones")){
+      if(ticker&&cantidad>0){
+        const tipoAcc=TIPO_MAP[tipoInstr]||clasificarTickerImport(ticker)||"cedear";
+        candidatos.push({fecha,op:"compra",ticker,cantidad:Math.abs(cantidad),
+          precioBruto:0,moneda:"ARS",origen:desc,tipo:tipoAcc});
+      } else omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"dividendo en acciones sin cantidad"});
+      continue;
+    }
+    // Renta cobrada (dividendos en efectivo, cupones) y los cargos asociados
+    // (retenciones, impuestos), más las reclasificaciones internas entre
+    // sub-monedas de USD. Mueven la caja pero NO son plata que entró o salió
+    // de afuera: son resultado de la cartera. Van como dividendo/gasto para
+    // que no ensucien el capital aportado.
+    if(desc.startsWith("Dividendo")||desc.startsWith("Movimiento Manual")){
+      if(!importe){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,
+        precio:Math.abs(importe),moneda:monApp,origen:desc});
+      continue;
+    }
+    // Plata que de verdad entra o sale de la cuenta. El signo de Importe ya
+    // dice para qué lado, no hace falta adivinar.
+    if(desc.startsWith("Comprobante de Pago")||desc.startsWith("Recibo de Cobro")){
       if(!importe){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"importe en cero"}); continue; }
       candidatos.push({fecha,tipo:"cash",op:importe>=0?"deposito":"retiro",cantidad:1,
         precio:Math.abs(importe),moneda:monApp,origen:desc});
@@ -2500,7 +2546,7 @@ async function confirmarImportBroker(){
   for(const m of todos){
     if(m.tipo==="cash"){
       DATOS.movimientos.push({id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:"cash",
-        ticker:m.op==="deposito"?"DEPOSITO":"RETIRO",cuenta,cantidad:1,precio:m.precio,moneda:m.moneda,
+        ticker:(ETIQ_CASH[m.op]||"MOVIMIENTO").replace("Ó","O"),cuenta,cantidad:1,precio:m.precio,moneda:m.moneda,
         mep:mepPorFecha[m.fecha]});
     } else {
       const div=divisorDe(m.tipo);
