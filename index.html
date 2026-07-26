@@ -673,6 +673,96 @@ function ndxHoy(){
   if(qqq&&ESTADO?.MEP) return qqq.c/ESTADO.MEP*QQQ_K;
   return NDX_HIST[NDX_FECHAS[NDX_FECHAS.length-1]];
 }
+
+/* ══════════════ Historial público (backfill de snapshots) ══════════════
+   El repo guarda un cierre diario de precios por especie desde 2022
+   (historial/AAAA.json, generado por el GitHub Action + los backfills que se
+   fueron cargando a mano). DATOS.snapshots hoy solo se llena cuando el
+   usuario abre la app; esto lo completa retroactivamente para cualquier día
+   donde TODAS las posiciones que se tenían en cartera ESE día tengan precio
+   disponible. Cobertura parcial (falta una especie en una fecha puntual) se
+   resuelve solo, sin tocar código: a medida que se agregue más historial o
+   pase el tiempo, más días quedan cubiertos. */
+const HIST_REPO_BASE="https://raw.githubusercontent.com/nicofestu/Cartera/main/historial/";
+let HIST_REMOTO=null;
+async function cargarHistorialRemoto(){
+  if(HIST_REMOTO) return HIST_REMOTO;
+  const anioActual=+hoy().slice(0,4);
+  const anios=[]; for(let a=2022;a<=anioActual;a++) anios.push(a);
+  const precios={};
+  await Promise.all(anios.map(async a=>{
+    try{ const d=await getJSON(HIST_REPO_BASE+a+".json"); Object.assign(precios,d); }
+    catch(e){ /* ese año todavía no está commiteado en el repo — se ignora */ }
+  }));
+  let mepHist={}, mepFechas=[];
+  try{
+    const serie=await getJSON("https://api.argentinadatos.com/v1/cotizaciones/dolares/bolsa");
+    for(const d of serie) mepHist[d.fecha]=(d.compra+d.venta)/2;
+    mepFechas=Object.keys(mepHist).sort();
+  }catch(e){ /* sin MEP histórico no se puede pasar a USD; se sigue sin él */ }
+  HIST_REMOTO=Object.keys(precios).length?{precios,mepHist,mepFechas}:null;
+  return HIST_REMOTO;
+}
+// Precio de una especie en una fecha, mirando hasta `tolerancia` días para
+// atrás (nunca para adelante) si ese día puntual no tiene cierre registrado
+// — cubre fines de semana, feriados o una especie poco líquida ese día.
+function precioHistorial(tipo,ticker,fecha,tolerancia=5){
+  if(!HIST_REMOTO) return null;
+  let f=fecha;
+  for(let i=0;i<=tolerancia;i++){
+    const p=HIST_REMOTO.precios[f]?.[tipo]?.[ticker];
+    if(p!=null) return {precio:p,fecha:f};
+    const d=new Date(f+"T12:00:00"); d.setDate(d.getDate()-1); f=d.toLocaleDateString("sv-SE");
+  }
+  return null;
+}
+function mepHistorial(fecha){
+  if(!HIST_REMOTO||!HIST_REMOTO.mepFechas.length) return null;
+  return nivelEn(HIST_REMOTO.mepHist,HIST_REMOTO.mepFechas,fecha);
+}
+// Reconstruye DATOS.snapshots para el pasado. Nunca pisa un snapshot que ya
+// exista (esos vienen de haber abierto la app ese día, con precios reales al
+// momento — más confiables que reconstruir contra un cierre de fin de día).
+async function reconstruirHistorialSnapshots(){
+  if(!DATOS.movimientos.length) return;
+  try{ await cargarHistorialRemoto(); }catch(e){ return; }
+  if(!HIST_REMOTO) return;
+
+  const primeraFecha=DATOS.movimientos.reduce((m,x)=>x.fecha<m?x.fecha:m,DATOS.movimientos[0].fecha);
+  const ayer=restarDias(hoy(),1);
+  const yaHay=new Set((DATOS.snapshots||[]).map(s=>s.fecha));
+  const hitos=construirHitosCaja();
+
+  const fechas=Object.keys(HIST_REMOTO.precios)
+    .filter(f=>f>=primeraFecha&&f<=ayer&&!yaHay.has(f)).sort();
+  const nuevos=[];
+  for(const f of fechas){
+    const {posiciones}=derivarPosiciones(null,f);
+    if(!posiciones.length) continue;
+    // fci, manual y ON no tienen precio histórico en ninguna fuente todavía
+    if(posiciones.some(p=>p.tipo==="fci"||p.tipo==="manual"||p.tipo==="on")) continue;
+    let valARS=0, falta=false;
+    for(const p of posiciones){
+      const h=precioHistorial(p.tipo,p.ticker,f);
+      if(!h){ falta=true; break; }
+      valARS+=h.precio/divisorDe(p.tipo)*p.qty;
+    }
+    if(falta) continue;
+    const mep=mepHistorial(f);
+    if(!mep) continue;
+    const ars=valARS+cajaEnFecha(hitos,f);
+    const sp=sp500En(f), ndx=ndxEn(f);
+    nuevos.push({fecha:f,ars:Math.round(ars),usd:Math.round(ars/mep*100)/100,
+      mep:Math.round(mep*100)/100,
+      sp:sp!=null?Math.round(sp*100)/100:null,
+      ndx:ndx!=null?Math.round(ndx*100)/100:null, hist:true});
+  }
+  if(!nuevos.length) return;
+  DATOS.snapshots=[...(DATOS.snapshots||[]),...nuevos].sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  persistirYSync();
+  if(ESTADO) render();
+}
+
 function setTab(t){
   TAB=t;
   document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===t));
@@ -687,11 +777,10 @@ function persistir(){
   if(!hayStorage) return;
   try{ localStorage.setItem(LS_KEY, JSON.stringify(DATOS)); }catch(e){}
 }
-function purgarSnapshots(){
-  // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
-  // Se detectan porque quedan muy por debajo del capital aportado a esa fecha.
+// Evolución día a día de caja y aporte acumulado en ARS. Se usa tanto para
+// purgar snapshots rotos como para reconstruir el NAV de fechas pasadas.
+function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
-  if(!movs.length||!DATOS.snapshots?.length) return;
   let caja=0,apor=0; const hitos=[];
   for(const m of movs){
     const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
@@ -701,6 +790,17 @@ function purgarSnapshots(){
     else caja+=a;
     hitos.push({fecha:m.fecha,apor,caja});
   }
+  return hitos;
+}
+function cajaEnFecha(hitos,fecha){
+  let hh=null; for(const x of hitos){ if(x.fecha<=fecha) hh=x; else break; }
+  return hh?hh.caja:0;
+}
+function purgarSnapshots(){
+  // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
+  // Se detectan porque quedan muy por debajo del capital aportado a esa fecha.
+  if(!DATOS.movimientos.length||!DATOS.snapshots?.length) return;
+  const hitos=construirHitosCaja();
   DATOS.snapshots=DATOS.snapshots.filter(s=>{
     let hh=hitos[0]; for(const x of hitos) if(x.fecha<=s.fecha) hh=x;
     return (s.ars+hh.caja)/hh.apor-1 > -0.5; // −50% en un mes es casi seguro dato roto
@@ -745,11 +845,13 @@ function setMoneda(m){
 }
 
 /* ══════════════ Derivación de posiciones (CPP) ══════════════ */
-function derivarPosiciones(excluirId){
+function derivarPosiciones(excluirId,hastaFecha){
   const map={}; let realARS=0, realUSD=0;
   // Al revés que la caja: para el precio promedio hay que tener el papel antes
   // de venderlo, así que dentro del mismo día las compras van primero.
-  const movs=[...DATOS.movimientos].filter(m=>m.id!==excluirId)
+  // hastaFecha (opcional) reconstruye la cartera COMO ESTABA ese día, para el
+  // backfill de snapshots históricos — no afecta a nadie que llame sin él.
+  const movs=[...DATOS.movimientos].filter(m=>m.id!==excluirId&&(!hastaFecha||m.fecha<=hastaFecha))
     .sort((a,b)=> a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
   for(const m of movs){
     if(m.tipo==="cash") continue;
@@ -2583,10 +2685,14 @@ function importar(ev){
 /* ══════════════ Init ══════════════ */
 restaurar();
 purgarSnapshots();
-if(SYNC?.gist) bajarNube(false);
+// No se espera bajarNube para no demorar el primer render; pero el backfill
+// de historial sí espera a que termine, para no reconstruir contra
+// DATOS.movimientos que están por ser reemplazados por la nube.
+const syncInicial=SYNC?.gist?bajarNube(false).catch(()=>{}):Promise.resolve();
 tick(); setInterval(tick,1000);
 cargar();
 setInterval(cargar,120000);
+syncInicial.then(reconstruirHistorialSnapshots);
 </script>
 </body>
 </html>
