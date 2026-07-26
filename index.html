@@ -2617,6 +2617,7 @@ function exportar(){
 const IMPORTADORES={
   balanz:{nombre:"Balanz",hoja:"movimientos",parser:parseBalanzMovimientos},
   puente:{nombre:"Puente",formato:"pdf",parser:parsePuenteMovimientos},
+  ieb:{nombre:"IEB+",hoja:"Export",parser:parseIEBMovimientos},
 };
 let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[];
 
@@ -2641,6 +2642,8 @@ function onBrokerChange(){
       <span style="color:var(--down)">No uses el botón "Reportes"</span> — descarga en un formato distinto que esta app no puede leer.`,
     puente:`En tu cuenta de Puente: <b>Cuenta → Movimientos</b> → exportá o descargá el PDF con el rango de fechas desde el inicio de tus operaciones.<br>
       Se lee directo el PDF, tal cual lo bajás — no hace falta pasarlo a Excel.`,
+    ieb:`En tu cuenta de IEB+: <b>Toda la actividad</b> → exportá a Excel el rango de fechas desde el inicio de tus operaciones.<br>
+      Tiene que tener una hoja llamada "Export", tal cual la descarga la plataforma.`,
   };
   document.getElementById("imp-broker-hint").innerHTML=b?hints[b]||`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
   const inp=document.getElementById("imp-file");
@@ -2848,6 +2851,83 @@ function parsePuenteMovimientos(lineas){
     if(mejor) c.fondo=mejor;
   }
 
+  return {candidatos,omitidos,revisar};
+}
+
+// ── Parser IEB+: hoja "Export" ("Toda la actividad" → exportar a Excel).
+// Formato de una fila por evento real (a diferencia de Puente, acá no hay
+// libros paralelos que dupliquen la misma operación): "Cantidad"/"Precio"
+// poblados = compra/venta de una especie (Cantidad negativa = venta);
+// ninguno poblado = movimiento de caja, cuyo signo de Importe ya dice
+// depósito/retiro/gasto/dividendo. La moneda real la marca la columna
+// "Divisa" — OJO: para algunos dividendos en dólares, IEB marca Divisa
+// "OTHER" (no "USD") y encima carga el monto en la columna "Importe ARS"
+// en vez de "Importe divisas" (se verificó cruzando esos montos contra su
+// acreditación posterior real en dólares vía "NOTA DE CREDITO CONVERSION
+// USD"). Por eso la moneda sale de "Divisa" (ARS vs. cualquier otra cosa),
+// y el monto sale de la columna que tenga un valor, sin asumir cuál según
+// el nombre. ──
+function parseIEBMovimientos(rows){
+  const candidatos=[], omitidos=[], revisar=[];
+  const num=v=>typeof v==="number"?v:null;
+  const clasificar=ref=>{ const t=clasificarTickerImport(ref); return t?{tipo:t,sinClasificar:false}:{tipo:"accion",sinClasificar:true}; };
+  const empujar=(item,sinClasificar)=>{ if(sinClasificar) revisar.push(item); else candidatos.push(item); };
+
+  for(const r of rows){
+    const ref=String(r["Referencia"]??"").trim();
+    const op=String(r["Operación"]??"").trim().replace(/\s+/g," "); // normaliza dobles espacios ("VENTA  PARIDAD")
+    const fecha=fUTC(r["Fecha emisión"]);
+    const cantidad=num(r["Cantidad"]);
+    const precio=num(r["Precio"]);
+    const impARS=num(r["Importe ARS"]);
+    const impUSD=num(r["Importe divisas"]);
+    const moneda=String(r["Divisa"]||"").trim()==="ARS"?"ARS":"USD";
+    const importe=impUSD!=null?impUSD:impARS;
+
+    if(!fecha){ omitidos.push({fecha:"—",op:op.slice(0,30),ticker:ref,motivo:"sin fecha reconocible"}); continue; }
+
+    // Acreditación tardía de un dividendo/renta en dólares ya reconocido en
+    // su fila "DIVIDENDOS"/"RENTA Y AMORTIZACION" original (mismo importe,
+    // otra fecha y otra especie de referencia) — eco, no se duplica.
+    if(op==="NOTA DE CREDITO CONVERSION USD"){
+      omitidos.push({fecha,op,ticker:ref,motivo:"acreditación tardía de un dividendo/renta ya reconocido — no se duplica"});
+      continue;
+    }
+
+    // Dividendo en especie (entran unidades nuevas sin costo: trae Cantidad
+    // pero ningún Importe) — evento de cartera, no de caja.
+    if(op==="DIVIDENDOS"&&cantidad!=null&&impARS==null&&impUSD==null){
+      if(!ref||ref==="-"){ omitidos.push({fecha,op,ticker:ref,motivo:"dividendo en especie sin especie identificada"}); continue; }
+      const {tipo,sinClasificar}=clasificar(ref);
+      empujar({fecha,op:"compra",ticker:ref,cantidad:Math.abs(cantidad),precioBruto:0,moneda:"ARS",origen:op,tipo},sinClasificar);
+      continue;
+    }
+
+    // Movimiento de caja: sin Cantidad ni Precio, solo un Importe con signo.
+    if(cantidad==null&&precio==null){
+      if(importe==null){ omitidos.push({fecha,op,ticker:ref,motivo:"importe no reconocido"}); continue; }
+      let cashOp;
+      if(/^RECIBO DE COBRO|^R\.COBRO/.test(op)) cashOp="deposito";
+      else if(/^ORDEN.*DE PAGO|^O\.PAGO/.test(op)) cashOp="retiro";
+      else cashOp=importe>=0?"dividendo":"gasto"; // membresía, dividendos, renta, gastos CV — el signo ya dice para qué lado
+      candidatos.push({fecha,tipo:"cash",op:cashOp,cantidad:1,precio:Math.abs(importe),moneda,origen:op});
+      continue;
+    }
+
+    // Compra/venta de un instrumento: precio efectivo real (Importe/Cantidad),
+    // igual que en los demás parsers — no el "de pizarra", para no perder
+    // comisiones/gastos ya reflejados en el Importe.
+    if(cantidad!=null&&precio!=null){
+      if(!ref||ref==="-"){ omitidos.push({fecha,op,ticker:ref,motivo:"operación sin especie identificada"}); continue; }
+      if(importe==null||!cantidad){ omitidos.push({fecha,op,ticker:ref,motivo:"sin datos suficientes"}); continue; }
+      const {tipo,sinClasificar}=clasificar(ref);
+      empujar({fecha,op:cantidad>=0?"compra":"venta",ticker:ref,cantidad:Math.abs(cantidad),
+        precioBruto:Math.abs(importe)/Math.abs(cantidad),moneda,origen:op,tipo},sinClasificar);
+      continue;
+    }
+
+    omitidos.push({fecha,op,ticker:ref,motivo:"patrón no reconocido"});
+  }
   return {candidatos,omitidos,revisar};
 }
 
