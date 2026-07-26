@@ -1202,6 +1202,18 @@ async function cargar(){
 // se descuenta igual, así que no se inventa rendimiento, solo se ignora el
 // tramo sin plata real para medir.
 const NAV_MIN_USD=100;
+// Capital neto (USD) que sigue "adentro" de la cartera en una fecha dada:
+// aportado acumulado menos retirado acumulado. Es puro flujo de caja (no usa
+// precios), así que se puede evaluar para cualquier día del calendario,
+// incluidos los que no tienen snapshot. Sirve para detectar tramos de saldo
+// ~0 (retiro total) y "pausar" ahí tanto la cartera como el benchmark del
+// gráfico, para no simular una inversión en el índice que en los hechos no
+// existía mientras la plata estaba afuera.
+function capitalVigenteUSD(hitos,f){
+  let r=null;
+  for(const h of hitos){ if(h.fecha<=f) r=h; else break; }
+  return r?r.aporU-r.retU:0;
+}
 function serieDiaria(){
   const sr=serieRendimiento();
   if(!sr) return [];
@@ -1505,20 +1517,40 @@ function render(soloEstructura){
     const retHoy=(total+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
     const pts=sr.puntos.filter(p=>p.fecha!==hoy());
     pts.push({fecha:hoy(),ret:retHoy});
-    // Benchmark S&P 500: resolución diaria real (SP500_HIST), independiente
-    // de los hitos dispersos de la cartera — antes se graficaba solo en esos
-    // mismos puntos y por eso salía una línea recta hasta que la cartera
-    // ganaba resolución propia.
-    const mepHoy=ESTADO.MEP;
-    const diasBench=SP500_FECHAS.filter(f=>f>sr.desde&&f<hoy());
-    const bPts=[{fecha:sr.desde,ret:0},
-      ...diasBench.map(f=>{
+    // Benchmark S&P 500: se encadena día a día con la resolución diaria real
+    // (SP500_HIST) en vez de solo en los hitos dispersos de la cartera —
+    // antes se graficaba solo en esos mismos puntos y por eso salía una
+    // línea recta hasta que la cartera ganaba resolución propia. Además,
+    // cada día en que el capital neto en la cuenta (aportado − retirado) es
+    // ≤US$${NAV_MIN_USD} queda "pausado": ese día no suma el movimiento del
+    // índice, para no simular una inversión en SPY que en los hechos no
+    // existía mientras la plata estaba afuera de la cartera.
+    const spDesde0=sp500En(sr.desde);
+    const bPts=[{fecha:sr.desde,ret:0}];
+    let benchHoy=null;
+    if(spDesde0){
+      const diasBench=SP500_FECHAS.filter(f=>f>sr.desde&&f<hoy());
+      let cIdx=1, spPrev=spDesde0, mepPrev=VISTA==="ARS"?mepHistorial(sr.desde):null;
+      for(const f of diasBench){
+        const spF=sp500En(f);
+        if(spF==null) continue;
         const mepF=VISTA==="ARS"?mepHistorial(f):null;
-        const b=sr.benchEn(f,mepF,sp500En(f));
-        return b==null?null:{fecha:f,ret:b};
-      }).filter(Boolean)];
-    const benchHoy=sr.benchEn(hoy(),mepHoy,sp500Hoy());
-    if(benchHoy!=null) bPts.push({fecha:hoy(),ret:benchHoy});
+        if(VISTA==="ARS"&&(!mepF||!mepPrev)){ spPrev=spF; if(mepF) mepPrev=mepF; continue; }
+        if(capitalVigenteUSD(sr.hitos,f)>NAV_MIN_USD){
+          cIdx*=VISTA==="ARS"?(spF*mepF)/(spPrev*mepPrev):spF/spPrev;
+        }
+        spPrev=spF; if(VISTA==="ARS") mepPrev=mepF;
+        bPts.push({fecha:f,ret:cIdx-1});
+      }
+      const spHoyV=sp500Hoy(), mepHoyV=VISTA==="ARS"?ESTADO.MEP:null;
+      if(VISTA!=="ARS"||(mepHoyV&&mepPrev)){
+        if(capitalVigenteUSD(sr.hitos,hoy())>NAV_MIN_USD){
+          cIdx*=VISTA==="ARS"?(spHoyV*mepHoyV)/(spPrev*mepPrev):spHoyV/spPrev;
+        }
+        bPts.push({fecha:hoy(),ret:cIdx-1});
+      }
+      benchHoy=cIdx-1;
+    }
     const t0=new Date(sr.desde+"T12:00").getTime(), t1=new Date(hoy()+"T12:00").getTime();
     const span=Math.max(1,t1-t0);
     const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
@@ -1584,30 +1616,34 @@ function render(soloEstructura){
       const pts=[{fecha:rango.desde,ret:0}];
       for(const d of tramo){ c*=(1+d.r); pts.push({fecha:d.fecha,ret:c-1}); }
       const retHoy=c-1;
-      // Benchmark S&P 500: resolución diaria real (SP500_HIST) en vez de solo
-      // los días en que hay cierre de cartera — mismo criterio que en el
-      // gráfico de histórico completo.
+      // Benchmark S&P 500: se encadena día a día con resolución diaria real
+      // (SP500_HIST) en vez de solo los días en que hay cierre de cartera —
+      // mismo criterio que en el gráfico de histórico completo. Los días con
+      // capital neto ≤US$${NAV_MIN_USD} quedan "pausados" (no suman el
+      // movimiento del índice ese día), igual que en la rama de arriba.
       let haySp=false, benchHoy=null;
       const bPts=[{fecha:rango.desde,ret:0}];
-      const spDesde=sp500En(rango.desde), mepDesde=VISTA==="ARS"?mepHistorial(rango.desde):null;
-      if(spDesde&&(VISTA!=="ARS"||mepDesde)){
+      const spDesde=sp500En(rango.desde);
+      if(spDesde){
         const diasBenchP=SP500_FECHAS.filter(f=>f>rango.desde&&f<=rango.hasta&&f!==hoy());
+        let cIdx=1, spPrev=spDesde, mepPrev=VISTA==="ARS"?mepHistorial(rango.desde):null;
         for(const f of diasBenchP){
           const spF=sp500En(f);
           if(spF==null) continue;
-          let ret;
-          if(VISTA==="ARS"){
-            const mepF=mepHistorial(f);
-            if(!mepF) continue;
-            ret=(spF*mepF)/(spDesde*mepDesde)-1;
-          } else ret=spF/spDesde-1;
-          bPts.push({fecha:f,ret});
+          const mepF=VISTA==="ARS"?mepHistorial(f):null;
+          if(VISTA==="ARS"&&(!mepF||!mepPrev)){ spPrev=spF; if(mepF) mepPrev=mepF; continue; }
+          if(capitalVigenteUSD(sr.hitos,f)>NAV_MIN_USD){
+            cIdx*=VISTA==="ARS"?(spF*mepF)/(spPrev*mepPrev):spF/spPrev;
+          }
+          spPrev=spF; if(VISTA==="ARS") mepPrev=mepF;
+          bPts.push({fecha:f,ret:cIdx-1});
         }
-        if(rango.hasta===hoy()){
-          const mepF=VISTA==="ARS"?ESTADO.MEP:null;
-          const spF=sp500Hoy();
-          const ret=VISTA==="ARS"?(spF*mepF)/(spDesde*mepDesde)-1:spF/spDesde-1;
-          bPts.push({fecha:hoy(),ret});
+        const spHoyV=sp500Hoy(), mepHoyV=VISTA==="ARS"?ESTADO.MEP:null;
+        if(rango.hasta===hoy()&&(VISTA!=="ARS"||(mepHoyV&&mepPrev))){
+          if(capitalVigenteUSD(sr.hitos,hoy())>NAV_MIN_USD){
+            cIdx*=VISTA==="ARS"?(spHoyV*mepHoyV)/(spPrev*mepPrev):spHoyV/spPrev;
+          }
+          bPts.push({fecha:hoy(),ret:cIdx-1});
         }
         haySp=bPts.length>1; benchHoy=haySp?bPts[bPts.length-1].ret:null;
       }
