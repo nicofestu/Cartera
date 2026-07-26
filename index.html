@@ -2816,6 +2816,19 @@ function parsePuenteMovimientos(lineas){
   for(const r of filas.ARS) if(!clavesUSD.has(clave(r))) empujar(r);
   for(const r of filas.USD) empujar(r);
 
+  // Canonicalizar nombres de fondo truncados: Puente a veces acorta el
+  // nombre del FCI en la fila de Suscripción (p.ej. "QM" en vez de "QM PESOS
+  // A" que sí aparece completo en el Rescate del mismo lote). Si dentro de
+  // este mismo import un nombre es sub-cadena de otro más largo, se asume
+  // que es el mismo fondo y se usa el nombre más largo para los dos.
+  const nombresFci=[...new Set(candidatos.filter(c=>c.tipo==="fci").map(c=>c.fondo))];
+  for(const c of candidatos){
+    if(c.tipo!=="fci") continue;
+    const mejor=nombresFci.filter(f=>f!==c.fondo&&f.toUpperCase().includes(c.fondo.toUpperCase()))
+      .sort((a,b)=>b.length-a.length)[0];
+    if(mejor) c.fondo=mejor;
+  }
+
   return {candidatos,omitidos,revisar};
 }
 
@@ -3022,6 +3035,42 @@ function renderPreviewImport(){
   } else document.getElementById("imp-omitidos").innerHTML="";
 }
 
+// ── Categoría CAFCI (mercadoDinero/rentaFija/rentaVariable/rentaMixta) de
+// un fondo por nombre: los brókers no la exportan, pero la necesitamos para
+// saber en qué endpoint de argentinadatos.com buscar su cotización. Se
+// resuelve comparando contra el listado real de fondos de cada categoría
+// (con caché para no repetir las 4 consultas por cada fila). ──
+let FCI_CAT_CACHE=null;
+async function resolverCategoriaFci(nombreFondo){
+  if(!FCI_CAT_CACHE){
+    const cats=["mercadoDinero","rentaFija","rentaVariable","rentaMixta"];
+    FCI_CAT_CACHE={};
+    await Promise.all(cats.map(async c=>{
+      try{ FCI_CAT_CACHE[c]=await getJSON("https://api.argentinadatos.com/v1/finanzas/fci/"+c+"/ultimo"); }
+      catch(e){ FCI_CAT_CACHE[c]=[]; }
+    }));
+  }
+  const norm=s=>(s||"").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .replace(/CLASE/g," ").replace(/[^A-Z0-9]/g,"");
+  const objetivo=norm(nombreFondo);
+  if(!objetivo) return null;
+  for(const [cat,lista] of Object.entries(FCI_CAT_CACHE)){
+    const hit=lista.find(f=>norm(f.fondo)===objetivo);
+    if(hit) return {categoria:cat,fondo:hit.fondo};
+  }
+  if(objetivo.length>=4){
+    let mejor=null,mejorCat=null,mejorFondo=null;
+    for(const [cat,lista] of Object.entries(FCI_CAT_CACHE)){
+      for(const f of lista){
+        const nf=norm(f.fondo);
+        if(nf.includes(objetivo)&&(!mejor||nf.length<mejor.length)){ mejor=nf; mejorCat=cat; mejorFondo=f.fondo; }
+      }
+    }
+    if(mejor) return {categoria:mejorCat,fondo:mejorFondo};
+  }
+  return null;
+}
+
 async function confirmarImportBroker(){
   const btn=document.getElementById("imp-confirmar");
   btn.disabled=true; btn.textContent="Cargando…";
@@ -3036,7 +3085,7 @@ async function confirmarImportBroker(){
     catch(e){ mepPorFecha[f]=null; }
   }
 
-  let cargados=0, sinMep=0;
+  let cargados=0, sinMep=0, sinCategoria=0;
   for(const m of todos){
     if(m.tipo==="cash"){
       DATOS.movimientos.push({id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:"cash",
@@ -3048,7 +3097,11 @@ async function confirmarImportBroker(){
       if(mepPorFecha[m.fecha]==null) sinMep++;
       const mv={id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:m.tipo,cuenta,
         cantidad:m.cantidad,precio,moneda:m.moneda,mep:mepPorFecha[m.fecha]??1};
-      if(m.tipo==="fci") mv.fondo=m.fondo; else mv.ticker=m.ticker;
+      if(m.tipo==="fci"){
+        const r=await resolverCategoriaFci(m.fondo);
+        if(r){ mv.categoria=r.categoria; mv.fondo=r.fondo; }
+        else { mv.categoria="mercadoDinero"; mv.fondo=m.fondo; sinCategoria++; }
+      } else mv.ticker=m.ticker;
       DATOS.movimientos.push(mv);
     }
     cargados++;
@@ -3056,7 +3109,9 @@ async function confirmarImportBroker(){
   persistirYSync();
   cerrarModales();
   cargar();
-  alert(`Se cargaron ${cargados} movimientos${sinMep?` (${sinMep} sin MEP de esa fecha — se usó 1 como referencia, editalos a mano si hace falta)`:""}.`);
+  alert(`Se cargaron ${cargados} movimientos`+
+    `${sinMep?` (${sinMep} sin MEP de esa fecha — se usó 1 como referencia, editalos a mano si hace falta)`:""}`+
+    `${sinCategoria?` (${sinCategoria} fondo(s) sin categoría reconocida — revisá "Editar" en Movimientos y corregí la categoría a mano)`:""}.`);
 }
 
 function importar(ev){
