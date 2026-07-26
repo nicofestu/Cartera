@@ -405,7 +405,8 @@ select{cursor:pointer}
   <div class="controls">
     <div class="toggle" role="group" aria-label="Moneda de valuación">
       <button id="btn-ars" class="active" onclick="setMoneda('ARS')">ARS</button>
-      <button id="btn-usd" onclick="setMoneda('USD')">USD</button>
+      <button id="btn-mep" onclick="setMoneda('MEP')">USD MEP</button>
+      <button id="btn-ccl" onclick="setMoneda('CCL')">USD CCL</button>
     </div>
     <div class="ctrl-div"></div>
     <button class="btn action" onclick="abrirMov()"><i class="btn-dot"></i>+ Movimiento</button>
@@ -629,7 +630,17 @@ const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 100
 
 /* ══════════════ Estado y persistencia ══════════════ */
 let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}};
-let MONEDA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
+let MONEDA="ARS", VISTA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
+/* VISTA: "ARS" | "MEP" | "CCL" — moneda de valuación para Inicio/Rendimientos/
+   Movimientos. MONEDA se mantiene en paralelo (ARS/USD) solo para no tocar la
+   lógica de la pestaña Mercado, que todavía no distingue MEP de CCL: cuando
+   VISTA es MEP o CCL, Mercado sigue mostrando USD al MEP como siempre (se
+   separará en un trabajo aparte). Los retornos % (time-weighted, Sharpe,
+   volatilidad, TNA fuera de "histórico completo") se calculan siempre sobre la
+   base dólar-MEP bimonetaria de cada operación — no cambian entre MEP y CCL,
+   porque no hay un tipo de cambio CCL histórico por movimiento. Lo que sí
+   cambia con MEP/CCL son los montos absolutos de hoy (valuación, liquidez,
+   NAV, P&amp;L no realizado, capital aportado expresado en $).
 /* ── Benchmark S&P 500: serie embebida + extensión en vivo vía CEDEAR SPY ── */
 /* Series diarias de S&P 500 y Nasdaq 100 (FRED), desde 2022 — cubren todo el
    historial de operaciones. Van comprimidas: fecha base + huecos en días entre
@@ -830,7 +841,7 @@ function restaurar(){
 
 /* ══════════════ Utilidades ══════════════ */
 const fmt=(n,dec=0)=> n==null||isNaN(n)?"—":n.toLocaleString("es-AR",{minimumFractionDigits:dec,maximumFractionDigits:dec});
-const money=n=> MONEDA==="ARS"?"$ "+fmt(n,0):"US$ "+fmt(n,0);
+const money=n=> VISTA==="ARS"?"$ "+fmt(n,0):"US$ "+fmt(n,0);
 const signoMoney=n=>(n<0?"−":"+")+money(Math.abs(n));
 const cls=n=> n>0?"up":n<0?"down":"";
 const sgn=n=> (n>0?"+":"")+fmt(n,2)+"%";
@@ -838,9 +849,11 @@ const hoy=()=> new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD local
 async function getJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error(url.split("/").slice(-2).join("/")+" HTTP "+r.status); return r.json(); }
 
 function setMoneda(m){
-  MONEDA=m;
+  VISTA=m;
+  MONEDA=m==="ARS"?"ARS":"USD"; // Mercado solo distingue ARS/USD (siempre al MEP) por ahora
   document.getElementById("btn-ars").classList.toggle("active",m==="ARS");
-  document.getElementById("btn-usd").classList.toggle("active",m==="USD");
+  document.getElementById("btn-mep").classList.toggle("active",m==="MEP");
+  document.getElementById("btn-ccl").classList.toggle("active",m==="CCL");
   if(ESTADO) render();
 }
 
@@ -891,7 +904,7 @@ function qtyDisponible(tipo,ticker,fondo,cuenta,excluirId){
 function serieRendimiento(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
   if(!movs.length) return null;
-  const K=MONEDA==="ARS"?"ars":"usd";
+  const K=VISTA==="ARS"?"ars":"usd"; // MEP y CCL comparten la misma base dólar bimonetaria
   let cajaA=0, cajaU=0, aporA=0, aporU=0, retA=0, retU=0;
   const hitos=[], eventosAporte=[];
   for(const m of movs){
@@ -1032,8 +1045,8 @@ function metricasPorPosicion(pos){
   return pos.map(p=>{
     const k=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
     const desde=primera[k];
-    const costo=MONEDA==="ARS"?p.costARS:p.costUSD;
-    const val=MONEDA==="ARS"?p.valARS:p.valUSD;
+    const costo=VISTA==="ARS"?p.costARS:p.costUSD;
+    const val=VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
     const ret=(val!=null&&costo>0)?val/costo-1:null;
     const dias=desde?diasEntre(desde,hoy()):null;
     return {...p,desde,dias,ret,tna:(ret!=null&&dias)?anualizar(ret,dias):null,
@@ -1058,6 +1071,7 @@ async function cargar(){
     for(const {t,d} of resto){ precios[t]={}; for(const r of d) precios[t][r.symbol??r.fondo]=r; }
     const fx={}; for(const d of dolares) fx[d.casa]=(d.compra+d.venta)/2;
     const MEP=fx["bolsa"];
+    const CCL=fx["contadoconliqui"];
 
     const pos=posiciones.map(p=>{
       let px=null,pxMoneda="ARS",pct=null,fuente="";
@@ -1079,13 +1093,15 @@ async function cargar(){
       const valNat=px!=null?px/div*p.qty:null;
       const valARS=valNat==null?null:pxMoneda==="USD"?valNat*MEP:valNat;
       const valUSD=valARS==null?null:valARS/MEP;
-      return {...p,px,pxMoneda,pct,fuente,valARS,valUSD,
+      const valCCL=valARS==null||!CCL?null:valARS/CCL;
+      return {...p,px,pxMoneda,pct,fuente,valARS,valUSD,valCCL,
         plARS:valARS==null?null:valARS-p.costARS,
         plUSD:valUSD==null?null:valUSD-p.costUSD,
+        plCCL:valCCL==null?null:valCCL-p.costUSD,
         varDiaARS:(valARS!=null&&pct!=null)?valARS-valARS/(1+pct/100):0};
     });
 
-    ESTADO={pos,fx,MEP,realARS,realUSD,hora:new Date(),preciosCedears:precios.cedear||{}};
+    ESTADO={pos,fx,MEP,CCL,realARS,realUSD,hora:new Date(),preciosCedears:precios.cedear||{}};
     conn(true);
 
     // Snapshot diario (uno por fecha, se pisa si ya existe) — incluye liquidez
@@ -1131,7 +1147,7 @@ const NAV_MIN_USD=100;
 function serieDiaria(){
   const sr=serieRendimiento();
   if(!sr) return [];
-  const K=MONEDA==="ARS"?"ars":"usd";
+  const K=VISTA==="ARS"?"ars":"usd"; // idem serieRendimiento: MEP/CCL comparten base dólar
   const snaps=(DATOS.snapshots||[]).filter(s=>s.usd>=NAV_MIN_USD).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
   if(snaps.length<2) return [];
   const out=[];
@@ -1277,8 +1293,11 @@ function render(soloEstructura){
   }
 
   if(!ESTADO){ cont.innerHTML='<div class="loading">Consultando precios…</div>'; return; }
-  const {pos,fx,MEP,realARS,realUSD,hora}=ESTADO;
-  const V=p=>MONEDA==="ARS"?p.valARS:p.valUSD, C=p=>MONEDA==="ARS"?p.costARS:p.costUSD, PL=p=>MONEDA==="ARS"?p.plARS:p.plUSD;
+  const {pos,fx,MEP,CCL,realARS,realUSD,hora}=ESTADO;
+  const V=p=>VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
+  const C=p=>VISTA==="ARS"?p.costARS:p.costUSD;
+  const PL=p=>VISTA==="ARS"?p.plARS:VISTA==="MEP"?p.plUSD:p.plCCL;
+  const FXV=VISTA==="CCL"?CCL:MEP; // tipo de cambio para convertir liquidez entre ARS y USD en la vista activa
 
   pintarFX(); estadoBackup(); pintarSync();
   document.getElementById("ts").textContent="Actualizado "+hora.toLocaleString("es-AR",{dateStyle:"short",timeStyle:"medium"});
@@ -1286,22 +1305,34 @@ function render(soloEstructura){
   const totalPos=pos.reduce((s,p)=>s+(V(p)||0),0);
   const costo=pos.reduce((s,p)=>s+(V(p)!=null?C(p):0),0);
   const pl=totalPos-costo;
-  const varDia=pos.reduce((s,p)=>s+(p.varDiaARS||0),0)/(MONEDA==="ARS"?1:MEP);
-  const realizado=MONEDA==="ARS"?realARS:realUSD;
+  const varDia=pos.reduce((s,p)=>s+(p.varDiaARS||0),0)/(VISTA==="ARS"?1:FXV);
+  const realizado=VISTA==="ARS"?realARS:realUSD;
   const saldos=DATOS.saldos||{};
   const cuentas=[...new Set([...pos.map(p=>p.cuenta),...Object.keys(saldos)])];
-  const cashCta=c=>{const s=saldos[c]||{}; const a=(s.ars||0)+(s.usd||0)*MEP; return MONEDA==="ARS"?a:a/MEP;};
-  const cash=cuentas.reduce((s,c)=>s+cashCta(c),0);
+  // Liquidez separada por moneda de origen: pesos y dólares, cada una
+  // convertible a la otra unidad con el MEP o el CCL según la vista activa.
+  const cashArsCta=c=>{const s=saldos[c]||{}; const a=s.ars||0; return VISTA==="ARS"?a:a/FXV;};
+  const cashUsdCta=c=>{const s=saldos[c]||{}; const u=s.usd||0; return VISTA==="ARS"?u*FXV:u;};
+  const cashCta=c=>cashArsCta(c)+cashUsdCta(c);
+  const cashArs=cuentas.reduce((s,c)=>s+cashArsCta(c),0);
+  const cashUsd=cuentas.reduce((s,c)=>s+cashUsdCta(c),0);
+  const cash=cashArs+cashUsd;
   const total=totalPos+cash;
   const hayCash=Object.keys(saldos).length>0;
   const navPrev=window.__navPrev; if(TAB==="inicio") window.__navPrev=total;
 
   let html="";
-  if(TAB==="inicio") html+=`<div class="cards">
+  if(TAB==="inicio"){
+    const otro=VISTA==="ARS"
+      ?`US$ ${fmt(total/MEP,0)} MEP · US$ ${fmt(CCL?total/CCL:null,0)} CCL`
+      :`$ ${fmt(total*FXV,0)}`;
+    html+=`<div class="cards">
     <div class="card hero" id="nav-card"><div class="k">NAV · Total</div><div class="v">${money(total)}</div>
-      <div class="d">${MONEDA==="ARS"?"US$ "+fmt(total/MEP,0)+" MEP":"$ "+fmt(total*MEP,0)}${hayCash?" · incl. liquidez":""}</div></div>
-    ${hayCash?`<div class="card"><div class="k">Cash · Neto</div><div class="v ${cash<0?"down":""}">${(cash<0?"−":"")+money(Math.abs(cash))}</div>
-      <div class="d">${fmt(cash/total*100,1)}% del total</div></div>`:""}
+      <div class="d">${otro}${hayCash?" · incl. liquidez":""}</div></div>
+    ${hayCash?`<div class="card"><div class="k">Liquidez · Pesos</div><div class="v ${cashArs<0?"down":""}">${(cashArs<0?"−":"")+money(Math.abs(cashArs))}</div>
+      <div class="d">${fmt(cashArs/total*100,1)}% del total</div></div>
+    <div class="card"><div class="k">Liquidez · Dólares</div><div class="v ${cashUsd<0?"down":""}">${(cashUsd<0?"−":"")+money(Math.abs(cashUsd))}</div>
+      <div class="d">${fmt(cashUsd/total*100,1)}% del total</div></div>`:""}
     <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
       <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
     <div class="card"><div class="k">Delta · 24H</div><div class="v ${cls(varDia)}">${signoMoney(varDia)}</div>
@@ -1311,6 +1342,7 @@ function render(soloEstructura){
     ${cuentas.map(c=>{const t=pos.filter(p=>p.cuenta===c).reduce((s,p)=>s+(V(p)||0),0)+cashCta(c);
       return `<div class="card"><div class="k">${c}</div><div class="v">${money(t)}</div><div class="d">${fmt(t/total*100,1)}% del total</div></div>`;}).join("")}
   </div>`;
+  }
 
   // Asignación
   const allocClase=GRUPOS.map(g=>({n:g.nombre,color:g.color,v:pos.filter(p=>g.tipos.includes(p.tipo)).reduce((s,p)=>s+(V(p)||0),0)})).filter(x=>x.v>0);
@@ -1368,7 +1400,7 @@ function render(soloEstructura){
     // Escala Y: 4 niveles
     const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
     html+=`<div class="chart-card">
-      <div class="chart-head"><div class="k">Rendimiento acumulado · ${MONEDA==="ARS"?"ARS":"USD MEP"}</div>
+      <div class="chart-head"><div class="k">Rendimiento acumulado · ${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"}</div>
         <div class="chart-key">
           <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
           ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
@@ -1425,7 +1457,7 @@ function render(soloEstructura){
         const tnaTot=anualizar(retTot,diasTot);
         met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
         const mejor=met[0], peor=met[met.length-1];
-        const realTot=MONEDA==="ARS"?realARS:realUSD;
+        const realTot=VISTA==="ARS"?realARS:realUSD;
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno total</div>
@@ -1472,7 +1504,7 @@ function render(soloEstructura){
               <span>${sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
           </tbody></table></div>`;
         notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
-          <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${MONEDA==="ARS"?"pesos":"dólares MEP"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
+          <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
           TNA anualiza con base 365 y requiere más de 30 días de tenencia; los valores marcados con * extrapolan menos de 90 días y conviene leerlos con reservas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.</div>`;
@@ -1489,7 +1521,7 @@ function render(soloEstructura){
         const metP=metricasPorPosicionEnPeriodo(pos,rango.desde,rango.hasta).sort((a,b)=>b.ret-a.ret);
         const mejor=metP[0], peor=metP[metP.length-1];
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(rango.desde,rango.hasta);
-        const realPer=MONEDA==="ARS"?rA:rU;
+        const realPer=VISTA==="ARS"?rA:rU;
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
@@ -1545,21 +1577,20 @@ function render(soloEstructura){
     const tg=rows.reduce((s,p)=>s+(V(p)||0),0);
     html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>${g.nombre}</h2>
       <span class="tot"><b>${money(tg)}</b> · ${fmt(tg/total*100,1)}%</span></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>P&amp;L</th><th>P&amp;L %</th></tr></thead><tbody>
+      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>% Cartera</th></tr></thead><tbody>
       ${rows.map(p=>{
         const nombre=p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker;
         const precioCell=p.px==null
           ?(p.tipo==="manual"?`<button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">fijar precio</button>`:"—")
           :`${p.pxMoneda==="USD"?"US$ ":"$ "}${fmt(p.px,p.px<1000?2:0)}${p.tipo==="manual"?` <button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">✎</button>`:""}${p.fuente?` <span style="color:var(--muted);font-size:10px">${p.fuente}</span>`:""}`;
-        const plp=(V(p)!=null&&C(p)>0)?(V(p)/C(p)-1)*100:null;
+        const pctCartera=V(p)!=null&&total>0?V(p)/total*100:null;
         return `<tr><td class="tk">${nombre}</td>
         <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
         <td>${fmt(p.qty,p.qty%1?2:0)}</td>
         <td>${precioCell}</td>
         <td class="${cls(p.pct)}">${p.pct==null?"—":sgn(p.pct)}</td>
         <td>${V(p)==null?"—":money(V(p))}</td>
-        <td class="${cls(PL(p))}">${PL(p)==null?"—":signoMoney(PL(p))}</td>
-        <td class="${cls(plp)}">${plp==null?"—":sgn(plp)}</td></tr>`;}).join("")}
+        <td>${pctCartera==null?"—":fmt(pctCartera,1)+"%"}</td></tr>`;}).join("")}
       </tbody></table></div></div>`;
   }
 
@@ -1568,7 +1599,7 @@ function render(soloEstructura){
     html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
       <span class="tot"><b>${(cash<0?"−":"")+money(Math.abs(cash))}</b> · ${fmt(cash/total*100,1)}%</span>
       <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ editar</button></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Saldo ARS</th><th>Saldo USD</th><th>Total (${MONEDA==="ARS"?"ARS":"USD MEP"})</th></tr></thead><tbody>
+      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Saldo ARS</th><th>Saldo USD</th><th>Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr></thead><tbody>
       ${Object.entries(saldos).map(([c,s])=>{
         const t=cashCta(c);
         return `<tr><td class="tk">${c}</td>
@@ -1588,8 +1619,8 @@ function render(soloEstructura){
         <div class="d">depósitos + compras con plata nueva</div></div>
       ${sr.retirado>1?`<div class="card"><div class="k">Retirado</div><div class="v">${money(sr.retirado)}</div><div class="d">salidas de dinero</div></div>`:""}
       ${sr.caja>1?`<div class="card"><div class="k">Caja de operaciones</div><div class="v">${money(sr.caja)}</div><div class="d">ventas/depósitos sin reinvertir</div></div>`:""}
-      ${Math.abs((MONEDA==="ARS"?realARS:realUSD))>0.01?`<div class="card"><div class="k">P&amp;L realizado</div>
-        <div class="v ${cls(MONEDA==="ARS"?realARS:realUSD)}">${signoMoney(MONEDA==="ARS"?realARS:realUSD)}</div><div class="d">ventas cerradas</div></div>`:""}
+      ${Math.abs((VISTA==="ARS"?realARS:realUSD))>0.01?`<div class="card"><div class="k">P&amp;L realizado</div>
+        <div class="v ${cls(VISTA==="ARS"?realARS:realUSD)}">${signoMoney(VISTA==="ARS"?realARS:realUSD)}</div><div class="d">ventas cerradas</div></div>`:""}
     </div>`;
   }
   if(TAB==="movimientos") html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Registro de operaciones</h2>
