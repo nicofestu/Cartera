@@ -407,6 +407,8 @@ select option{background:#0A0A0A;color:var(--white)}
 @media(max-width:760px){.f-grid{grid-template-columns:1fr}}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
 </head>
 <body>
 
@@ -593,7 +595,7 @@ select option{background:#0A0A0A;color:var(--white)}
           <select id="imp-broker" onchange="onBrokerChange()"></select>
         </div>
         <div class="full"><label>Archivo</label>
-          <input type="file" id="imp-file" accept=".xlsx" disabled onchange="onFileImportBroker(event)">
+          <input type="file" id="imp-file" accept=".xlsx,.pdf" disabled onchange="onFileImportBroker(event)">
           <div class="hint" id="imp-broker-hint"></div></div>
       </div>
       <div class="f-err" id="imp-err"></div>
@@ -2595,6 +2597,7 @@ function exportar(){
 // (selector, previsualización, revisión de tickers, carga) es genérico.
 const IMPORTADORES={
   balanz:{nombre:"Balanz",hoja:"movimientos",parser:parseBalanzMovimientos},
+  puente:{nombre:"Puente",formato:"pdf",parser:parsePuenteMovimientos},
 };
 let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[];
 
@@ -2617,8 +2620,12 @@ function onBrokerChange(){
   const hints={
     balanz:`En tu cuenta de Balanz: <b>Actividad → Movimientos</b> → filtrá el rango de fechas desde el inicio de tus operaciones → botón <b>Descargar</b>.<br>
       <span style="color:var(--down)">No uses el botón "Reportes"</span> — descarga en un formato distinto que esta app no puede leer.`,
+    puente:`En tu cuenta de Puente: <b>Cuenta → Movimientos</b> → exportá o descargá el PDF con el rango de fechas desde el inicio de tus operaciones.<br>
+      Se lee directo el PDF, tal cual lo bajás — no hace falta pasarlo a Excel.`,
   };
   document.getElementById("imp-broker-hint").innerHTML=b?hints[b]||`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
+  const inp=document.getElementById("imp-file");
+  if(b) inp.accept=IMPORTADORES[b].formato==="pdf"?".pdf":".xlsx";
 }
 
 async function onFileImportBroker(ev){
@@ -2628,17 +2635,47 @@ async function onFileImportBroker(ev){
   const err=document.getElementById("imp-err");
   err.textContent="";
   try{
-    const buf=await f.arrayBuffer();
-    const wb=XLSX.read(buf,{type:"array",cellDates:true});
     const cfg=IMPORTADORES[brokerId];
-    const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
-    const rows=XLSX.utils.sheet_to_json(hoja,{defval:null});
-    const {candidatos,omitidos,revisar}=cfg.parser(rows);
+    let candidatos,omitidos,revisar;
+    if(cfg.formato==="pdf"){
+      const lineas=await extraerLineasPDF(f);
+      ({candidatos,omitidos,revisar}=cfg.parser(lineas));
+    } else {
+      const buf=await f.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array",cellDates:true});
+      const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(hoja,{defval:null});
+      ({candidatos,omitidos,revisar}=cfg.parser(rows));
+    }
     IMP_CANDIDATOS=candidatos; IMP_OMITIDOS=omitidos; IMP_REVISAR=revisar;
     renderPreviewImport();
   }catch(e){
     err.textContent="No se pudo leer el archivo: "+e.message;
   }
+}
+
+// ── Reconstruye líneas visuales de un PDF a partir de los ítems de texto de
+// pdf.js (que no preserva el layout tabular por sí solo): agrupa por
+// coordenada Y cercana (misma fila) y ordena por X dentro de cada fila. ──
+async function extraerLineasPDF(file){
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  const lineas=[];
+  const TOL=2.5;
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const contenido=await page.getTextContent();
+    const items=contenido.items.map(it=>({str:it.str,x:it.transform[4],y:it.transform[5]}))
+      .filter(it=>it.str.trim());
+    items.sort((a,b)=>b.y-a.y||a.x-b.x);
+    let fila=[], yFila=null;
+    for(const it of items){
+      if(yFila===null||Math.abs(it.y-yFila)<=TOL){ fila.push(it); if(yFila===null) yFila=it.y; }
+      else{ lineas.push(fila.sort((a,b)=>a.x-b.x).map(x=>x.str).join(" ").replace(/\s+/g," ").trim()); fila=[it]; yFila=it.y; }
+    }
+    if(fila.length) lineas.push(fila.sort((a,b)=>a.x-b.x).map(x=>x.str).join(" ").replace(/\s+/g," ").trim());
+  }
+  return lineas;
 }
 
 function fUTC(d){
@@ -2664,6 +2701,122 @@ function clasificarTickerImport(sym){
   if(/^(AL|GD|AE|BP|TX|TZX|TM|TT|TV|D\d|S\d|T\d|TO|BON|BJ|LE|PR|CUA|DIC|PAR)/.test(sym)) return "bono";
   if(NOMBRE_AR[sym]) return "accion";
   return null; // necesita revisión manual
+}
+
+// ── Igual que clasificarTickerImport, pero para tickers estilo Puente que a
+// veces llevan un sufijo Bloomberg de plaza ("SOFI US", "CVX US"): son
+// acciones extranjeras que se tienen en cartera directo (no CEDEAR), sin
+// panel de precios en vivo en esta app → tipo "manual" (precio a mano). ──
+function clasificarTickerPuente(simbolo){
+  let tipo=clasificarTickerImport(simbolo);
+  if(tipo) return {ticker:simbolo,tipo,sinClasificar:false};
+  const m=/^(.+) ([A-Z]{2})$/.exec(simbolo);
+  if(m){
+    const base=m[1];
+    tipo=clasificarTickerImport(base);
+    if(tipo) return {ticker:base,tipo,sinClasificar:false};
+    return {ticker:base,tipo:"manual",sinClasificar:false};
+  }
+  return {ticker:simbolo,tipo:"accion",sinClasificar:true};
+}
+
+// ── Parser Puente: extracto PDF de "Cuenta → Movimientos". El PDF trae 3
+// libros en paralelo (Pesos / Dólar MEP / Dólar Cable): CADA operación de
+// compra/venta aparece en el libro Pesos (equivalente en ARS, para el
+// resumen unificado) Y TAMBIÉN en el libro en dólares si se fondeó con esa
+// moneda (mismo trade, otra unidad — no son dos operaciones). Los
+// movimientos de caja (depósitos, extracciones, dividendos, custodia,
+// rescates/suscripciones de FCI) sí son únicos, aparecen una sola vez en el
+// libro que corresponda. Para no duplicar posiciones: si un trade aparece en
+// un libro en dólares, se carga esa versión (moneda real de fondeo) y se
+// descarta la versión en pesos, que es solo su valuación equivalente. ──
+function parsePuenteMovimientos(lineas){
+  const candidatos=[], omitidos=[], revisar=[];
+  const SECCIONES={"Pesos":"ARS","Dólar MEP":"USD","Dólar Cable":"USD"};
+  const NUM=/-?\d[\d.]*,\d{2}/;
+  const NUM_G=new RegExp(NUM.source,"g");
+  const aNum=s=>parseFloat(s.replace(/\./g,"").replace(",","."));
+  let seccion=null;
+  const filas={ARS:[],USD:[]};
+
+  for(const raw of lineas){
+    const linea=(raw||"").trim();
+    if(!linea) continue;
+    if(SECCIONES[linea]!==undefined){ seccion=linea; continue; }
+    if(/^Saldo Inicial\b/.test(linea)){ seccion=null; continue; }
+    if(!seccion) continue; // fuera de los 3 libros: tablas por especie, redundantes, se ignoran
+    const mFecha=/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.*)$/.exec(linea);
+    if(!mFecha) continue;
+    const conc=mFecha[2], resto=mFecha[3];
+    const numeros=resto.match(NUM_G)||[];
+    const idxNum=numeros.length?resto.search(NUM):resto.length;
+    const desc=resto.slice(0,idxNum).trim();
+    const fecha=fUTC(conc);
+    const monApp=SECCIONES[seccion];
+    const num=i=>numeros[i]!=null?aNum(numeros[i]):null;
+    if(!fecha){ omitidos.push({fecha:conc,op:desc.slice(0,40),ticker:"",motivo:"fecha no reconocida"}); continue; }
+
+    // Ecos internos de bloqueo/desbloqueo de saldo por FCI: no son un flujo real
+    if(/^Bloqueo Monetario|^Desbloqueo Monetario/.test(desc)){
+      omitidos.push({fecha,op:desc.slice(0,40),ticker:"",motivo:"eco interno de bloqueo/desbloqueo de FCI — no se duplica"});
+      continue;
+    }
+
+    let m;
+    if((m=/^(Compra|Venta) (.+)$/.exec(desc))){
+      const activo=m[2].trim();
+      if(/^D[oó]lar/i.test(activo)){
+        omitidos.push({fecha,op:desc.slice(0,40),ticker:activo,motivo:"conversión de moneda (MEP/Cable), no es una posición de cartera"});
+        continue;
+      }
+      if(numeros.length!==4){ omitidos.push({fecha,op:desc.slice(0,30),ticker:activo,motivo:"fila con cantidad de columnas inesperada"}); continue; }
+      const cantidad=num(0), importe=num(2);
+      if(!cantidad){ omitidos.push({fecha,op:desc.slice(0,30),ticker:activo,motivo:"cantidad en cero"}); continue; }
+      const {ticker,tipo,sinClasificar}=clasificarTickerPuente(activo);
+      filas[monApp].push({fecha,concertacion:conc,op:m[1]==="Compra"?"compra":"venta",ticker,
+        cantidad:Math.abs(cantidad),precioBruto:Math.abs(importe)/Math.abs(cantidad),moneda:monApp,
+        origen:desc,tipo,sinClasificar});
+      continue;
+    }
+    if(desc==="Depósito"||desc==="Extracción"){
+      if(numeros.length!==2){ omitidos.push({fecha,op:desc,ticker:"",motivo:"fila con cantidad de columnas inesperada"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:desc==="Depósito"?"deposito":"retiro",cantidad:1,
+        precio:Math.abs(num(0)),moneda:monApp,origen:desc});
+      continue;
+    }
+    if(/^(Gasto de Custodia|Devoluci[oó]n de Comisiones|Dividendo)/.test(desc)){
+      if(numeros.length!==2){ omitidos.push({fecha,op:desc.slice(0,40),ticker:"",motivo:"fila con cantidad de columnas inesperada"}); continue; }
+      const importe=num(0);
+      if(!importe){ omitidos.push({fecha,op:desc.slice(0,40),ticker:"",motivo:"importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,
+        precio:Math.abs(importe),moneda:monApp,origen:desc});
+      continue;
+    }
+    if((m=/^Liquidaci[oó]n de (Rescate|Suscripci[oó]n) \/ (\d+) \/ (.+)$/.exec(desc))){
+      if(numeros.length!==4){ omitidos.push({fecha,op:desc.slice(0,40),ticker:"",motivo:"fila con cantidad de columnas inesperada"}); continue; }
+      const cantidad=num(0), importe=num(2);
+      if(!cantidad){ omitidos.push({fecha,op:desc.slice(0,40),ticker:"",motivo:"cantidad en cero"}); continue; }
+      candidatos.push({fecha,tipo:"fci",op:/rescate/i.test(m[1])?"venta":"compra",fondo:m[3].trim(),
+        cantidad:Math.abs(cantidad),precio:Math.abs(importe)/Math.abs(cantidad)*1000,moneda:monApp,origen:desc});
+      continue;
+    }
+    omitidos.push({fecha,op:(desc||linea).slice(0,40),ticker:"",motivo:"patrón no reconocido"});
+  }
+
+  // Deduplicar compra/venta: si el mismo trade (fecha, tipo de op, ticker,
+  // cantidad) aparece en un libro en dólares, se usa ESA versión (moneda
+  // real de fondeo) y se descarta la de Pesos, que es solo su valuación.
+  const clave=r=>`${r.concertacion}|${r.op}|${r.ticker}|${r.cantidad}`;
+  const clavesUSD=new Set(filas.USD.map(clave));
+  const empujar=r=>{
+    const item={fecha:r.fecha,op:r.op,ticker:r.ticker,cantidad:r.cantidad,precioBruto:r.precioBruto,
+      moneda:r.moneda,origen:r.origen,tipo:r.tipo};
+    if(r.sinClasificar) revisar.push(item); else candidatos.push(item);
+  };
+  for(const r of filas.ARS) if(!clavesUSD.has(clave(r))) empujar(r);
+  for(const r of filas.USD) empujar(r);
+
+  return {candidatos,omitidos,revisar};
 }
 
 // ── Parser Balanz: hoja "movimientos" (Actividad → Movimientos → Descargar) ──
@@ -2847,7 +3000,7 @@ function renderPreviewImport(){
   document.getElementById("imp-resumen").innerHTML=
     `<div style="margin-bottom:8px">${resumen||'<span class="hint">No se encontraron operaciones para cargar.</span>'}</div>`;
 
-  const tiposSel=["bono","letra","on","accion","cedear","fci"];
+  const tiposSel=["bono","letra","on","accion","cedear","fci","manual"];
   if(IMP_REVISAR.length){
     document.getElementById("imp-revision").innerHTML=`
       <div class="hint" style="margin-bottom:8px">
