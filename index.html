@@ -375,6 +375,11 @@ input:hover,select:hover{border-color:var(--hair-hot)}
 input:disabled{color:var(--grey-dim);border-color:#161616}
 select{cursor:pointer}
 .hint{font-size:11px;color:var(--grey);margin-top:7px;line-height:1.7;letter-spacing:.03em}
+.periodo-bar{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.periodo-bar .periodo-lbl{font-family:var(--din);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--grey);font-weight:600}
+.periodo-bar select{width:auto;min-width:200px;font-size:15px;font-weight:600;padding:12px 18px;
+  background:var(--surf);border:1px solid var(--hair-hot);border-top-color:var(--surf-edge);letter-spacing:.02em}
+@media(max-width:600px){.periodo-bar select{min-width:0;flex:1}}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:26px;padding-top:20px;border-top:1px solid var(--hair)}
 .f-err{color:var(--down);font-size:11.5px;margin-top:16px;display:none;letter-spacing:.05em;line-height:1.7}
 @media(max-width:760px){.f-grid{grid-template-columns:1fr}}
@@ -1354,15 +1359,34 @@ function render(soloEstructura){
   if(TAB==="inicio") html+=`<div class="alloc"><div class="card"><div class="k">Asignación · Clase</div>${barra(allocClase)}</div>
     <div class="card"><div class="k">Asignación · Cuenta</div>${barra(allocCta)}</div></div>`;
 
+  // ══ Selector de período (Rendimientos) ══ se calcula temprano porque
+  // controla tanto el gráfico de abajo como las cards de rendimiento. Se
+  // muestra grande y a la izquierda, como primer control de la pestaña.
+  let rango=null, serieT=null;
+  if(TAB==="rendimientos"&&DATOS.movimientos.length){
+    const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))].sort().reverse();
+    rango=rangoPeriodo(PERIODO);
+    serieT=serieDiaria(); // ya descarta días con menos de US$100 de NAV
+    html+=`<div class="periodo-bar"><span class="periodo-lbl">Período</span>
+      <select id="sel-periodo" onchange="setPeriodo(this.value)">
+      <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
+      <option value="ytd" ${PERIODO==="ytd"?"selected":""}>YTD</option>
+      <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
+      <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
+      ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
+    </select></div>`;
+  }
+
   // ══ Gráfico de rendimiento acumulado ══
   const sr=serieRendimiento();
   const sinPx=pos.filter(p=>p.valARS==null);
+  const tituloMoneda=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
   if(TAB==="rendimientos"&&sinPx.length){
     html+=`<div class="chart-card"><div class="chart-head"><div class="k">Rendimiento acumulado</div></div>
       <div class="chart-warn">No se puede calcular el rendimiento porque ${sinPx.length===1?"una posición no tiene":sinPx.length+" posiciones no tienen"} precio:
       <b>${sinPx.map(p=>p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker).join(", ")}</b>.
       Revisá que el tipo de instrumento sea el correcto (editando el movimiento) o cargá un precio manual.</div></div>`;
-  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0){
+  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&PERIODO==="todo"){
     const retHoy=(total+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
     const pts=sr.puntos.filter(p=>p.fecha!==hoy());
     pts.push({fecha:hoy(),ret:retHoy});
@@ -1400,7 +1424,7 @@ function render(soloEstructura){
     // Escala Y: 4 niveles
     const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
     html+=`<div class="chart-card">
-      <div class="chart-head"><div class="k">Rendimiento acumulado · ${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"}</div>
+      <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}</div>
         <div class="chart-key">
           <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
           ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
@@ -1422,23 +1446,71 @@ function render(soloEstructura){
         <span class="${cls(retHoy)}">${signoMoney(total+sr.retirado-sr.aporte)}</span></div>
       ${pts.length<4?`<div class="chart-note">La curva se dibuja sobre hitos ciertos: el inicio, cada operación y los cierres que registra el dashboard. Gana resolución a medida que lo abrís en días sucesivos.</div>`:""}
     </div>`;
+  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0){
+    // Cualquier otro período: retorno time-weighted acumulado DENTRO de la
+    // ventana elegida (rebasado a 0% al arrancar), reconstruido sobre la
+    // misma serie diaria que usa Riesgo — no sobre el histórico completo.
+    const tramo=(serieT||[]).filter(d=>d.fecha>rango.desde&&d.fecha<=rango.hasta);
+    if(!tramo.length){
+      html+=`<div class="chart-card"><div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda} · ${rango.etiqueta}</div></div>
+        <div class="chart-warn">Todavía no hay suficientes cierres diarios en ${rango.etiqueta.toLowerCase()} para dibujar la curva. Probá "Histórico completo" o esperá a que se acumulen más días.</div></div>`;
+    } else {
+      let c=1, csp=1, haySp=false;
+      const pts=[{fecha:rango.desde,ret:0}], bPts=[{fecha:rango.desde,ret:0}];
+      for(const d of tramo){
+        c*=(1+d.r); pts.push({fecha:d.fecha,ret:c-1});
+        if(d.rsp!=null){ csp*=(1+d.rsp); haySp=true; bPts.push({fecha:d.fecha,ret:csp-1}); }
+      }
+      const retHoy=c-1, benchHoy=haySp?csp-1:null;
+      const desdeCh=rango.desde, hastaCh=tramo[tramo.length-1].fecha;
+      const t0=new Date(desdeCh+"T12:00").getTime(), t1=new Date(hastaCh+"T12:00").getTime();
+      const span=Math.max(1,t1-t0);
+      const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
+      const rets=[...pts.map(p=>p.ret),...(haySp?bPts.map(p=>p.ret):[])];
+      let mn=Math.min(0,...rets), mx=Math.max(0,...rets);
+      const pad0=(mx-mn)*0.15||0.02; mn-=pad0; mx+=pad0;
+      const rg=(mx-mn)||1;
+      const W=1000,H=220,pl=4,pt=12,pb=24;
+      const px=x=>(pl+x*(W-2*pl)).toFixed(1);
+      const py=y=>(H-pb-(y-mn)/rg*(H-pt-pb)).toFixed(1);
+      const yCero=py(0);
+      const dLine="M "+pts.map(p=>px(X(p.fecha))+" "+py(p.ret)).join(" L ");
+      const dBench=haySp&&bPts.length>1?"M "+bPts.map(p=>px(X(p.fecha))+" "+py(p.ret)).join(" L "):null;
+      const gan=retHoy>=0;
+      const meses=[]; let cur=new Date(t0); cur.setDate(1);
+      while(cur.getTime()<=t1){
+        const f=cur.toLocaleDateString("sv-SE");
+        if(f>=desdeCh) meses.push({x:X(f),lbl:cur.toLocaleDateString("es-AR",{month:"short"}).toUpperCase().replace(".","")});
+        cur.setMonth(cur.getMonth()+1);
+      }
+      const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
+      html+=`<div class="chart-card">
+        <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda} · ${rango.etiqueta}</div>
+          <div class="chart-key">
+            <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
+            ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
+          </div></div>
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera en el período elegido">
+          ${ticks.map(t=>`<line x1="0" y1="${t.y}" x2="${W}" y2="${t.y}" stroke="#161616" stroke-width="1"/>`).join("")}
+          ${meses.map(m=>`<line x1="${px(m.x)}" y1="${pt}" x2="${px(m.x)}" y2="${H-pb}" stroke="#141414" stroke-width="1"/>`).join("")}
+          <path d="${dLine} L ${px(1)} ${yCero} L ${px(X(pts[0].fecha))} ${yCero} Z" fill="${gan?"#00E08A":"#FF3B30"}" opacity="0.09"/>
+          <line x1="0" y1="${yCero}" x2="${W}" y2="${yCero}" stroke="#5E5E5E" stroke-width="1" stroke-dasharray="3 3"/>
+          ${dBench?`<path d="${dBench}" fill="none" stroke="#8E8E8E" stroke-width="1.5" stroke-dasharray="5 4" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`:""}
+          <path d="${dLine}" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+          <circle cx="${px(1)}" cy="${py(retHoy)}" r="3.5" fill="${gan?"#00E08A":"#FF3B30"}"/>
+        </svg>
+        <div class="chart-yaxis">${ticks.slice().reverse().map(t=>`<span>${sgn(t.v*100)}</span>`).join("")}</div>
+        <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
+        <div class="chart-meta"><span>${rango.etiqueta} · ${tramo.length} día${tramo.length>1?"s":""}</span>
+          <span>time-weighted</span>
+          <span class="${cls(retHoy)}">${sgn(retHoy*100)}</span></div>
+      </div>`;
+    }
   }
 
   let secIdx=0;
   // ══ RENDIMIENTOS ══
   if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
-    const serieT=serieDiaria(); // ya descarta días con menos de US$100 de NAV
-    const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))].sort().reverse();
-    const rango=rangoPeriodo(PERIODO);
-    const selectorHtml=`<select id="sel-periodo" onchange="setPeriodo(this.value)"
-        style="width:auto;padding:6px 10px;font-size:12px;margin-left:auto">
-      <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
-      <option value="ytd" ${PERIODO==="ytd"?"selected":""}>YTD</option>
-      <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
-      <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
-      ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
-    </select>`;
-
     let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
 
     if(PERIODO==="todo"){
@@ -1559,7 +1631,7 @@ function render(soloEstructura){
     }
 
     html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Rendimientos</h2>
-      ${metaHtml}${selectorHtml}</div>`;
+      <span style="margin-left:auto">${metaHtml}</span></div>`;
     html+=cardsPerf
       ? filasGrid(cardsPerf,"perf-grid",4)+tablaHtml+notaHtml
       : `<div class="chart-warn">No hay datos suficientes todavía para calcular ${rango.etiqueta.toLowerCase()}.</div>`;
