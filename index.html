@@ -629,7 +629,7 @@ const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 100
 
 /* ══════════════ Estado y persistencia ══════════════ */
 let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}};
-let MONEDA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="";
+let MONEDA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
 /* ── Benchmark S&P 500: serie embebida + extensión en vivo vía CEDEAR SPY ── */
 /* Series diarias de S&P 500 y Nasdaq 100 (FRED), desde 2022 — cubren todo el
    historial de operaciones. Van comprimidas: fecha base + huecos en días entre
@@ -962,6 +962,65 @@ function serieRendimiento(){
 function diasEntre(a,b){ return Math.max(1,Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5)); }
 function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null; }
 
+/* ══════════════ Selector de período (pestaña Rendimientos) ══════════════
+   Un solo menú controla qué ventana de tiempo miran TODAS las cards de
+   arriba: histórico completo (como siempre), un año calendario puntual, YTD,
+   este mes o esta semana. "Histórico completo" sigue la cuenta de aportes de
+   siempre (money-weighted, igual que antes); cualquier otro período usa la
+   serie diaria time-weighted, que es la que realmente tiene sentido para una
+   ventana corta. */
+function rangoPeriodo(periodo){
+  const hoyF=hoy(), anioAct=+hoyF.slice(0,4);
+  if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD"};
+  if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes"};
+  if(periodo==="semanal") return {desde:restarDias(hoyF,7),hasta:hoyF,etiqueta:"Esta semana"};
+  if(/^\d{4}$/.test(periodo)){
+    const fin=periodo+"-12-31";
+    return {desde:(+periodo-1)+"-12-31",hasta:fin>hoyF?hoyF:fin,etiqueta:periodo};
+  }
+  return {desde:null,hasta:hoyF,etiqueta:"Histórico completo"}; // "todo"
+}
+function setPeriodo(v){ PERIODO=v; if(ESTADO) render(); }
+
+// Ranking de posiciones por precio dentro de un período puntual (no desde la
+// primera compra). Se apoya en el historial público, así que solo cubre lo
+// que tenga precio ahí y quede cotizado en pesos (se excluyen fci/manual y
+// tickers en liquidación USD, que mezclarían escalas distintas).
+function metricasPorPosicionEnPeriodo(pos,desde,hasta){
+  return pos.map(p=>{
+    if(p.tipo==="fci"||p.tipo==="manual"||p.pxMoneda!=="ARS"||p.px==null) return null;
+    const h=precioHistorial(p.tipo,p.ticker,desde);
+    if(!h) return null;
+    return {...p,ret:p.px/h.precio-1};
+  }).filter(Boolean);
+}
+// Resultado realizado (ventas ya cerradas) que cayó específicamente dentro de
+// (desde,hasta]. Recorre TODO el historial de movimientos para llevar el
+// costo promedio correcto, pero solo suma a la cuenta el resultado de las
+// ventas que caen en la ventana pedida.
+function realizadoEnPeriodo(desde,hasta){
+  const map={}; let realARS=0, realUSD=0;
+  const movs=[...DATOS.movimientos].filter(m=>m.fecha<=hasta)
+    .sort((a,b)=>a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
+  for(const m of movs){
+    if(m.tipo==="cash") continue;
+    const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
+    const div=divisorDe(m.tipo);
+    const bruto=m.precio/div*m.cantidad;
+    const cARS=m.moneda==="USD"?bruto*m.mep:bruto;
+    const cUSD=m.moneda==="USD"?bruto:bruto/m.mep;
+    if(!map[key]) map[key]={qty:0,costARS:0,costUSD:0};
+    const p=map[key];
+    if(m.op==="compra"){ p.qty+=m.cantidad; p.costARS+=cARS; p.costUSD+=cUSD; }
+    else{
+      const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
+      if(!desde||(m.fecha>desde&&m.fecha<=hasta)){ realARS+=cARS-aARS*m.cantidad; realUSD+=cUSD-aUSD*m.cantidad; }
+      p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
+    }
+  }
+  return {realARS,realUSD};
+}
+
 function metricasPorPosicion(pos){
   // Fecha de primera compra y monto invertido por posición (para TIR simple y anualizado)
   const primera={};
@@ -1061,11 +1120,19 @@ async function cargar(){
    completando solo a medida que se acumulan días. */
 
 // Serie diaria de retornos, con los flujos de capital ya descontados.
+// Descarta días con menos de US$100 de NAV: con saldo casi en cero, cualquier
+// movimiento chico da un % disparatado (comprar $50 de algo que sube $2 es
+// "+4% en un día") y ensucia tanto la comparación contra los índices como la
+// volatilidad. El salto entre el último día válido antes del hueco y el
+// primero después sigue siendo correcto: el flujo de capital de por medio ya
+// se descuenta igual, así que no se inventa rendimiento, solo se ignora el
+// tramo sin plata real para medir.
+const NAV_MIN_USD=100;
 function serieDiaria(){
   const sr=serieRendimiento();
   if(!sr) return [];
   const K=MONEDA==="ARS"?"ars":"usd";
-  const snaps=(DATOS.snapshots||[]).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const snaps=(DATOS.snapshots||[]).filter(s=>s.usd>=NAV_MIN_USD).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
   if(snaps.length<2) return [];
   const out=[];
   for(let i=1;i<snaps.length;i++){
@@ -1134,62 +1201,26 @@ function metricasRiesgo(serie){
     mdd,beta,correl,paresBench:pares.length};
 }
 
-// Bloque de UI: rendimiento por período + riesgo
-function seccionPeriodos(secIdxRef){
-  const serie=serieDiaria();
-  const hoyF=hoy();
+// Bloque de UI: Riesgo, scoped al mismo período que eligió el usuario arriba.
+function seccionRiesgo(secIdxRef,rango){
   const card=(k,val,det,cls2)=>`<div class="perf"><div class="k">${k}</div>
     <div class="v ${cls2||""}">${val}</div><div class="d">${det||""}</div></div>`;
+  const serieFull=serieDiaria();
+  const serie=rango.desde?serieFull.filter(d=>d.fecha>rango.desde&&d.fecha<=rango.hasta):serieFull;
 
-  if(serie.length<2){
-    const faltan=2-serie.length;
-    return `<div class="section-h"><span class="idx">${secIdxRef}</span><h2>Rendimiento por período</h2></div>
-      <div class="chart-warn">Esta sección se calcula sobre el historial diario de la cartera, que se guarda
-      solo cuando abrís la app. Todavía no hay suficientes días registrados (falta${faltan>1?"n":""} al menos ${faltan}).
-      A medida que la abras en días distintos se va a ir completando sola: primero el retorno diario y semanal,
-      y con unas semanas más la volatilidad y el resto de las métricas de riesgo.</div>`;
-  }
-
-  const ult=serie[serie.length-1];
-  const anioAct=hoyF.slice(0,4);
-  const per=[
-    ["Diario",retornoEntre(serie,restarDias(ult.fecha,1),ult.fecha)],
-    ["Semanal",retornoEntre(serie,restarDias(hoyF,7),hoyF)],
-    ["Mensual",retornoEntre(serie,hoyF.slice(0,8)+"01",hoyF)],
-    ["YTD",retornoEntre(serie,(+anioAct-1)+"-12-31",hoyF)],
-  ];
-  const cardsPer=per.map(([nom,r])=>{
-    if(!r) return card(nom,"—","sin datos todavía");
-    const det=r.sp!=null?`S&amp;P ${sgn(r.sp*100)} · ${r.dias}d`:`${r.dias} día${r.dias>1?"s":""}`;
-    return card(nom,sgn(r.ret*100),det,cls(r.ret));
-  });
-
-  // Un card por año calendario con datos
-  const anios=[...new Set(serie.map(d=>d.fecha.slice(0,4)))].sort();
-  for(const a of anios){
-    const r=retornoEntre(serie,(+a-1)+"-12-31",a+"-12-31");
-    if(r) cardsPer.push(card(a,sgn(r.ret*100),
-      r.sp!=null?`S&amp;P ${sgn(r.sp*100)} · ${r.dias}d`:`${r.dias}d`,cls(r.ret)));
-  }
-
-  let html=`<div class="section-h"><span class="idx">${secIdxRef}</span><h2>Rendimiento por período</h2>
-    <span style="margin-left:auto">time-weighted · ${serie.length} días registrados</span></div>
-    ${filasGrid(cardsPer,"perf-grid",4)}`;
-
-  // ── Riesgo ──
   const m=metricasRiesgo(serie);
   const MIN_VOL=20, MIN_BETA=20;
-  const idx2=String(+secIdxRef+1).padStart(2,"0");
-  html+=`<div class="section-h"><span class="idx">${idx2}</span><h2>Riesgo</h2>
-    <span style="margin-left:auto">${m.n} retornos diarios</span></div>`;
-  if(m.n<MIN_VOL){
-    html+=`<div class="chart-warn">Con ${m.n} día${m.n>1?"s":""} de historial todavía no tiene sentido estimar
-      volatilidad ni ratios ajustados por riesgo — harían falta al menos ${MIN_VOL} para que el número
-      signifique algo y no sea ruido. Se habilitan solos cuando se llegue.</div>`;
+  let html=`<div class="section-h"><span class="idx">${secIdxRef}</span><h2>Riesgo</h2>
+    <span style="margin-left:auto">${m?.n||0} retornos diarios · ${rango.etiqueta}</span></div>`;
+  if(!m||m.n<MIN_VOL){
+    html+=`<div class="chart-warn">Con ${m?.n||0} día${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
+      todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
+      ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
+      más largo, o esperá a que se acumulen más días.</div>`;
   } else {
     const cardsR=[
       card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío de los retornos diarios"),
-      card("Retorno anualizado",sgn(m.retAnual*100),"del período registrado",cls(m.retAnual)),
+      card("Retorno anualizado",sgn(m.retAnual*100),"del período elegido",cls(m.retAnual)),
       card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),"retorno por unidad de riesgo · tasa libre 0",
         m.sharpe==null?"":cls(m.sharpe)),
       card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),"idem, solo penaliza caídas",
@@ -1204,9 +1235,10 @@ function seccionPeriodos(secIdxRef){
     ];
     html+=filasGrid(cardsR,"perf-grid",4);
     html+=`<div class="hint" style="margin-top:12px;line-height:1.9">
-      Calculado con ${m.n} retornos diarios y anualizado a 252 ruedas. Sharpe y Sortino usan tasa libre de
-      riesgo 0: en pesos no hay una referencia razonable y en dólares cambiaría poco el orden de magnitud,
-      así que conviene leerlos como comparación relativa entre períodos más que como un valor absoluto.</div>`;
+      Calculado con ${m.n} retornos diarios de ${rango.etiqueta.toLowerCase()} y anualizado a 252 ruedas. Sharpe
+      y Sortino usan tasa libre de riesgo 0: en pesos no hay una referencia razonable y en dólares cambiaría
+      poco el orden de magnitud, así que conviene leerlos como comparación relativa entre períodos más que
+      como un valor absoluto.</div>`;
   }
   return html;
 }
@@ -1362,83 +1394,148 @@ function render(soloEstructura){
 
   let secIdx=0;
   // ══ RENDIMIENTOS ══
-  const met=metricasPorPosicion(pos).filter(p=>p.ret!=null).sort((a,b)=>b.ret-a.ret);
-  if(TAB==="rendimientos"&&met.length&&!sinPx.length){
-    const invTot=met.reduce((s,p)=>s+p.costoM,0);
-    const valTot=met.reduce((s,p)=>s+p.valM,0);
-    // Retorno de la cartera sobre CAPITAL APORTADO (incluye resultado de ventas cerradas),
-    // no sobre el costo de las posiciones vivas: si no, las ventas quedan fuera de la cuenta.
-    const srT=serieRendimiento();
-    const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
-    const retTot=baseCap>0?(total+(srT?.retirado||0))/baseCap-1:0;
-    const benchTot=srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null;
-    const benchNdx=srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null;
-    const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
-    const diasTot=diasEntre(fPrim,hoy());
-    const tnaTot=anualizar(retTot,diasTot);
-    // Contribución de cada posición al retorno total de la cartera
-    met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
-    const mejor=met[0], peor=met[met.length-1];
-    const realTot=MONEDA==="ARS"?realARS:realUSD;
+  if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
+    const serieT=serieDiaria(); // ya descarta días con menos de US$100 de NAV
+    const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))].sort().reverse();
+    const rango=rangoPeriodo(PERIODO);
+    const selectorHtml=`<select id="sel-periodo" onchange="setPeriodo(this.value)"
+        style="width:auto;padding:6px 10px;font-size:12px;margin-left:auto">
+      <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
+      <option value="ytd" ${PERIODO==="ytd"?"selected":""}>YTD</option>
+      <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
+      <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
+      ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
+    </select>`;
 
-    const cardsPerf=[
-      `<div class="perf hero"><div class="k">Retorno total</div>
-        <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
-        <div class="d">${signoMoney(total+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""}</div></div>`,
-      `<div class="perf"><div class="k">TNA equivalente</div>
-        <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
-        <div class="d">anualizado · ${diasTot}d</div></div>`,
-      benchTot!=null?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
-        <div class="v ${cls(retTot-benchTot)}">${sgn((retTot-benchTot)*100)}</div>
-        <div class="d">índice ${sgn(benchTot*100)} con tus mismos aportes</div></div>`:null,
-      benchNdx!=null?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
-        <div class="v ${cls(retTot-benchNdx)}">${sgn((retTot-benchNdx)*100)}</div>
-        <div class="d">índice ${sgn(benchNdx*100)} con tus mismos aportes</div></div>`:null,
-      `<div class="perf"><div class="k">Capital aportado</div>
-        <div class="v">${money(baseCap)}</div>
-        <div class="d">plata que entró de afuera</div></div>`,
-      mejor?`<div class="perf"><div class="k">Mejor posición</div>
-        <div class="v up" style="font-size:20px">${mejor.tipo==="fci"?mejor.fondo.split(" - ")[0]:mejor.ticker}</div>
-        <div class="d up">${sgn(mejor.ret*100)}</div></div>`:null,
-      peor?`<div class="perf"><div class="k">Peor posición</div>
-        <div class="v ${cls(peor.ret)}" style="font-size:20px">${peor.tipo==="fci"?peor.fondo.split(" - ")[0]:peor.ticker}</div>
-        <div class="d ${cls(peor.ret)}">${sgn(peor.ret*100)}</div></div>`:null,
-      Math.abs(realTot)>0.01?`<div class="perf"><div class="k">Resultado realizado</div>
-        <div class="v ${cls(realTot)}">${signoMoney(realTot)}</div>
-        <div class="d">ventas cerradas</div></div>`:null,
-    ];
+    let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
+
+    if(PERIODO==="todo"){
+      // Camino de siempre: retorno money-weighted sobre el capital aportado
+      // total, con la tabla detallada por posición desde su primera compra.
+      const met=metricasPorPosicion(pos).filter(p=>p.ret!=null).sort((a,b)=>b.ret-a.ret);
+      if(met.length){
+        const invTot=met.reduce((s,p)=>s+p.costoM,0);
+        const srT=serieRendimiento();
+        const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
+        const retTot=baseCap>0?(total+(srT?.retirado||0))/baseCap-1:0;
+        const benchTot=srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null;
+        const benchNdx=srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null;
+        const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
+        const diasTot=diasEntre(fPrim,hoy());
+        const tnaTot=anualizar(retTot,diasTot);
+        met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
+        const mejor=met[0], peor=met[met.length-1];
+        const realTot=MONEDA==="ARS"?realARS:realUSD;
+
+        cardsPerf=[
+          `<div class="perf hero"><div class="k">Retorno total</div>
+            <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
+            <div class="d">${signoMoney(total+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""}</div></div>`,
+          `<div class="perf"><div class="k">TNA equivalente</div>
+            <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
+            <div class="d">anualizado · ${diasTot}d</div></div>`,
+          benchTot!=null?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
+            <div class="v ${cls(retTot-benchTot)}">${sgn((retTot-benchTot)*100)}</div>
+            <div class="d">índice ${sgn(benchTot*100)} con tus mismos aportes</div></div>`:null,
+          benchNdx!=null?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
+            <div class="v ${cls(retTot-benchNdx)}">${sgn((retTot-benchNdx)*100)}</div>
+            <div class="d">índice ${sgn(benchNdx*100)} con tus mismos aportes</div></div>`:null,
+          `<div class="perf"><div class="k">Capital aportado</div>
+            <div class="v">${money(baseCap)}</div>
+            <div class="d">plata que entró de afuera</div></div>`,
+          mejor?`<div class="perf"><div class="k">Mejor posición</div>
+            <div class="v up" style="font-size:20px">${mejor.tipo==="fci"?mejor.fondo.split(" - ")[0]:mejor.ticker}</div>
+            <div class="d up">${sgn(mejor.ret*100)}</div></div>`:null,
+          peor?`<div class="perf"><div class="k">Peor posición</div>
+            <div class="v ${cls(peor.ret)}" style="font-size:20px">${peor.tipo==="fci"?peor.fondo.split(" - ")[0]:peor.ticker}</div>
+            <div class="d ${cls(peor.ret)}">${sgn(peor.ret*100)}</div></div>`:null,
+          Math.abs(realTot)>0.01?`<div class="perf"><div class="k">Resultado realizado</div>
+            <div class="v ${cls(realTot)}">${signoMoney(realTot)}</div>
+            <div class="d">ventas cerradas</div></div>`:null,
+        ];
+        metaHtml=`<span>${diasTot} días · desde ${fPrim}</span>`;
+        tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
+            <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
+            <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th>TNA</th><th class="l" style="width:130px">Contribución</th>
+          </tr></thead><tbody>
+          ${met.map(p=>{
+            const maxC=Math.max(...met.map(x=>Math.abs(x.contrib)))||1;
+            const w=Math.abs(p.contrib)/maxC*100;
+            return `<tr><td class="tk">${p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker}</td>
+            <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
+            <td>${p.desde||"—"}</td><td>${p.dias||"—"}</td>
+            <td>${money(p.costoM)}</td><td>${money(p.valM)}</td>
+            <td class="${cls(p.valM-p.costoM)}">${signoMoney(p.valM-p.costoM)}</td>
+            <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
+            <td class="${cls(p.tna)}" ${p.dias<90&&p.tna!=null?'title="Extrapolado desde '+p.dias+' días — tomar con cautela"':""}>${p.tna==null?"—":sgn(p.tna*100)+(p.dias<90?"*":"")}</td>
+            <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
+              <span>${sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
+          </tbody></table></div>`;
+        notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
+          <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${MONEDA==="ARS"?"pesos":"dólares MEP"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
+          TNA anualiza con base 365 y requiere más de 30 días de tenencia; los valores marcados con * extrapolan menos de 90 días y conviene leerlos con reservas.
+          La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
+          <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.</div>`;
+      }
+    } else {
+      // Cualquier otro período: retorno time-weighted sobre la serie diaria
+      // (la misma que usa Riesgo), que sí tiene sentido para una ventana corta.
+      const r=retornoEntre(serieT,rango.desde,rango.hasta);
+      if(r){
+        const srT=serieRendimiento();
+        const a0=srT?srT.aporteEn(rango.desde):null, a1=srT?srT.aporteEn(rango.hasta):null;
+        const aportePer=(a0&&a1)?(a1.ap-a0.ap):null;
+        const tnaPer=anualizar(r.ret,r.dias);
+        const metP=metricasPorPosicionEnPeriodo(pos,rango.desde,rango.hasta).sort((a,b)=>b.ret-a.ret);
+        const mejor=metP[0], peor=metP[metP.length-1];
+        const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(rango.desde,rango.hasta);
+        const realPer=MONEDA==="ARS"?rA:rU;
+
+        cardsPerf=[
+          `<div class="perf hero"><div class="k">Retorno del período</div>
+            <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
+            <div class="d">time-weighted · ${r.dias} día${r.dias>1?"s":""}</div></div>`,
+          `<div class="perf"><div class="k">TNA equivalente</div>
+            <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
+            <div class="d">anualizado · ${r.dias}d</div></div>`,
+          r.sp!=null?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
+            <div class="v ${cls(r.ret-r.sp)}">${sgn((r.ret-r.sp)*100)}</div>
+            <div class="d">índice ${sgn(r.sp*100)} en el período</div></div>`:null,
+          r.ndx!=null?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
+            <div class="v ${cls(r.ret-r.ndx)}">${sgn((r.ret-r.ndx)*100)}</div>
+            <div class="d">índice ${sgn(r.ndx*100)} en el período</div></div>`:null,
+          aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
+            <div class="v">${money(aportePer)}</div>
+            <div class="d">entró durante el período</div></div>`:null,
+          mejor?`<div class="perf"><div class="k">Mejor posición</div>
+            <div class="v up" style="font-size:20px">${mejor.ticker}</div>
+            <div class="d up">${sgn(mejor.ret*100)}</div></div>`:null,
+          peor?`<div class="perf"><div class="k">Peor posición</div>
+            <div class="v ${cls(peor.ret)}" style="font-size:20px">${peor.ticker}</div>
+            <div class="d ${cls(peor.ret)}">${sgn(peor.ret*100)}</div></div>`:null,
+          Math.abs(realPer)>0.01?`<div class="perf"><div class="k">Resultado realizado</div>
+            <div class="v ${cls(realPer)}">${signoMoney(realPer)}</div>
+            <div class="d">ventas cerradas en el período</div></div>`:null,
+        ];
+        metaHtml=`<span>${r.dias} días · ${r.desde} → ${r.hasta}</span>`;
+        notaHtml=`<div class="perf-note">Retorno <b>time-weighted</b>: cada día se descuenta el dinero que entró o
+          salió, así un depósito no se confunde con una ganancia. Mejor/peor posición y vs. índices comparan
+          precio contra el arranque del período, no contra tu costo de compra. Los días con menos de
+          US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
+          % sin sentido.</div>`;
+      }
+    }
+
     html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Rendimientos</h2>
-      <span>${diasTot} días · desde ${fPrim}</span></div>
-    ${filasGrid(cardsPerf,"perf-grid",4)}
-    <div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
-      <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
-      <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th>TNA</th><th class="l" style="width:130px">Contribución</th>
-    </tr></thead><tbody>
-    ${met.map(p=>{
-      const maxC=Math.max(...met.map(x=>Math.abs(x.contrib)))||1;
-      const w=Math.abs(p.contrib)/maxC*100;
-      return `<tr><td class="tk">${p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker}</td>
-      <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
-      <td>${p.desde||"—"}</td><td>${p.dias||"—"}</td>
-      <td>${money(p.costoM)}</td><td>${money(p.valM)}</td>
-      <td class="${cls(p.valM-p.costoM)}">${signoMoney(p.valM-p.costoM)}</td>
-      <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
-      <td class="${cls(p.tna)}" ${p.dias<90&&p.tna!=null?'title="Extrapolado desde '+p.dias+' días — tomar con cautela"':""}>${p.tna==null?"—":sgn(p.tna*100)+(p.dias<90?"*":"")}</td>
-      <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
-        <span>${sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
-    </tbody></table></div>
-    <div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
-      <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${MONEDA==="ARS"?"pesos":"dólares MEP"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
-      TNA anualiza con base 365 y requiere más de 30 días de tenencia; los valores marcados con * extrapolan menos de 90 días y conviene leerlos con reservas.
-      La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
-      <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.</div>`;
+      ${metaHtml}${selectorHtml}</div>`;
+    html+=cardsPerf
+      ? filasGrid(cardsPerf,"perf-grid",4)+tablaHtml+notaHtml
+      : `<div class="chart-warn">No hay datos suficientes todavía para calcular ${rango.etiqueta.toLowerCase()}.</div>`;
   }
-  // El historial por período y las métricas de riesgo dependen de los snapshots
-  // diarios, no de tener posiciones abiertas: se muestran igual aunque la
-  // cartera esté cerrada o algún precio no haya cargado.
+  // Riesgo depende de los snapshots diarios, no de tener posiciones abiertas:
+  // se muestra igual aunque la cartera esté cerrada o algún precio no cargue.
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    html+=seccionPeriodos(String(++secIdx).padStart(2,"0"));
-    secIdx++;   // seccionPeriodos usa dos números: períodos y riesgo
+    html+=seccionRiesgo(String(++secIdx).padStart(2,"0"),rangoPeriodo(PERIODO));
   }
 
   // Tablas de posiciones
