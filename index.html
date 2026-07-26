@@ -1085,16 +1085,25 @@ function metricasPorPosicion(pos){
 
 /* ══════════════ Carga de precios y valuación ══════════════ */
 async function cargar(){
-  const err=document.getElementById("err"); err.style.display="none";
+  const err=document.getElementById("err"); err.style.display="none"; err.innerHTML="";
   document.getElementById("ts").textContent="Actualizando cotizaciones…";
   try{
     const {posiciones, realARS, realUSD}=derivarPosiciones();
     const tipos=[...new Set([...posiciones.map(p=>p.tipo),"cedear"])].filter(t=>EP[t]);
-    const cats=[...new Set(posiciones.filter(p=>p.tipo==="fci").map(p=>p.categoria))];
-    const [dolares,...resto]=await Promise.all([
-      getJSON("https://dolarapi.com/v1/dolares"),
-      ...tipos.map(t=>getJSON(EP[t]).then(d=>({t,d}))),
-      ...cats.map(c=>getJSON("https://api.argentinadatos.com/v1/finanzas/fci/"+c+"/ultimo").then(d=>({t:"fci:"+c,d})))
+    // Posiciones de FCI con categoría inválida (dato viejo de un import previo
+    // a un fix, o editado a mano mal): se excluyen de la consulta en vez de
+    // tirar abajo TODO el fetch de precios — quedan sin cotizar, no rompen
+    // el resto de la cartera. Se avisa después, apuntando a Movimientos.
+    const posFciSinCategoria=posiciones.filter(p=>p.tipo==="fci"&&!p.categoria);
+    const cats=[...new Set(posiciones.filter(p=>p.tipo==="fci"&&p.categoria).map(p=>p.categoria))];
+    const dolares=await getJSON("https://dolarapi.com/v1/dolares");
+    // Cada tipo/categoría se pide por separado y tolera su propio fallo (un
+    // ticker o fondo con datos corruptos no debe tumbar la actualización de
+    // TODO lo demás — antes un solo 404 dejaba la app entera en "Consultando
+    // precios…" para siempre).
+    const resto=await Promise.all([
+      ...tipos.map(t=>getJSON(EP[t]).then(d=>({t,d})).catch(()=>({t,d:[]}))),
+      ...cats.map(c=>getJSON("https://api.argentinadatos.com/v1/finanzas/fci/"+c+"/ultimo").then(d=>({t:"fci:"+c,d})).catch(()=>({t:"fci:"+c,d:[]})))
     ]);
     const precios={};
     for(const {t,d} of resto){ precios[t]={}; for(const r of d) precios[t][r.symbol??r.fondo]=r; }
@@ -1133,6 +1142,14 @@ async function cargar(){
     ESTADO={pos,fx,MEP,CCL,realARS,realUSD,hora:new Date(),preciosCedears:precios.cedear||{}};
     conn(true);
 
+    if(posFciSinCategoria.length){
+      const nombres=posFciSinCategoria.map(p=>p.fondo).join(", ");
+      err.innerHTML=`Hay un problema en Movimientos: ${posFciSinCategoria.length} fondo(s) sin categoría reconocida (${nombres}) — no se pudo traer su cotización. `+
+        `Lo más simple es borrar ese movimiento y volver a cargarlo. `+
+        `<button class="btn mini" style="margin-left:6px" onclick="setTab('movimientos')">Ir a Movimientos</button>`;
+      err.style.display="block";
+    }
+
     // Snapshot diario (uno por fecha, se pisa si ya existe) — incluye liquidez
     const cashARS=Object.values(DATOS.saldos||{}).reduce((s,x)=>s+(x.ars||0)+(x.usd||0)*MEP,0);
     const tARS=pos.reduce((s,p)=>s+(p.valARS||0),0)+cashARS;
@@ -1147,7 +1164,9 @@ async function cargar(){
     render();
   }catch(e){
     conn(false);
-    err.textContent="Enlace interrumpido — "+e.message;
+    err.innerHTML=`Enlace interrumpido — ${e.message}. Si el error menciona un fondo o ticker puntual, probablemente haya un movimiento con datos inválidos: `+
+      `revisalo o borralo en Movimientos y volvé a cargarlo. `+
+      `<button class="btn mini" style="margin-left:6px" onclick="setTab('movimientos')">Ir a Movimientos</button>`;
     err.style.display="block";
     document.getElementById("ts").textContent="ERROR DE SYNC";
     render(true);
