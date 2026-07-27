@@ -789,13 +789,14 @@ async function reconstruirHistorialSnapshots(){
   for(const f of fechas){
     const {posiciones}=derivarPosiciones(null,f);
     if(!posiciones.length) continue;
-    // fci, manual, ON y acciones individuales no tienen precio histórico en
-    // ninguna fuente todavía (historial/*.json solo cubre "cedear" y "bono").
-    // Sin este chequeo, un día con una acción o un FCI en cartera se
-    // reconstruye igual pero esa posición puntual queda sin precio — el NAV
-    // de ese día sale de menos de lo que debería, como si esa plata hubiera
+    // manual y ON no tienen precio histórico en ninguna fuente todavía
+    // (historial/*.json cubre "cedear", "bono", y ahora también "accion" y
+    // "fci" para los tickers puntuales que se fueron agregando a mano).
+    // Sin este chequeo, un día con una posición sin cobertura se reconstruye
+    // igual pero esa posición puntual queda sin precio — el NAV de ese día
+    // sale de menos de lo que debería, como si esa plata hubiera
     // desaparecido, y el snapshot "roto" queda guardado para siempre.
-    if(posiciones.some(p=>p.tipo==="fci"||p.tipo==="manual"||p.tipo==="on"||p.tipo==="accion")) continue;
+    if(posiciones.some(p=>p.tipo==="manual"||p.tipo==="on")) continue;
     let valARS=0, falta=false;
     for(const p of posiciones){
       const h=precioHistorial(p.tipo,p.ticker,f);
