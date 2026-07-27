@@ -1168,17 +1168,16 @@ const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 100
 
 /* ══════════════ Estado y persistencia ══════════════ */
 let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}};
-let MONEDA="ARS", VISTA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
+let VISTA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
 /* VISTA: "ARS" | "MEP" | "CCL" — moneda de valuación para Inicio/Rendimientos/
-   Movimientos. MONEDA se mantiene en paralelo (ARS/USD) solo para no tocar la
-   lógica de la pestaña Mercado, que todavía no distingue MEP de CCL: cuando
-   VISTA es MEP o CCL, Mercado sigue mostrando USD al MEP como siempre (se
-   separará en un trabajo aparte). Los retornos % (time-weighted, Sharpe,
+   Movimientos y Mercado. En Mercado, ARS usa la especie base, USD MEP la D y
+   USD CCL la C real o, si Data912 no la publica, un CCL implícito. Los retornos %
+   (time-weighted, Sharpe,
    volatilidad, TNA fuera de "histórico completo") se calculan siempre sobre la
    base dólar-MEP bimonetaria de cada operación — no cambian entre MEP y CCL,
    porque no hay un tipo de cambio CCL histórico por movimiento. Lo que sí
    cambia con MEP/CCL son los montos absolutos de hoy (valuación, liquidez,
-   NAV, P&amp;L no realizado, capital aportado expresado en $).
+   NAV, P&amp;L no realizado, capital aportado expresado en $). */
 /* ── Benchmark S&P 500: serie embebida + extensión en vivo vía CEDEAR SPY ── */
 /* Series diarias de S&P 500 y Nasdaq 100 (FRED), desde 2022 — cubren todo el
    historial de operaciones. Van comprimidas: fecha base + huecos en días entre
@@ -1563,7 +1562,6 @@ async function getJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error
 
 function setMoneda(m){
   VISTA=m;
-  MONEDA=m==="ARS"?"ARS":"USD"; // Mercado solo distingue ARS/USD (siempre al MEP) por ahora
   document.getElementById("btn-ars").classList.toggle("active",m==="ARS");
   document.getElementById("btn-mep").classList.toggle("active",m==="MEP");
   document.getElementById("btn-ccl").classList.toggle("active",m==="CCL");
@@ -2971,12 +2969,6 @@ function emisorDeON(sym){
 
 /* ══════════════ Pestaña Mercado ══════════════ */
 let MKT_Q="", MKT_TS=0, MKT={}, MKT_SUB="acciones", MKT_FILTRO="todos";
-// Quita el sufijo de especie (C/D) solo si el símbolo base existe en el panel;
-// así "INTC" (Intel) no se confunde con una especie "INT+C".
-function subOf(s,panel){
-  if(/[DC]$/.test(s)&&panel&&panel[s.slice(0,-1)]!=null) return s.slice(0,-1);
-  return s;
-}
 function clasificarPeso(s){
   if(/^(AL|GD|AE|BP|BA37|GD3|GD4)/.test(s)) return "usd";
   if(/^TT/.test(s)) return "dual";
@@ -2990,48 +2982,93 @@ const esProvincial=s=>/^(BA|PB|BP|PM|MD|MG|MZ|CO|CH|NE|RN|SL|SA|TF|TU|ER|CE|FE)/
 // Algunas especies no siguen el patrón "ticker de pesos + D/C" para su
 // variante en dólares (irregularidad puntual de nomenclatura de BYMA).
 // Mapeo manual solo para esos casos conocidos — el resto sigue el patrón normal.
-const ALIAS_USD={GOOGL:"GOGL"};
-function raizUSD(sym){
-  const recorte=sym.slice(0,-1);
-  const alias=Object.entries(ALIAS_USD).find(([,r])=>r===recorte);
-  return alias?alias[0]:recorte;
+// GOOGL/GOGL es una irregularidad de CEDEAR. TECO2/TECO y TGNO4/TGN4 son
+// raíces irregulares verificadas en el panel de acciones de BYMA.
+const ALIAS_USD={GOOGL:"GOGL",TECO2:"TECO",TGNO4:"TGN4"};
+const ETIQUETA_MKT={ARS:"ARS",MEP:"USD MEP",CCL:"USD CCL"};
+const INDICE_PANEL=new WeakMap();
+const normalizarEspecie=s=>String(s||"").toUpperCase().replace(/[.\s]/g,"");
+function indicePanel(panel){
+  if(!panel||typeof panel!=="object") return {};
+  let idx=INDICE_PANEL.get(panel);
+  if(!idx){
+    idx={};
+    for(const r of Object.values(panel)) if(r?.symbol) idx[normalizarEspecie(r.symbol)]=r;
+    INDICE_PANEL.set(panel,idx);
+  }
+  return idx;
 }
-const esEspecieUSD=(sym,panel)=>/[DC]$/.test(sym)&&panel[raizUSD(sym)]!=null;
+function buscarFila(panel,sym){ return indicePanel(panel)[normalizarEspecie(sym)]||null; }
+function baseAliasDeRaiz(raiz){
+  const par=Object.entries(ALIAS_USD).find(([,r])=>r===raiz);
+  return par?par[0]:null;
+}
+function varianteDe(sym,panel){
+  const s=normalizarEspecie(sym), suf=s.slice(-1);
+  if(suf!=="D"&&suf!=="C") return null;
+  const raiz=s.slice(0,-1);
+  let base=baseAliasDeRaiz(raiz);
+  if(!base){
+    if(buscarFila(panel,raiz)) base=raiz;
+    else if(buscarFila(panel,raiz+"O")) base=raiz+"O";
+    else if(COMAFI[raiz]||NOMBRE_AR[raiz]) base=raiz;
+    else return null;
+  }
+  return {base,mercado:suf==="D"?"MEP":"CCL"};
+}
+function subOf(s,panel){ return varianteDe(s,panel)?.base||normalizarEspecie(s); }
+function familiaDe(row,panel){
+  const base=varianteDe(row.symbol,panel)?.base||normalizarEspecie(row.symbol);
+  const raices=[];
+  if(ALIAS_USD[base]) raices.push(ALIAS_USD[base]);
+  if(/O$/.test(base)) raices.push(base.slice(0,-1));
+  raices.push(base);
+  const en=suf=>{
+    for(const raiz of [...new Set(raices)]){
+      const r=buscarFila(panel,raiz+suf);
+      if(r) return r;
+    }
+    return null;
+  };
+  return {base,ars:buscarFila(panel,base),mep:en("D"),ccl:en("C")};
+}
+function filasCanonicas(panel){
+  const fam={};
+  for(const r of Object.values(panel||{})){
+    if(!r?.symbol) continue;
+    const variante=varianteDe(r.symbol,panel);
+    const base=variante?.base||normalizarEspecie(r.symbol);
+    // Se prefiere la fila ARS como representante. Si no existe (p.ej. una
+    // rueda sin operaciones en pesos), igual se conserva una sola familia.
+    if(!fam[base]||!variante) fam[base]={...r,symbol:base};
+  }
+  return Object.values(fam);
+}
 
-/* ══ Precio/variación según el toggle ARS/USD global (misma variable MONEDA
-   que usa el resto de la app) ══
-   Nunca convierte por MEP/CCL: siempre muestra una cotización real de la
-   especie. Si el toggle pide una moneda que esa especie no tiene cotizada
-   por separado, sigue mostrando la única que existe, marcada como tal. */
-function nativoDe(row){
-  // Algunos bonos (p.ej. provinciales) solo existen en su liquidación en
-  // dólares, sin par en pesos — se detectan por sufijo D/C + escala de precio.
-  if(/[DC]$/.test(row.symbol)&&row.c<1000) return "USD";
-  return "ARS";
-}
+/* Precio/variación elegida: ARS=base, MEP=D, CCL=C. Data912 actualmente no
+   publica las especies C del panel; si existe la familia USD (especie D) pero
+   falta C, se calcula un CCL implícito con la especie ARS / dólar CCL. Cuando
+   el proveedor incorpore C, la cotización real tiene prioridad automática. */
 function dualPV(row,panel){
-  const nat=nativoDe(row);
-  if(MONEDA===nat) return {c:row.c,pct:row.pct_change,bid:row.px_bid,ask:row.px_ask,moneda:nat,nativo:true};
-  let otro=null;
-  if(MONEDA==="USD"&&nat==="ARS"&&panel){
-    const raiz=ALIAS_USD[row.symbol]||row.symbol;
-    otro=panel[raiz+"D"]||panel[raiz+"C"];
-    // Las ONs cotizan en pesos con sufijo "O" (no se le agrega la D, se la
-    // reemplaza): MGCRO → MGCRD, no MGCROD.
-    if(!otro&&/O$/.test(row.symbol)){
-      const raizON=row.symbol.slice(0,-1);
-      otro=panel[raizON+"D"]||panel[raizON+"C"];
+  const fam=familiaDe(row,panel);
+  let elegida=VISTA==="ARS"?fam.ars:VISTA==="MEP"?fam.mep:fam.ccl;
+  if(VISTA==="CCL"&&!elegida&&fam.mep&&ESTADO?.CCL){
+    const fuente=fam.ars||fam.mep;
+    const factor=fam.ars?1/ESTADO.CCL:(ESTADO.MEP?ESTADO.MEP/ESTADO.CCL:null);
+    if(fuente&&factor){
+      return {c:fuente.c*factor,pct:null,
+        bid:fuente.px_bid?fuente.px_bid*factor:null,
+        ask:fuente.px_ask?fuente.px_ask*factor:null,
+        v:fuente.v,moneda:ETIQUETA_MKT.CCL,nativo:false,derivado:true,row:fuente};
     }
   }
-  if(MONEDA==="ARS"&&nat==="USD"&&panel){
-    const base=panel[raizUSD(row.symbol)];
-    if(base&&nativoDe(base)==="ARS") otro=base;
-  }
-  if(otro) return {c:otro.c,pct:otro.pct_change,bid:otro.px_bid,ask:otro.px_ask,moneda:MONEDA,nativo:true};
-  return {c:row.c,pct:row.pct_change,bid:row.px_bid,ask:row.px_ask,moneda:nat,nativo:false};
+  if(!elegida) return {c:null,pct:null,bid:null,ask:null,v:null,moneda:ETIQUETA_MKT[VISTA],nativo:false,row:null};
+  return {c:elegida.c,pct:elegida.pct_change,bid:elegida.px_bid,ask:elegida.px_ask,
+    v:elegida.v,moneda:ETIQUETA_MKT[VISTA],nativo:true,row:elegida};
 }
 function tagMoneda(pv){
-  return !pv.nativo?`<span class="mc-chip" style="margin-left:6px">solo ${pv.moneda}</span>`:"";
+  if(pv.derivado) return `<span class="mc-chip" style="margin-left:6px">CCL implícito</span>`;
+  return !pv.nativo?`<span class="mc-chip" style="margin-left:6px">sin ${pv.moneda}</span>`:"";
 }
 
 
@@ -3044,7 +3081,7 @@ const MKT_MENU=[
 ];
 
 function panelMacro(){
-  const cd=s=>MKT.cedear?.[s];
+  const cd=s=>buscarFila(MKT.cedear,s);
   const lvl=(r,k,dec=0)=>r?fmt(r.c*k,dec):null;
   const mc=(nom,val,vr,extra)=>`<div class="mc"><div class="mc-k">${nom}</div>
     <div class="mc-v">${val??"—"}</div>
@@ -3052,7 +3089,10 @@ function panelMacro(){
   const chip=t=>`<span class="mc-chip">${t}</span>`;
 
   // Merval: no tiene API gratuita — variación ponderada por volumen del panel líder
-  const accL=Object.values(MKT.accion||{}).filter(r=>!esEspecieUSD(r.symbol,MKT.accion)&&r.pct_change!=null&&r.v&&r.c);
+  const accL=filasCanonicas(MKT.accion).filter(r=>{
+    const ars=familiaDe(r,MKT.accion).ars;
+    return ars?.pct_change!=null&&ars.v&&ars.c;
+  }).map(r=>familiaDe(r,MKT.accion).ars);
   let merv=null;
   if(accL.length){ const W=accL.reduce((s,r)=>s+r.v*r.c,0); merv=accL.reduce((s,r)=>s+r.pct_change*r.v*r.c,0)/W; }
 
@@ -3099,7 +3139,7 @@ async function renderMercado(){
 
   const buscador=`<div class="mkt-bar">
     <input id="mkt-q" placeholder="Buscar especie…" value="${MKT_Q.replace(/"/g,'&quot;')}" oninput="MKT_Q=this.value;renderMercado()">
-    <span class="mkt-ts">BYMA · ${new Date(MKT_TS).toLocaleTimeString("es-AR",{hour12:false})} · mostrando en ${MONEDA}</span>
+    <span class="mkt-ts">BYMA · ${new Date(MKT_TS).toLocaleTimeString("es-AR",{hour12:false})} · mostrando en ${ETIQUETA_MKT[VISTA]}</span>
   </div>`;
 
   const q=MKT_Q.trim().toUpperCase();
@@ -3112,7 +3152,10 @@ async function renderMercado(){
   else if(MKT_SUB==="provinciales") cuerpo=vistaProvinciales(F);
   else if(MKT_SUB==="ons") cuerpo=vistaONs(F);
 
-  cont.innerHTML=panelMacro()+menu+buscador+cuerpo;
+  const notaCCL=VISTA==="CCL"
+    ?'<div class="mkt-foot">CCL implícito: cuando Data912 no publica la especie C, se calcula con la especie ARS y el dólar CCL del panel. Si existe una cotización C real, se usa esa primero.</div>'
+    :"";
+  cont.innerHTML=panelMacro()+menu+buscador+cuerpo+notaCCL;
   const inp=document.getElementById("mkt-q");
   if(q&&inp){ inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length); }
 }
@@ -3120,7 +3163,7 @@ async function renderMercado(){
 // ── Acciones / CEDEARs con filtro acción-ETF y sector ──
 function vistaRV(panel,tipo,F,q){
   const esCedear=tipo==="cedear";
-  let rows=Object.values(panel||{}).filter(r=>!esEspecieUSD(r.symbol,panel)).filter(r=>F(r.symbol));
+  let rows=filasCanonicas(panel).filter(r=>F(r.symbol));
   // Info por especie: Comafi para CEDEARs (nombre real + flag ETF confiable), mapa local para acciones AR
   const infoDe=s=>{
     const base=subOf(s,panel);
@@ -3133,7 +3176,10 @@ function vistaRV(panel,tipo,F,q){
     acciones:r=>!(infoDe(r.symbol)?.etf),
     etfs:r=>!!(infoDe(r.symbol)?.etf),
   }[MKT_FILTRO];
-  rows=rows.filter(filtroFn).sort((a,b)=>(b.v||0)*(b.c||0)-(a.v||0)*(a.c||0));
+  rows=rows.filter(filtroFn).sort((a,b)=>{
+    const pb=dualPV(b,panel), pa=dualPV(a,panel);
+    return (pb.v||0)*(pb.c||0)-(pa.v||0)*(pa.c||0);
+  });
   const total=rows.length;
   const lim=q?rows.length:60;
   const vis=rows.slice(0,lim);
@@ -3145,17 +3191,18 @@ function vistaRV(panel,tipo,F,q){
     const info=infoDe(r.symbol)||{};
     const rubro=info.etf?(info.rubro||"ETF"):(info.sector||"—");
     const pv=dualPV(r,panel);
-    const simbolo=pv.moneda==="USD"?"US$ ":"$ ";
-    const dec=pv.moneda==="USD"?2:(pv.c<100?2:0);
+    const simbolo=VISTA==="ARS"?"$ ":"US$ ";
+    const dec=VISTA==="ARS"?(pv.c<100?2:0):2;
+    const volumen=pv.v&&pv.c?pv.v*pv.c:null;
     return `<tr>
     <td class="tk">${r.symbol}${tagMoneda(pv)}</td>
     <td class="l"><span class="nom-emp">${info.n||"—"}</span></td>
     <td class="l"><span class="sector">${rubro}</span></td>
-    <td>${simbolo}${fmt(pv.c,dec)}</td>
+    <td>${pv.c==null?"—":simbolo+fmt(pv.c,dec)}</td>
     <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td>
-    <td>${r.v?fmt(r.v*r.c/1e6,1)+" M":"—"}</td></tr>`;}).join("");
+    <td>${volumen?fmt(volumen/1e6,1)+" M":"—"}</td></tr>`;}).join("");
   return chips+`<div class="tbl-scroll"><table><thead><tr>
-    <th>Especie</th><th class="l">Nombre</th><th class="l">${esCedear?"Sector / Rubro":"Sector"}</th><th>Último</th><th>Var %</th><th>Vol. $</th></tr></thead>
+    <th>Especie</th><th class="l">Nombre</th><th class="l">${esCedear?"Sector / Rubro":"Sector"}</th><th>Último</th><th>Var %</th><th>Vol. ${VISTA==="ARS"?"$":"US$"}</th></tr></thead>
     <tbody>${filas}</tbody></table></div>
     <div class="mkt-foot">${q?total+" resultados":"Top "+Math.min(lim,total)+" de "+total+" por volumen"}${esCedear?" · nombre y sector: Comafi":""}</div>`;
 }
@@ -3165,8 +3212,7 @@ function vistaSoberanos(F){
   const grupos={usd:[],fija:[],cer:[],tamar:[],dual:[],dlk:[],otros:[]};
   const panelOf={};
   for(const t of ["bono","letra"]){
-    for(const r of Object.values(MKT[t]||{})){
-      if(esEspecieUSD(r.symbol,MKT[t])) continue;
+    for(const r of filasCanonicas(MKT[t])){
       if(esProvincial(r.symbol)) continue;
       if(!F(r.symbol)) continue;
       grupos[clasificarPeso(r.symbol)].push(r);
@@ -3185,11 +3231,8 @@ function vistaSoberanos(F){
 function vistaProvinciales(F){
   const rows=[], panelOf={};
   for(const t of ["bono","letra"]){
-    for(const r of Object.values(MKT[t]||{})){
+    for(const r of filasCanonicas(MKT[t])){
       if(!esProvincial(r.symbol)||!F(r.symbol)) continue;
-      // Evitar listar dos veces la misma especie: si esta fila es la variante
-      // D de un par con base en pesos, se salta (dualPV la encuentra sola).
-      if(/D$/.test(r.symbol)&&MKT[t][r.symbol.slice(0,-1)]!=null) continue;
       rows.push(r); panelOf[r.symbol]=MKT[t];
     }
   }
@@ -3202,34 +3245,34 @@ function vistaONs(F){
   // Cada ON cotiza en pesos con sufijo "O" y, si paga en dólares, también con
   // sufijo D/C. Se lista una fila por especie y la existencia de la variante
   // D/C —un hecho observable, no una suposición— define la moneda de pago.
-  const base=Object.values(MKT.on||{}).filter(r=>/O$/.test(r.symbol)).filter(r=>F(r.symbol));
+  const base=filasCanonicas(MKT.on).filter(r=>/O$/.test(r.symbol)).filter(r=>F(r.symbol));
   if(!base.length) return '<div class="mkt-foot">Sin resultados en ONs.</div>';
   const filas=base.sort((a,b)=>(b.v||0)-(a.v||0)).map(r=>{
-    const raiz=r.symbol.slice(0,-1);
-    const usd=MKT.on[raiz+"D"]||MKT.on[raiz+"C"];
+    const fam=familiaDe(r,MKT.on);
+    const usd=fam.mep||fam.ccl;
     const emisor=emisorDeON(r.symbol);
     const pv=dualPV(r,MKT.on);
-    const simbolo=pv.moneda==="USD"?"US$ ":"$ ";
+    const simbolo=VISTA==="ARS"?"$ ":"US$ ";
     return `<tr><td class="tk">${r.symbol}${tagMoneda(pv)}</td>
       <td class="l"><span class="nom-emp">${emisor||"—"}</span></td>
       <td class="l"><span class="sector">${usd?"USD":"ARS"}</span></td>
-      <td>${simbolo}${fmt(pv.c,pv.moneda==="USD"?2:(pv.c<1000?2:0))}</td>
+      <td>${pv.c==null?"—":simbolo+fmt(pv.c,VISTA==="ARS"?(pv.c<1000?2:0):2)}</td>
       <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td></tr>`;}).join("");
   return `<div class="grupo"><div class="grupo-h"><h2>Obligaciones negociables</h2></div>
     <div class="tbl-scroll"><table><thead><tr>
     <th>Especie</th><th class="l">Emisor</th><th class="l">Moneda de pago</th><th>Último</th><th>Var %</th></tr></thead>
     <tbody>${filas}</tbody></table></div></div>
-    <div class="mkt-foot">"Moneda de pago" es un dato fijo del bono (si también cotiza en dólares o no). "Último" y "Var %" siguen el toggle ARS/USD de arriba. Emisor identificado para prefijos de alta confianza — el resto figura como "—".</div>`;
+    <div class="mkt-foot">"Moneda de pago" es un dato fijo del bono (si también cotiza en dólares o no). "Último" y "Var %" usan la especie ARS, USD MEP o USD CCL elegida arriba. Emisor identificado para prefijos de alta confianza — el resto figura como "—".</div>`;
 }
 
 function theadBono(){ return `<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`; }
 function rowsBono(arr,panelOf){
   return arr.map(r=>{
     const pv=dualPV(r,panelOf?panelOf[r.symbol]:null);
-    const simbolo=pv.moneda==="USD"?"US$ ":"$ ";
-    const dec=pv.moneda==="USD"?2:(pv.c<1000?2:0);
+    const simbolo=VISTA==="ARS"?"$ ":"US$ ";
+    const dec=VISTA==="ARS"?(pv.c<1000?2:0):2;
     return `<tr><td class="tk">${r.symbol}${tagMoneda(pv)}</td>
-    <td>${simbolo}${fmt(pv.c,dec)}</td>
+    <td>${pv.c==null?"—":simbolo+fmt(pv.c,dec)}</td>
     <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td>
     <td>${pv.bid?fmt(pv.bid,dec):"—"} / ${pv.ask?fmt(pv.ask,dec):"—"}</td></tr>`;
   }).join("");
