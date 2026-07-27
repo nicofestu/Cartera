@@ -81,7 +81,7 @@ body::after{
   background-image:var(--nasa-bg,none);
   background-size:cover;
   background-position:center;
-  filter:brightness(.35) saturate(.82) contrast(1.04);
+  filter:brightness(.38) saturate(.82) contrast(1.04);
   opacity:0;
   transition:opacity 1.8s var(--ease);
 }
@@ -1103,8 +1103,8 @@ footer b{color:var(--grey);font-weight:500}
         <div class="full"><label>Bróker</label>
           <select id="imp-broker" onchange="onBrokerChange()"></select>
         </div>
-        <div class="full"><label>Archivo</label>
-          <input type="file" id="imp-file" accept=".xlsx,.pdf" multiple disabled onchange="onFileImportBroker(event)">
+        <div class="full"><label id="imp-file-label">Archivo</label>
+          <input type="file" id="imp-file" accept=".xlsx,.pdf,.csv" disabled onchange="onFileImportBroker(event)">
           <div class="hint" id="imp-broker-hint"></div></div>
       </div>
       <div class="f-err" id="imp-err"></div>
@@ -3697,192 +3697,6 @@ function exportar(){
   a.click(); URL.revokeObjectURL(a.href);
   if(ESTADO) render();
 }
-// ── Parser Cocos: exportación CSV "Movimientos" (se descarga por año, hay
-// que subir todos los años a la vez). Formato de una fila por evento real
-// (no hay libros paralelos como en Puente). Particularidad: las operaciones
-// de "dólar MEP"/"cable" contra bonos (Compra/Venta Dolar Mep, Compra/Venta
-// Cable) NO son ecos de la misma operación en otra moneda — son un segundo
-// trade real y distinto (comprar el bono en pesos y venderlo en dólares el
-// mismo día, o al revés), y la app ya sabe resolver esto solo con importar
-// cada pata como una compra/venta normal del mismo ticker: el efecto neto en
-// la posición da cero y el efecto en caja queda repartido entre ARS y USD
-// (mismo mecanismo que Puente documenta para sus 3 libros, pero acá cada
-// pata YA es un evento real separado, no hace falta deduplicar). Para
-// compra/venta, se usa el precio EFECTIVO real (total, con comisiones y
-// aranceles ya incluidos) en vez del "precio de pizarra", que Cocos a veces
-// deja en 0 en las ventas. ──
-function fechaCocos(s){
-  const m=/^(\d{2})-(\d{2})-(\d{4})/.exec((s||"").trim());
-  return m?`${m[3]}-${m[2]}-${m[1]}`:null;
-}
-function clasificarTickerCocos(instrumento){
-  const inst=(instrumento||"").trim();
-  const m=/\(([^)]+)\)\s*$/.exec(inst);
-  if(m){
-    const ticker=m[1].trim().replace(/\s+/g,"");
-    let tipo=clasificarTickerImport(ticker);
-    if(!tipo){
-      if(/^CEDEAR\b/i.test(inst)) tipo="cedear";
-      else if(/^ON\b/i.test(inst)) tipo="on";
-      else if(/^(BONOS?|BONTES|LETRAS?|LT|BOPREAL|B\.?TESORO)\b/i.test(inst)) tipo="bono";
-    }
-    return tipo?{ticker,tipo,sinClasificar:false}:{ticker,tipo:"accion",sinClasificar:true};
-  }
-  // Renta fija sin símbolo entre paréntesis (letras/bonos del Tesoro que
-  // Cocos no siempre etiqueta con ticker) — se arma un código provisorio a
-  // partir del nombre para no perder el movimiento; queda para revisar, y el
-  // ticker real conviene corregirlo a mano después en Movimientos → Editar.
-  // Se incluye la fecha de vencimiento en el código: dos letras/bonos con
-  // nombre casi idéntico pero vencimiento distinto (p.ej. dos LECAPs del
-  // mismo mes) no deben terminar compartiendo el mismo ticker provisorio.
-  const fm=/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/.exec(inst);
-  const sufFecha=fm?fm[1].padStart(2,"0")+fm[2].padStart(2,"0")+fm[3].slice(-2):"";
-  const base=inst.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"")
-    .replace(/[^A-Z0-9]+/g,"").slice(0,10);
-  const pseudo=(base+sufFecha).slice(0,16);
-  return {ticker:pseudo||"SINTICKER",tipo:/^ON\b/i.test(inst)?"on":"bono",sinClasificar:true};
-}
-// ── Cauciones: se emparejan la colocación ("Contado") con su vencimiento
-// ("Termino") para poder modelarlas como compra + venta de un activo
-// sintético "manual" — se "compra" al monto colocado y se "vende" al monto
-// recibido (que ya incluye el interés): la diferencia queda como ganancia
-// realizada, exactamente igual que vender un bono con renta. Cada par usa un
-// ticker propio (CAUCIONyyyymmdd-N) para que dos cauciones que se solapen en
-// el tiempo no terminen mezclando sus costos. El emparejamiento es por orden
-// cronológico + un chequeo de magnitud (el vencimiento tiene que ser un monto
-// razonablemente parecido al colocado, entre 0% y 30% más — cubre tasas de
-// caución normales incluso a varias semanas) para no aparear por error dos
-// cauciones que no son la misma. Lo que no encuentra pareja queda para
-// revisar a mano en vez de inventar un cierre. ──
-function emparejarCaucion(filas){
-  const contados=filas.filter(f=>f.tipo==="contado").sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
-  const terminos=filas.filter(f=>f.tipo==="termino").sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
-  const usados=new Set();
-  const pares=[], sinPar=[];
-  for(const c of contados){
-    let idx=-1;
-    for(let i=0;i<terminos.length;i++){
-      if(usados.has(i)) continue;
-      const t=terminos[i];
-      if(!c.fecha||!t.fecha||t.fecha<c.fecha) continue;
-      if(!c.total||!t.total) continue;
-      const ratio=Math.abs(t.total)/Math.abs(c.total);
-      if(ratio>=1&&ratio<=1.3){ idx=i; break; } // primer vencimiento cronológico con monto compatible
-    }
-    if(idx>=0){ usados.add(idx); pares.push({contado:c,termino:terminos[idx]}); }
-    else sinPar.push(c);
-  }
-  terminos.forEach((t,i)=>{ if(!usados.has(i)) sinPar.push(t); });
-  return {pares,sinPar};
-}
-function parseCocosMovimientos(rows){
-  const candidatos=[], omitidos=[], revisar=[];
-  const aNum=s=>{ if(s==null||s==="") return null; const n=parseFloat(String(s).trim().replace(/\./g,"").replace(",",".")); return isNaN(n)?null:n; };
-  const monedaApp=m=>String(m||"").trim()==="ARS"?"ARS":"USD"; // EXT (cable) se trata como USD, igual que el resto de la app
-  const TRADE_OPS=new Set(["Compra","Venta","Compra Trading","Venta Trading","Compra Prima","Venta Prima","Compra Dolar Mep","Venta Dolar Mep","Compra Cable","Venta Cable"]);
-  const FCI_RESCATE=new Set(["Liquidacion Rescate Fci","Liquidacion Rescate Fci Hb","Liq Rescate Fci Usd","Liq Rescate Fci Usd Hb"]);
-  const FCI_SUSCRIP=new Set(["Liquidacion Suscripcion Fci","Liquidacion Suscripcion Fci Hb","Liq Suscripcion Fci Usd","Liq Suscripcion Fci Usd Hb"]);
-  const DEPOSITO_OPS=new Set(["Recibo De Cobro","Recibo De Cobro Dolares"]);
-  const RETIRO_OPS=new Set(["Orden De Pago","Orden De Pago Usd"]);
-  const CAJA_RESULTADO_OPS=new Set(["Dividendos","Dividendos USD","Renta Y Amortizacion","Renta y Amortizacion USD",
-    "Credito Derechos Mercado Byma","Ajuste Byma Debito","Nota De Credito Conversion","Nota De Credito Conversion Cable",
-    "Nota De Debito Usd","Nota De Credito Usd"]);
-  const OMITIR_SIEMPRE={
-    "Canje":"canje de especie sin cantidad informada por Cocos — revisar manualmente",
-  };
-
-  // Cauciones: se sacan del flujo principal y se procesan aparte (ver
-  // emparejarCaucion), el resto de las filas sigue el camino de siempre.
-  const filasCaucion=[], resto=[];
-  for(const r of rows){
-    const op=String(r.tipoOperacion||"").trim();
-    if(op==="Colocador Caucion Contado"||op==="Colocador Caucion Termino"){
-      filasCaucion.push({fecha:fechaCocos(r.fechaEjecucion),tipo:op==="Colocador Caucion Contado"?"contado":"termino",
-        total:aNum(r.total)??aNum(r.montoBruto)});
-    } else resto.push(r);
-  }
-  const {pares,sinPar}=emparejarCaucion(filasCaucion);
-  pares.forEach(({contado,termino},i)=>{
-    const ticker="CAUCION"+contado.fecha.replace(/-/g,"")+"-"+(i+1);
-    candidatos.push({fecha:contado.fecha,tipo:"manual",op:"compra",ticker,cantidad:1,
-      precioBruto:Math.abs(contado.total),moneda:"ARS",origen:"Caución (colocación)"});
-    candidatos.push({fecha:termino.fecha,tipo:"manual",op:"venta",ticker,cantidad:1,
-      precioBruto:Math.abs(termino.total),moneda:"ARS",origen:"Caución (vencimiento, con interés)"});
-  });
-  for(const s of sinPar){
-    omitidos.push({fecha:s.fecha||"—",op:s.tipo==="contado"?"Colocador Caucion Contado":"Colocador Caucion Termino",
-      ticker:"",motivo:"caución sin su contraparte de colocación/vencimiento — revisar manualmente"});
-  }
-
-  for(const r of resto){
-    const op=String(r.tipoOperacion||"").trim();
-    const fecha=fechaCocos(r.fechaEjecucion);
-    const instrumento=String(r.instrumento||"").trim();
-    const moneda=monedaApp(r.moneda);
-    const cantidad=aNum(r.cantidad);
-    const precio=aNum(r.precio);
-    const montoBruto=aNum(r.montoBruto);
-    const total=aNum(r.total);
-
-    if(!fecha){ omitidos.push({fecha:r.fechaEjecucion||"—",op:op.slice(0,30),ticker:instrumento,motivo:"fecha no reconocida"}); continue; }
-
-    if(OMITIR_SIEMPRE[op]){ omitidos.push({fecha,op,ticker:instrumento,motivo:OMITIR_SIEMPRE[op]}); continue; }
-
-    // Dividendo en especie: el emisor entrega la especie directamente (acá
-    // siempre "Dólar estadounidense") en vez de acreditar pesos — es un
-    // ingreso real, igual que una renta cobrada. La "cantidad" viene en la
-    // moneda de la especie entregada, no en pesos. Cocos además cobra un
-    // cargo (Ganancias/IIBB) en pesos sobre ese dividendo, que sale con
-    // signo propio en "total" — se carga aparte como gasto para no perder
-    // ese costo real ni mezclarlo con el ingreso en dólares.
-    if(op==="DIVIDENDOS EN ESPECIE"){
-      if(!cantidad){ omitidos.push({fecha,op,ticker:instrumento,motivo:"dividendo en especie sin cantidad"}); continue; }
-      const monedaEspecie=/d[oó]lar|usd/i.test(instrumento)?"USD":"ARS";
-      candidatos.push({fecha,tipo:"cash",op:"dividendo",cantidad:1,precio:Math.abs(cantidad),moneda:monedaEspecie,origen:op+" — "+instrumento});
-      const cargo=total!=null?total:montoBruto;
-      if(cargo) candidatos.push({fecha,tipo:"cash",op:"gasto",cantidad:1,precio:Math.abs(cargo),moneda:"ARS",origen:op+" (retención)"});
-      continue;
-    }
-
-    if(TRADE_OPS.has(op)){
-      if(!instrumento){ omitidos.push({fecha,op,ticker:"",motivo:"operación sin especie identificada"}); continue; }
-      if(!cantidad){ omitidos.push({fecha,op,ticker:instrumento,motivo:"cantidad en cero"}); continue; }
-      const importeEf=(total!=null&&total!==0)?total:montoBruto;
-      if(importeEf==null){ omitidos.push({fecha,op,ticker:instrumento,motivo:"sin importe"}); continue; }
-      const {ticker,tipo,sinClasificar}=clasificarTickerCocos(instrumento);
-      const item={fecha,op:/^Compra/i.test(op)?"compra":"venta",ticker,cantidad:Math.abs(cantidad),
-        precioBruto:Math.abs(importeEf)/Math.abs(cantidad),moneda,origen:op+" — "+instrumento,tipo};
-      if(sinClasificar) revisar.push(item); else candidatos.push(item);
-      continue;
-    }
-
-    if(FCI_RESCATE.has(op)||FCI_SUSCRIP.has(op)){
-      if(!cantidad||precio==null){ omitidos.push({fecha,op,ticker:instrumento,motivo:"sin datos suficientes"}); continue; }
-      const fondo=instrumento.replace(/^FCI\s+/i,"").replace(/\s*\([^)]*\)\s*$/,"").trim()||instrumento;
-      candidatos.push({fecha,tipo:"fci",op:FCI_RESCATE.has(op)?"venta":"compra",fondo,
-        cantidad:Math.abs(cantidad),precio:Math.abs(precio),moneda,origen:op});
-      continue;
-    }
-
-    if(DEPOSITO_OPS.has(op)||RETIRO_OPS.has(op)){
-      const importe=total!=null?total:montoBruto;
-      if(!importe){ omitidos.push({fecha,op,ticker:"",motivo:"importe en cero"}); continue; }
-      candidatos.push({fecha,tipo:"cash",op:importe>=0?"deposito":"retiro",cantidad:1,precio:Math.abs(importe),moneda,origen:op});
-      continue;
-    }
-
-    if(CAJA_RESULTADO_OPS.has(op)){
-      const importe=total!=null?total:montoBruto;
-      if(!importe){ omitidos.push({fecha,op,ticker:"",motivo:"importe en cero"}); continue; }
-      candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,precio:Math.abs(importe),moneda,origen:op});
-      continue;
-    }
-
-    omitidos.push({fecha,op:op.slice(0,40),ticker:instrumento,motivo:"tipo de operación no reconocido"});
-  }
-  return {candidatos,omitidos,revisar};
-}
-
 /* ══════════════ Importar operaciones de un bróker ══════════════ */
 // Registro de bróker → parser. Para sumar uno nuevo (Cocos, etc.) alcanza con
 // agregar una entrada acá y escribir su función de parseo — el resto de la UI
@@ -3891,16 +3705,18 @@ const IMPORTADORES={
   balanz:{nombre:"Balanz",hoja:"movimientos",parser:parseBalanzMovimientos},
   puente:{nombre:"Puente",formato:"pdf",parser:parsePuenteMovimientos},
   ieb:{nombre:"IEB+",hoja:"Export",parser:parseIEBMovimientos},
-  cocos:{nombre:"Cocos",formato:"csv",parser:parseCocosMovimientos},
+  cocos:{nombre:"Cocos",formato:"csv",multiple:true,parser:parseCocosMovimientos},
 };
-let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[];
+let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[], IMP_ARCHIVOS=[], IMP_DUPLICADOS=0;
 
 function abrirImportBroker(){
   const sel=document.getElementById("imp-broker");
   sel.innerHTML=Object.entries(IMPORTADORES).map(([k,v])=>`<option value="${k}">${v.nombre}</option>`).join("");
+  IMP_CANDIDATOS=[]; IMP_OMITIDOS=[]; IMP_REVISAR=[]; IMP_ARCHIVOS=[]; IMP_DUPLICADOS=0;
   document.getElementById("imp-paso1").style.display="block";
   document.getElementById("imp-paso2").style.display="none";
-  document.getElementById("imp-confirmar").style.display="none";
+  const btn=document.getElementById("imp-confirmar");
+  btn.style.display="none"; btn.disabled=false; btn.textContent="Cargar movimientos";
   document.getElementById("imp-file").value="";
   document.getElementById("imp-file").disabled=false;
   document.getElementById("imp-err").textContent="";
@@ -3917,64 +3733,69 @@ function onBrokerChange(){
       Se lee directo el PDF, tal cual lo bajás — no hace falta pasarlo a Excel.`,
     ieb:`En tu cuenta de IEB+: <b>Toda la actividad</b> → exportá a Excel el rango de fechas desde el inicio de tus operaciones.<br>
       Tiene que tener una hoja llamada "Export", tal cual la descarga la plataforma.`,
-    cocos:`En tu cuenta de Cocos: <b>Movimientos</b> → exportá el CSV. Cocos solo lo permite bajar <b>año por año</b>, así que descargá un
-      archivo por cada año que operaste (2024, 2025, 2026…).<br>
-      Podés seleccionar <b>varios archivos CSV a la vez</b> en el selector de abajo — se cargan todos juntos en un solo paso.`,
+    cocos:`En tu cuenta de Cocos: descargá <b>Movimientos de cuenta</b> para cada año que quieras importar.<br>
+      Podés seleccionar <b>varios archivos .csv a la vez</b> (por ejemplo 2024, 2025 y 2026). Si repetís un archivo ya cargado, sus tickets no se duplican.`,
   };
   document.getElementById("imp-broker-hint").innerHTML=b?hints[b]||`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
   const inp=document.getElementById("imp-file");
-  if(b) inp.accept=IMPORTADORES[b].formato==="pdf"?".pdf":IMPORTADORES[b].formato==="csv"?".csv":".xlsx";
-}
-
-// ── Lector CSV mínimo: separador ";" fijo (formato Cocos), sin manejo de
-// comillas RFC4180 porque el export real no las usa como delimitador (los
-// nombres de instrumento a veces traen comillas sueltas, p.ej. GALICIA "B",
-// pero nunca envuelven el campo ni contienen el separador). Devuelve el mismo
-// shape que XLSX.utils.sheet_to_json: un array de objetos por fila. ──
-async function leerCSV(file){
-  let texto=await file.text();
-  texto=texto.replace(/^\uFEFF/,"");
-  const lineas=texto.split(/\r\n|\n|\r/).filter(l=>l.trim()!=="");
-  if(!lineas.length) return [];
-  const headers=lineas[0].split(";").map(h=>h.trim());
-  return lineas.slice(1).map(linea=>{
-    const cols=linea.split(";");
-    const obj={};
-    headers.forEach((h,i)=>obj[h]=cols[i]!==undefined?cols[i].trim():"");
-    return obj;
-  });
+  if(b){
+    const cfg=IMPORTADORES[b];
+    inp.accept=cfg.formato==="pdf"?".pdf":cfg.formato==="csv"?".csv":".xlsx";
+    inp.multiple=!!cfg.multiple;
+    document.getElementById("imp-file-label").textContent=cfg.multiple?"Archivos":"Archivo";
+  }
 }
 
 async function onFileImportBroker(ev){
-  const files=[...ev.target.files];
-  if(!files.length) return;
+  const seleccionados=[...(ev.target.files||[])];
+  if(!seleccionados.length) return;
   const brokerId=document.getElementById("imp-broker").value;
   const err=document.getElementById("imp-err");
   err.textContent="";
   try{
     const cfg=IMPORTADORES[brokerId];
-    // Varios archivos a la vez (p.ej. Cocos: un CSV por año) — se parsea cada
-    // uno por separado y se juntan los resultados; para brokers de un solo
-    // archivo (Balanz/IEB+/Puente) el comportamiento es idéntico a antes.
-    let candidatos=[], omitidos=[], revisar=[];
-    for(const f of files){
-      let res;
-      if(cfg.formato==="pdf"){
-        const lineas=await extraerLineasPDF(f);
-        res=cfg.parser(lineas);
-      } else if(cfg.formato==="csv"){
-        const rows=await leerCSV(f);
-        res=cfg.parser(rows);
-      } else {
-        const buf=await f.arrayBuffer();
-        const wb=XLSX.read(buf,{type:"array",cellDates:true});
-        const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
-        const rows=XLSX.utils.sheet_to_json(hoja,{defval:null});
-        res=cfg.parser(rows);
-      }
-      candidatos.push(...res.candidatos); omitidos.push(...res.omitidos); revisar.push(...res.revisar);
+    if(!cfg) throw new Error("seleccioná un bróker");
+    const archivos=cfg.multiple?seleccionados:[seleccionados[0]];
+    const candidatos=[], omitidos=[], revisar=[];
+    for(const f of archivos){
+      let resultado;
+      try{
+        if(cfg.formato==="pdf"){
+          resultado=cfg.parser(await extraerLineasPDF(f));
+        } else {
+          const wb=cfg.formato==="csv"
+            ?XLSX.read(await f.text(),{type:"string",raw:true})
+            :XLSX.read(await f.arrayBuffer(),{type:"array",cellDates:true});
+          const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
+          if(!hoja) throw new Error("el archivo no contiene una hoja legible");
+          resultado=cfg.parser(XLSX.utils.sheet_to_json(hoja,{defval:null,raw:true}));
+        }
+      }catch(e){ throw new Error(`${f.name}: ${e.message}`); }
+      candidatos.push(...resultado.candidatos);
+      omitidos.push(...resultado.omitidos);
+      revisar.push(...resultado.revisar);
     }
-    IMP_CANDIDATOS=candidatos; IMP_OMITIDOS=omitidos; IMP_REVISAR=revisar;
+
+    // Los tickets de Cocos son estables y únicos. Se usan para evitar tanto
+    // solapamientos entre archivos anuales como una segunda carga accidental
+    // de un año que ya había sido importado.
+    const vistos=new Set(DATOS.movimientos.map(m=>m.importId).filter(Boolean));
+    const aceptar=items=>items.filter(item=>{
+      if(!item.importId) return true;
+      if(vistos.has(item.importId)){
+        IMP_DUPLICADOS++;
+        omitidos.push({fecha:item.fecha,op:item.origen||item.op,ticker:item.ticker||item.fondo||"",
+          motivo:"ticket ya incluido o cargado — no se duplica"});
+        return false;
+      }
+      vistos.add(item.importId);
+      return true;
+    });
+    IMP_DUPLICADOS=0;
+    IMP_CANDIDATOS=aceptar(candidatos);
+    IMP_REVISAR=aceptar(revisar);
+    IMP_OMITIDOS=omitidos;
+    IMP_ARCHIVOS=archivos.map(f=>f.name);
     renderPreviewImport();
   }catch(e){
     err.textContent="No se pudo leer el archivo: "+e.message;
@@ -4013,6 +3834,7 @@ function fUTC(d){
   if(typeof d==="string"){
     let m=d.match(/^(\d{4}-\d{2}-\d{2})/); if(m) return m[1];
     m=d.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+    m=d.match(/^(\d{2})-(\d{2})-(\d{4})/); if(m) return `${m[3]}-${m[2]}-${m[1]}`;
   }
   if(typeof d==="number"&&window.XLSX?.SSF){
     const dt=XLSX.SSF.parse_date_code(d);
@@ -4045,6 +3867,187 @@ function clasificarTickerPuente(simbolo){
     return {ticker:base,tipo:"manual",sinClasificar:false};
   }
   return {ticker:simbolo,tipo:"accion",sinClasificar:true};
+}
+
+// ── Parser Cocos: CSV de "Movimientos de cuenta", descargable únicamente
+// por año. El archivo usa ";" como separador, fechas DD-MM-AAAA y números
+// argentinos (1.234,56). SheetJS entrega las celdas como texto porque se lee
+// con raw:true; por eso la conversión numérica se hace explícitamente acá.
+//
+// Cocos mezcla en el mismo extracto operaciones reales con ecos internos,
+// cauciones y ajustes contables. Estos últimos se informan como omitidos para
+// que no dupliquen caja ni inventen posiciones. ──
+function parseCocosMovimientos(rows){
+  const candidatos=[], omitidos=[], revisar=[];
+  if(!Array.isArray(rows)||!rows.length) throw new Error("el CSV no contiene movimientos");
+  const requeridas=["nroTicket","fechaEjecucion","tipoOperacion","instrumento","moneda","cantidad","precio","total"];
+  const presentes=new Set(Object.keys(rows[0]||{}));
+  const faltan=requeridas.filter(k=>!presentes.has(k));
+  if(faltan.length) throw new Error(`no coincide con el formato de Cocos (faltan: ${faltan.join(", ")})`);
+
+  const aNum=v=>{
+    if(typeof v==="number") return Number.isFinite(v)?v:null;
+    const s=String(v??"").trim().replace(/\s/g,"");
+    if(!s) return null;
+    const n=Number(s.replace(/\./g,"").replace(",","."));
+    return Number.isFinite(n)?n:null;
+  };
+  const normalizar=s=>String(s??"").trim().replace(/\s+/g," ")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  // Algunas especies antiguas salen sin ticker entre paréntesis. Los títulos
+  // y letras se mapean a su símbolo de mercado; la ON YPF vencida usa un alias
+  // interno estable. Así las compras y ventas no quedan partidas.
+  const TICKER_SIN_CODIGO={
+    "bono nacion moneda dual 28/02/24":"TDF24",
+    "b.tesoro vinc usd vt.30/04/2024 c.g":"TV24",
+    "on ypf sa reg. 2 cl.28 8,75% v.04/04/2024":"YPF28",
+    "lt rep argentina cap $ v26/07/24":"S26L4",
+    "lt rep argentina cap $ v29/11/24":"S29N4",
+    "bono tesoro $ aj. cer 4% v.14/10/24":"T4X4",
+    "bono tesoro $ aj cer 4,25% v13/12/24 cg":"T5X4",
+  };
+  const tickerDe=instrumento=>{
+    const m=/\(([^()]+)\)\s*$/.exec(instrumento||"");
+    return m?m[1].trim().replace(/\s+/g,""):(TICKER_SIN_CODIGO[normalizar(instrumento)]||"");
+  };
+  const fondoDe=instrumento=>String(instrumento||"").replace(/^FCI\s+/i,"")
+    .replace(/\s*\([^()]+\)\s*$/,"").replace(/\s+/g," ").trim();
+  const tipoDe=(ticker,instrumento)=>{
+    const n=normalizar(instrumento);
+    if(/\bcedear\b/.test(n)) return "cedear";
+    if(/^on\b|\bobligaci(?:o|ó)n negociable\b/.test(n)) return "on";
+    if(/\bbono\b|\bletra\b|\btitulo publico\b/.test(n)) return "bono";
+    const conocido=clasificarTickerImport(ticker);
+    if(conocido) return conocido;
+    if(/\baccs?\b|\baccion(?:es)?\b|\bescrit\b/.test(n)) return "accion";
+    return null;
+  };
+  const idDe=(r,sufijo="")=>{
+    const ticket=String(r["nroTicket"]??"").trim();
+    const base=ticket||[
+      r["fechaEjecucion"],r["tipoOperacion"],r["instrumento"],r["moneda"],r["cantidad"],r["total"]
+    ].map(v=>String(v??"").trim()).join("|");
+    return `cocos:${base}${sufijo}`;
+  };
+  const empujarInstrumento=(item,sinClasificar)=>{
+    if(sinClasificar) revisar.push(item); else candidatos.push(item);
+  };
+
+  for(const r of rows){
+    const opRaw=String(r["tipoOperacion"]??"").trim().replace(/\s+/g," ");
+    const op=normalizar(opRaw);
+    const instrumento=String(r["instrumento"]??"").trim().replace(/\s+/g," ");
+    const fecha=fUTC(r["fechaEjecucion"]);
+    const monRaw=String(r["moneda"]??"").trim().toUpperCase();
+    const moneda=monRaw==="ARS"?"ARS":/^(USD|EXT)$/.test(monRaw)?"USD":null;
+    const cantidad=aNum(r["cantidad"]);
+    const precioPizarra=aNum(r["precio"]);
+    const total=aNum(r["total"]);
+    const bruto=aNum(r["montoBruto"]);
+    const importe=total!=null?total:bruto;
+    const ticker=tickerDe(instrumento);
+    const importId=idDe(r);
+
+    if(!fecha){ omitidos.push({fecha:String(r["fechaEjecucion"]||"—"),op:opRaw,ticker,motivo:"fecha no reconocida"}); continue; }
+    if(!moneda){ omitidos.push({fecha,op:opRaw,ticker,motivo:`moneda no reconocida (${monRaw||"vacía"})`}); continue; }
+
+    // Cocos acredita el dividendo en USD como unidades de "Dólar
+    // estadounidense" y cobra los derechos en ARS dentro de la misma fila.
+    // Son dos efectos económicos diferentes, por eso se separan.
+    if(op==="dividendos en especie"){
+      let agregados=0;
+      if(cantidad){
+        candidatos.push({fecha,tipo:"cash",op:"dividendo",cantidad:1,precio:Math.abs(cantidad),
+          moneda:"USD",origen:opRaw,importId:idDe(r,":usd")});
+        agregados++;
+      }
+      if(importe){
+        candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,precio:Math.abs(importe),
+          moneda,origen:opRaw+" (derechos)",importId:idDe(r,":derechos")});
+        agregados++;
+      }
+      if(!agregados) omitidos.push({fecha,op:opRaw,ticker:"",motivo:"dividendo en especie sin cantidad ni importe"});
+      continue;
+    }
+
+    // Suscripciones y rescates de FCI, con o sin los sufijos "USD" y "HB".
+    if(/\bsuscripcion fci\b/.test(op)||/\brescate fci\b/.test(op)){
+      const esRescate=/\brescate fci\b/.test(op);
+      if(!cantidad||!importe&&!precioPizarra){
+        omitidos.push({fecha,op:opRaw,ticker,motivo:"FCI sin cantidad o precio en el CSV — cargar manualmente"}); continue;
+      }
+      const fondo=fondoDe(instrumento);
+      if(!fondo){ omitidos.push({fecha,op:opRaw,ticker,motivo:"FCI sin nombre identificable"}); continue; }
+      const precio=importe?Math.abs(importe)/Math.abs(cantidad)*1000:Math.abs(precioPizarra);
+      candidatos.push({fecha,tipo:"fci",op:esRescate?"venta":"compra",ticker,fondo,
+        cantidad:Math.abs(cantidad),precio,moneda,origen:opRaw,importId});
+      continue;
+    }
+
+    // Compras y ventas normales, Trading, Prima, MEP y Cable. "MEP/Cable"
+    // describe la moneda de liquidación de la especie; no es una fila
+    // adicional de conversión.
+    if(/^(compra|venta)( trading| prima| dolar mep| cable)?$/.test(op)){
+      if(!ticker||!cantidad){
+        omitidos.push({fecha,op:opRaw,ticker,motivo:"operación sin ticker o cantidad"}); continue;
+      }
+      const tipo=tipoDe(ticker,instrumento);
+      const tipoFinal=tipo||"accion";
+      let precioBruto=importe?Math.abs(importe)/Math.abs(cantidad):null;
+      if(!precioBruto&&precioPizarra) precioBruto=Math.abs(precioPizarra)/divisorDe(tipoFinal);
+      if(precioBruto==null){
+        omitidos.push({fecha,op:opRaw,ticker,motivo:"operación sin importe/precio"}); continue;
+      }
+      const item={fecha,op:op.startsWith("compra")?"compra":"venta",ticker,
+        cantidad:Math.abs(cantidad),precioBruto,moneda,origen:opRaw,tipo:tipoFinal,importId};
+      empujarInstrumento(item,!tipo);
+      continue;
+    }
+
+    // Fondos que entran o salen de la cuenta del bróker.
+    if(/^recibo de cobro/.test(op)||/^orden de pago/.test(op)){
+      if(!importe){ omitidos.push({fecha,op:opRaw,ticker:"",motivo:"movimiento de caja con importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:/^recibo de cobro/.test(op)?"deposito":"retiro",
+        cantidad:1,precio:Math.abs(importe),moneda,origen:opRaw,importId});
+      continue;
+    }
+
+    // Resultados de la cartera: dividendos, cupones, rentas y amortizaciones.
+    if(/^dividendos?\b/.test(op)||/^renta y amortizacion\b/.test(op)){
+      if(!importe){ omitidos.push({fecha,op:opRaw,ticker,motivo:"renta/dividendo con importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,
+        precio:Math.abs(importe),moneda,origen:opRaw,importId});
+      continue;
+    }
+
+    // En 2024 Cocos acreditó varios dividendos CEDEAR únicamente mediante
+    // "Nota De Credito Conversion": no hay otra fila positiva equivalente.
+    // En cambio la variante "Cable" es el eco tardío del DIVIDENDO EN ESPECIE
+    // que ya se reconoció arriba por su cantidad en USD.
+    if(op==="nota de credito conversion"){
+      if(!importe){ omitidos.push({fecha,op:opRaw,ticker:"",motivo:"crédito de conversión con importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:"dividendo",cantidad:1,precio:Math.abs(importe),
+        moneda,origen:opRaw,importId});
+      continue;
+    }
+
+    // Ecos internos o movimientos transitorios que no representan un flujo
+    // externo ni una posición permanente.
+    if(/^nota de (credito|debito)/.test(op)){
+      omitidos.push({fecha,op:opRaw,ticker,motivo:"reclasificación/conversión interna — no se duplica"}); continue;
+    }
+    if(/^colocador caucion/.test(op)){
+      omitidos.push({fecha,op:opRaw,ticker,motivo:"colocación a plazo, no es una posición de cartera"}); continue;
+    }
+    if(op==="canje"){
+      omitidos.push({fecha,op:opRaw,ticker,motivo:"canje sin cantidades en el extracto — requiere revisión manual"}); continue;
+    }
+    if(op==="credito derechos mercado byma"||op==="ajuste byma debito"){
+      omitidos.push({fecha,op:opRaw,ticker,motivo:"ajuste contable de BYMA — no se duplica"}); continue;
+    }
+    omitidos.push({fecha,op:opRaw,ticker,motivo:"patrón no reconocido"});
+  }
+  return {candidatos,omitidos,revisar};
 }
 
 // ── Parser Puente: extracto PDF de "Cuenta → Movimientos". El PDF trae 3
@@ -4409,7 +4412,7 @@ function renderPreviewImport(){
   document.getElementById("imp-paso1").style.display="none";
   const paso2=document.getElementById("imp-paso2");
   paso2.style.display="block";
-  document.getElementById("imp-confirmar").style.display="inline-flex";
+  document.getElementById("imp-confirmar").style.display=(IMP_CANDIDATOS.length+IMP_REVISAR.length)?"inline-flex":"none";
 
   const porTipo={};
   for(const c of IMP_CANDIDATOS) porTipo[c.op+"·"+c.tipo]=(porTipo[c.op+"·"+c.tipo]||0)+1;
@@ -4418,7 +4421,9 @@ function renderPreviewImport(){
     return `<span class="imp-badge ok">${n} ${op} · ${tipo}</span>`;
   }).join(" ");
   document.getElementById("imp-resumen").innerHTML=
-    `<div style="margin-bottom:8px">${resumen||'<span class="hint">No se encontraron operaciones para cargar.</span>'}</div>`;
+    `${IMP_ARCHIVOS.length?`<div class="hint" style="margin-bottom:8px">${IMP_ARCHIVOS.length} archivo(s) analizado(s)`+
+      `${IMP_DUPLICADOS?` · ${IMP_DUPLICADOS} ticket(s) repetido(s) omitido(s)`:""}</div>`:""}`+
+    `<div style="margin-bottom:8px">${resumen||'<span class="hint">No se encontraron operaciones nuevas para cargar.</span>'}</div>`;
 
   const tiposSel=["bono","letra","on","accion","cedear","fci","manual"];
   if(IMP_REVISAR.length){
@@ -4482,6 +4487,11 @@ async function confirmarImportBroker(){
   const btn=document.getElementById("imp-confirmar");
   btn.disabled=true; btn.textContent="Cargando…";
   const todos=[...IMP_CANDIDATOS,...IMP_REVISAR];
+  if(!todos.length){
+    btn.disabled=false; btn.textContent="Cargar movimientos";
+    alert("No hay movimientos nuevos para cargar.");
+    return;
+  }
   const cuenta=canonizarCta(IMPORTADORES[document.getElementById("imp-broker").value].nombre.toUpperCase());
 
   // MEP por fecha: se resuelve una sola vez por día, no por movimiento
@@ -4500,15 +4510,18 @@ async function confirmarImportBroker(){
       // en dólares de serieRendimiento — un solo movimiento así rompe toda
       // la serie. Mismo criterio y mismo aviso que la rama de instrumentos.
       if(mepPorFecha[m.fecha]==null) sinMep++;
-      DATOS.movimientos.push({id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:"cash",
+      const mv={id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:"cash",
         ticker:(ETIQ_CASH[m.op]||"MOVIMIENTO").replace("Ó","O"),cuenta,cantidad:1,precio:m.precio,moneda:m.moneda,
-        mep:mepPorFecha[m.fecha]??1});
+        mep:mepPorFecha[m.fecha]??1};
+      if(m.importId) mv.importId=m.importId;
+      DATOS.movimientos.push(mv);
     } else {
       const div=divisorDe(m.tipo);
       const precio=m.tipo==="fci"?m.precio:(m.precioBruto!=null?m.precioBruto*div:m.precio);
       if(mepPorFecha[m.fecha]==null) sinMep++;
       const mv={id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:m.tipo,cuenta,
         cantidad:m.cantidad,precio,moneda:m.moneda,mep:mepPorFecha[m.fecha]??1};
+      if(m.importId) mv.importId=m.importId;
       if(m.tipo==="fci"){
         const r=await resolverCategoriaFci(m.fondo);
         if(r){ mv.categoria=r.categoria; mv.fondo=r.fondo; }
