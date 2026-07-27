@@ -1104,7 +1104,7 @@ footer b{color:var(--grey);font-weight:500}
           <select id="imp-broker" onchange="onBrokerChange()"></select>
         </div>
         <div class="full"><label>Archivo</label>
-          <input type="file" id="imp-file" accept=".xlsx,.pdf" disabled onchange="onFileImportBroker(event)">
+          <input type="file" id="imp-file" accept=".xlsx,.pdf" multiple disabled onchange="onFileImportBroker(event)">
           <div class="hint" id="imp-broker-hint"></div></div>
       </div>
       <div class="f-err" id="imp-err"></div>
@@ -3697,6 +3697,123 @@ function exportar(){
   a.click(); URL.revokeObjectURL(a.href);
   if(ESTADO) render();
 }
+// ── Parser Cocos: exportación CSV "Movimientos" (se descarga por año, hay
+// que subir todos los años a la vez). Formato de una fila por evento real
+// (no hay libros paralelos como en Puente). Particularidad: las operaciones
+// de "dólar MEP"/"cable" contra bonos (Compra/Venta Dolar Mep, Compra/Venta
+// Cable) NO son ecos de la misma operación en otra moneda — son un segundo
+// trade real y distinto (comprar el bono en pesos y venderlo en dólares el
+// mismo día, o al revés), y la app ya sabe resolver esto solo con importar
+// cada pata como una compra/venta normal del mismo ticker: el efecto neto en
+// la posición da cero y el efecto en caja queda repartido entre ARS y USD
+// (mismo mecanismo que Puente documenta para sus 3 libros, pero acá cada
+// pata YA es un evento real separado, no hace falta deduplicar). Para
+// compra/venta, se usa el precio EFECTIVO real (total, con comisiones y
+// aranceles ya incluidos) en vez del "precio de pizarra", que Cocos a veces
+// deja en 0 en las ventas. ──
+function fechaCocos(s){
+  const m=/^(\d{2})-(\d{2})-(\d{4})/.exec((s||"").trim());
+  return m?`${m[3]}-${m[2]}-${m[1]}`:null;
+}
+function clasificarTickerCocos(instrumento){
+  const inst=(instrumento||"").trim();
+  const m=/\(([^)]+)\)\s*$/.exec(inst);
+  if(m){
+    const ticker=m[1].trim().replace(/\s+/g,"");
+    let tipo=clasificarTickerImport(ticker);
+    if(!tipo){
+      if(/^CEDEAR\b/i.test(inst)) tipo="cedear";
+      else if(/^ON\b/i.test(inst)) tipo="on";
+      else if(/^(BONOS?|BONTES|LETRAS?|LT|BOPREAL|B\.?TESORO)\b/i.test(inst)) tipo="bono";
+    }
+    return tipo?{ticker,tipo,sinClasificar:false}:{ticker,tipo:"accion",sinClasificar:true};
+  }
+  // Renta fija sin símbolo entre paréntesis (letras/bonos del Tesoro que
+  // Cocos no siempre etiqueta con ticker) — se arma un código provisorio a
+  // partir del nombre para no perder el movimiento; queda para revisar, y el
+  // ticker real conviene corregirlo a mano después en Movimientos → Editar.
+  // Se incluye la fecha de vencimiento en el código: dos letras/bonos con
+  // nombre casi idéntico pero vencimiento distinto (p.ej. dos LECAPs del
+  // mismo mes) no deben terminar compartiendo el mismo ticker provisorio.
+  const fm=/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/.exec(inst);
+  const sufFecha=fm?fm[1].padStart(2,"0")+fm[2].padStart(2,"0")+fm[3].slice(-2):"";
+  const base=inst.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^A-Z0-9]+/g,"").slice(0,10);
+  const pseudo=(base+sufFecha).slice(0,16);
+  return {ticker:pseudo||"SINTICKER",tipo:/^ON\b/i.test(inst)?"on":"bono",sinClasificar:true};
+}
+function parseCocosMovimientos(rows){
+  const candidatos=[], omitidos=[], revisar=[];
+  const aNum=s=>{ if(s==null||s==="") return null; const n=parseFloat(String(s).trim().replace(/\./g,"").replace(",",".")); return isNaN(n)?null:n; };
+  const monedaApp=m=>String(m||"").trim()==="ARS"?"ARS":"USD"; // EXT (cable) se trata como USD, igual que el resto de la app
+  const TRADE_OPS=new Set(["Compra","Venta","Compra Trading","Venta Trading","Compra Prima","Venta Prima","Compra Dolar Mep","Venta Dolar Mep","Compra Cable","Venta Cable"]);
+  const FCI_RESCATE=new Set(["Liquidacion Rescate Fci","Liquidacion Rescate Fci Hb","Liq Rescate Fci Usd","Liq Rescate Fci Usd Hb"]);
+  const FCI_SUSCRIP=new Set(["Liquidacion Suscripcion Fci","Liquidacion Suscripcion Fci Hb","Liq Suscripcion Fci Usd","Liq Suscripcion Fci Usd Hb"]);
+  const DEPOSITO_OPS=new Set(["Recibo De Cobro","Recibo De Cobro Dolares"]);
+  const RETIRO_OPS=new Set(["Orden De Pago","Orden De Pago Usd"]);
+  const CAJA_RESULTADO_OPS=new Set(["Dividendos","Dividendos USD","Renta Y Amortizacion","Renta y Amortizacion USD",
+    "Credito Derechos Mercado Byma","Ajuste Byma Debito","Nota De Credito Conversion","Nota De Credito Conversion Cable",
+    "Nota De Debito Usd","Nota De Credito Usd"]);
+  const OMITIR_SIEMPRE={
+    "Colocador Caucion Contado":"colocación a plazo (caución), no es una posición de cartera",
+    "Colocador Caucion Termino":"colocación a plazo (caución), no es una posición de cartera",
+    "Canje":"canje de especie sin cantidad informada por Cocos — revisar manualmente",
+    "DIVIDENDOS EN ESPECIE":"dividendo en especie en moneda extranjera — cargar manualmente",
+  };
+
+  for(const r of rows){
+    const op=String(r.tipoOperacion||"").trim();
+    const fecha=fechaCocos(r.fechaEjecucion);
+    const instrumento=String(r.instrumento||"").trim();
+    const moneda=monedaApp(r.moneda);
+    const cantidad=aNum(r.cantidad);
+    const precio=aNum(r.precio);
+    const montoBruto=aNum(r.montoBruto);
+    const total=aNum(r.total);
+
+    if(!fecha){ omitidos.push({fecha:r.fechaEjecucion||"—",op:op.slice(0,30),ticker:instrumento,motivo:"fecha no reconocida"}); continue; }
+
+    if(OMITIR_SIEMPRE[op]){ omitidos.push({fecha,op,ticker:instrumento,motivo:OMITIR_SIEMPRE[op]}); continue; }
+
+    if(TRADE_OPS.has(op)){
+      if(!instrumento){ omitidos.push({fecha,op,ticker:"",motivo:"operación sin especie identificada"}); continue; }
+      if(!cantidad){ omitidos.push({fecha,op,ticker:instrumento,motivo:"cantidad en cero"}); continue; }
+      const importeEf=(total!=null&&total!==0)?total:montoBruto;
+      if(importeEf==null){ omitidos.push({fecha,op,ticker:instrumento,motivo:"sin importe"}); continue; }
+      const {ticker,tipo,sinClasificar}=clasificarTickerCocos(instrumento);
+      const item={fecha,op:/^Compra/i.test(op)?"compra":"venta",ticker,cantidad:Math.abs(cantidad),
+        precioBruto:Math.abs(importeEf)/Math.abs(cantidad),moneda,origen:op+" — "+instrumento,tipo};
+      if(sinClasificar) revisar.push(item); else candidatos.push(item);
+      continue;
+    }
+
+    if(FCI_RESCATE.has(op)||FCI_SUSCRIP.has(op)){
+      if(!cantidad||precio==null){ omitidos.push({fecha,op,ticker:instrumento,motivo:"sin datos suficientes"}); continue; }
+      const fondo=instrumento.replace(/^FCI\s+/i,"").replace(/\s*\([^)]*\)\s*$/,"").trim()||instrumento;
+      candidatos.push({fecha,tipo:"fci",op:FCI_RESCATE.has(op)?"venta":"compra",fondo,
+        cantidad:Math.abs(cantidad),precio:Math.abs(precio),moneda,origen:op});
+      continue;
+    }
+
+    if(DEPOSITO_OPS.has(op)||RETIRO_OPS.has(op)){
+      const importe=total!=null?total:montoBruto;
+      if(!importe){ omitidos.push({fecha,op,ticker:"",motivo:"importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"deposito":"retiro",cantidad:1,precio:Math.abs(importe),moneda,origen:op});
+      continue;
+    }
+
+    if(CAJA_RESULTADO_OPS.has(op)){
+      const importe=total!=null?total:montoBruto;
+      if(!importe){ omitidos.push({fecha,op,ticker:"",motivo:"importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,precio:Math.abs(importe),moneda,origen:op});
+      continue;
+    }
+
+    omitidos.push({fecha,op:op.slice(0,40),ticker:instrumento,motivo:"tipo de operación no reconocido"});
+  }
+  return {candidatos,omitidos,revisar};
+}
+
 /* ══════════════ Importar operaciones de un bróker ══════════════ */
 // Registro de bróker → parser. Para sumar uno nuevo (Cocos, etc.) alcanza con
 // agregar una entrada acá y escribir su función de parseo — el resto de la UI
@@ -3705,13 +3822,13 @@ const IMPORTADORES={
   balanz:{nombre:"Balanz",hoja:"movimientos",parser:parseBalanzMovimientos},
   puente:{nombre:"Puente",formato:"pdf",parser:parsePuenteMovimientos},
   ieb:{nombre:"IEB+",hoja:"Export",parser:parseIEBMovimientos},
+  cocos:{nombre:"Cocos",formato:"csv",parser:parseCocosMovimientos},
 };
 let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[];
 
 function abrirImportBroker(){
   const sel=document.getElementById("imp-broker");
-  sel.innerHTML=Object.entries(IMPORTADORES).map(([k,v])=>`<option value="${k}">${v.nombre}</option>`).join("")
-    +`<option value="" disabled>Cocos (próximamente)</option>`;
+  sel.innerHTML=Object.entries(IMPORTADORES).map(([k,v])=>`<option value="${k}">${v.nombre}</option>`).join("");
   document.getElementById("imp-paso1").style.display="block";
   document.getElementById("imp-paso2").style.display="none";
   document.getElementById("imp-confirmar").style.display="none";
@@ -3731,30 +3848,62 @@ function onBrokerChange(){
       Se lee directo el PDF, tal cual lo bajás — no hace falta pasarlo a Excel.`,
     ieb:`En tu cuenta de IEB+: <b>Toda la actividad</b> → exportá a Excel el rango de fechas desde el inicio de tus operaciones.<br>
       Tiene que tener una hoja llamada "Export", tal cual la descarga la plataforma.`,
+    cocos:`En tu cuenta de Cocos: <b>Movimientos</b> → exportá el CSV. Cocos solo lo permite bajar <b>año por año</b>, así que descargá un
+      archivo por cada año que operaste (2024, 2025, 2026…).<br>
+      Podés seleccionar <b>varios archivos CSV a la vez</b> en el selector de abajo — se cargan todos juntos en un solo paso.`,
   };
   document.getElementById("imp-broker-hint").innerHTML=b?hints[b]||`Subí el archivo .xlsx de "${IMPORTADORES[b].hoja}" que exportaste de ${IMPORTADORES[b].nombre}.`:"";
   const inp=document.getElementById("imp-file");
-  if(b) inp.accept=IMPORTADORES[b].formato==="pdf"?".pdf":".xlsx";
+  if(b) inp.accept=IMPORTADORES[b].formato==="pdf"?".pdf":IMPORTADORES[b].formato==="csv"?".csv":".xlsx";
+}
+
+// ── Lector CSV mínimo: separador ";" fijo (formato Cocos), sin manejo de
+// comillas RFC4180 porque el export real no las usa como delimitador (los
+// nombres de instrumento a veces traen comillas sueltas, p.ej. GALICIA "B",
+// pero nunca envuelven el campo ni contienen el separador). Devuelve el mismo
+// shape que XLSX.utils.sheet_to_json: un array de objetos por fila. ──
+async function leerCSV(file){
+  let texto=await file.text();
+  texto=texto.replace(/^\uFEFF/,"");
+  const lineas=texto.split(/\r\n|\n|\r/).filter(l=>l.trim()!=="");
+  if(!lineas.length) return [];
+  const headers=lineas[0].split(";").map(h=>h.trim());
+  return lineas.slice(1).map(linea=>{
+    const cols=linea.split(";");
+    const obj={};
+    headers.forEach((h,i)=>obj[h]=cols[i]!==undefined?cols[i].trim():"");
+    return obj;
+  });
 }
 
 async function onFileImportBroker(ev){
-  const f=ev.target.files[0];
-  if(!f) return;
+  const files=[...ev.target.files];
+  if(!files.length) return;
   const brokerId=document.getElementById("imp-broker").value;
   const err=document.getElementById("imp-err");
   err.textContent="";
   try{
     const cfg=IMPORTADORES[brokerId];
-    let candidatos,omitidos,revisar;
-    if(cfg.formato==="pdf"){
-      const lineas=await extraerLineasPDF(f);
-      ({candidatos,omitidos,revisar}=cfg.parser(lineas));
-    } else {
-      const buf=await f.arrayBuffer();
-      const wb=XLSX.read(buf,{type:"array",cellDates:true});
-      const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
-      const rows=XLSX.utils.sheet_to_json(hoja,{defval:null});
-      ({candidatos,omitidos,revisar}=cfg.parser(rows));
+    // Varios archivos a la vez (p.ej. Cocos: un CSV por año) — se parsea cada
+    // uno por separado y se juntan los resultados; para brokers de un solo
+    // archivo (Balanz/IEB+/Puente) el comportamiento es idéntico a antes.
+    let candidatos=[], omitidos=[], revisar=[];
+    for(const f of files){
+      let res;
+      if(cfg.formato==="pdf"){
+        const lineas=await extraerLineasPDF(f);
+        res=cfg.parser(lineas);
+      } else if(cfg.formato==="csv"){
+        const rows=await leerCSV(f);
+        res=cfg.parser(rows);
+      } else {
+        const buf=await f.arrayBuffer();
+        const wb=XLSX.read(buf,{type:"array",cellDates:true});
+        const hoja=wb.Sheets[cfg.hoja]||wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(hoja,{defval:null});
+        res=cfg.parser(rows);
+      }
+      candidatos.push(...res.candidatos); omitidos.push(...res.omitidos); revisar.push(...res.revisar);
     }
     IMP_CANDIDATOS=candidatos; IMP_OMITIDOS=omitidos; IMP_REVISAR=revisar;
     renderPreviewImport();
