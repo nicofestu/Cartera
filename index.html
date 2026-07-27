@@ -1252,7 +1252,16 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
       if(!mepHoy||!mepDesde) return null;
       ret=(p.px/mepHoy)/(h.precio/mepDesde)-1;
     }
-    return {...p,ret,desdeEf};
+    // Valor actual (en la moneda de VISTA) y valor implícito al arranque
+    // efectivo del período, derivado del mismo ret (asume cantidad estable
+    // dentro de la ventana — igual limitación que "ret" arriba). Con eso se
+    // puede mostrar la ganancia en moneda y armar el cuadro por activo en
+    // cualquier período, no solo en "Histórico completo".
+    const valHoy=VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
+    const valDesde=valHoy!=null?valHoy/(1+ret):null;
+    const dias=diasEntre(desdeEf,hasta);
+    return {...p,ret,desdeEf,dias,tna:anualizar(ret,dias),valHoy,valDesde,
+      gan:(valHoy!=null&&valDesde!=null)?valHoy-valDesde:null};
   }).filter(Boolean);
 }
 // Resultado realizado (ventas ya cerradas) que cayó específicamente dentro de
@@ -1470,14 +1479,22 @@ function serieDiaria(){
 function retornoEntre(serie,desde,hasta){
   const tramo=serie.filter(d=>d.fecha>desde&&d.fecha<=hasta);
   if(!tramo.length) return null;
-  let c=1,csp=1,cndx=1,haySp=false;
+  let c=1,csp=1,cndx=1,haySp=false,gan=0;
   for(const d of tramo){
     c*=(1+d.r);
+    gan+=d.v-d.v0-d.flujo; // ganancia en moneda del tramo (Modified Dietz), acumulada día a día
     if(d.rsp!=null){ csp*=(1+d.rsp); haySp=true; }
     if(d.rndx!=null) cndx*=(1+d.rndx);
   }
+  const desdeR=tramo[0].fecha, hastaR=tramo[tramo.length-1].fecha;
+  // "dias" tiene que ser tiempo de calendario real (desdeR→hastaR), no
+  // tramo.length: la serie diaria descarta días de saldo bajo y depende de
+  // cuándo se abrió la app, así que la cantidad de snapshots puede ser mucho
+  // menor a los días corridos — eso hacía que TNA anualizara sobre una base
+  // chica y diera un número disparatado (mismo criterio que ya usa bien el
+  // gráfico de "Histórico completo" con diasEntre(sr.desde,hoy())).
   return {ret:c-1,sp:haySp?csp-1:null,ndx:haySp?cndx-1:null,
-    dias:tramo.length,desde:tramo[0].fecha,hasta:tramo[tramo.length-1].fecha};
+    dias:diasEntre(desdeR,hastaR),desde:desdeR,hasta:hastaR,gan};
 }
 
 /* ══════════════ Diagnóstico de la serie ══════════════
@@ -1928,6 +1945,7 @@ function render(soloEstructura){
         haySp=bPts.length>1; benchHoy=haySp?bPts[bPts.length-1].ret:null;
       }
       const desdeCh=rango.desde, hastaCh=tramo[tramo.length-1].fecha;
+      const diasCh=diasEntre(desdeCh,hastaCh);
       const t0=new Date(desdeCh+"T12:00").getTime(), t1=new Date(hastaCh+"T12:00").getTime();
       const span=Math.max(1,t1-t0);
       const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
@@ -1970,7 +1988,7 @@ function render(soloEstructura){
         <div class="chart-tooltip" id="rend-tooltip"></div>
         <div class="chart-yaxis">${ticks.slice().reverse().map(t=>`<span>${sgn(t.v*100)}</span>`).join("")}</div>
         <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
-        <div class="chart-meta"><span>${rango.etiqueta} · ${tramo.length} día${tramo.length>1?"s":""}</span>
+        <div class="chart-meta"><span>${rango.etiqueta} · ${diasCh} día${diasCh>1?"s":""}</span>
           <span>time-weighted</span>
           <span class="${cls(retHoy)}">${sgn(retHoy*100)}</span></div>
       </div>`;
@@ -2091,7 +2109,7 @@ function render(soloEstructura){
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
-            <div class="d">time-weighted · ${r.dias} día${r.dias>1?"s":""} · ${monedaLbl}</div></div>`,
+            <div class="d">${signoMoney(r.gan)} · time-weighted · ${r.dias} día${r.dias>1?"s":""} · ${monedaLbl}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
             <div class="d">anualizado · ${r.dias}d</div></div>`,
@@ -2115,13 +2133,39 @@ function render(soloEstructura){
             <div class="d">ventas cerradas en el período</div></div>`:null,
         ];
         metaHtml=`<span>${r.dias} días · ${r.desde} → ${r.hasta}</span>`;
+        if(metP.length){
+          // Contribución relativa al valor total de las posiciones con precio
+          // en esta ventana (no al capital aportado, que no aplica igual acá:
+          // una posición puede venir de antes del período).
+          const baseCapP=metP.reduce((s,p)=>s+(p.valHoy||0),0)||total;
+          metP.forEach(p=>{ p.contrib=(baseCapP>0&&p.gan!=null)?p.gan/baseCapP:null; });
+          const maxC=Math.max(...metP.map(x=>Math.abs(x.contrib||0)))||1;
+          tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
+              <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
+              <th>Valor</th><th>Resultado</th><th>Retorno</th><th>TNA</th><th class="l" style="width:130px">Contribución</th>
+            </tr></thead><tbody>
+            ${metP.map(p=>{
+              const w=p.contrib!=null?Math.abs(p.contrib)/maxC*100:0;
+              return `<tr><td class="tk">${p.ticker}</td>
+              <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
+              <td>${p.desdeEf||"—"}</td><td>${p.dias||"—"}</td>
+              <td>${p.valHoy==null?"—":money(p.valHoy)}</td>
+              <td class="${cls(p.gan||0)}">${p.gan==null?"—":signoMoney(p.gan)}</td>
+              <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
+              <td class="${cls(p.tna)}" ${p.dias<90&&p.tna!=null?'title="Extrapolado desde '+p.dias+' días — tomar con cautela"':""}>${p.tna==null?"—":sgn(p.tna*100)+(p.dias<90?"*":"")}</td>
+              <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${(p.contrib||0)>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
+                <span>${p.contrib==null?"—":sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
+            </tbody></table></div>`;
+        }
         notaHtml=`<div class="perf-note">${huecoInicio?`<b>Ojo:</b> pediste desde ${rango.desde}, pero no hay cierres
           registrados entre esa fecha y ${r.desde} — todo lo que se muestra acá (retorno del período, mejor/peor
           posición, comparación vs. índices) arranca en ${r.desde}, no en ${rango.desde}. Se cierra solo a medida
           que el historial público cubra esos días.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
-          salió, así un depósito no se confunde con una ganancia. Mejor/peor posición se mide desde el arranque
-          efectivo del período (o desde tu primera compra de esa posición, si es más tarde) y también en ${monedaLbl}
-          — no contra tu costo de compra original. Los días con menos de
+          salió, así un depósito no se confunde con una ganancia. El cuadro por activo y mejor/peor posición se
+          miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
+          tarde), también en ${monedaLbl} y no contra tu costo de compra original — no incluyen FCI ni posiciones
+          con precio manual, que no tienen historial diario. TNA anualiza con base 365 y requiere más de 30 días;
+          los valores marcados con * extrapolan menos de 90 días. Los días con menos de
           US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
           % sin sentido.</div>`;
       }
