@@ -61,7 +61,7 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
    una vez que encuentra una foto que pasa el filtro (ver buscarFondoNasa()). */
 body::after{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
   background-image:var(--nasa-bg,none);background-size:cover;background-position:center;
-  filter:brightness(.60) saturate(.40);
+  filter:brightness(.50) saturate(.80);
   opacity:0;transition:opacity 2s var(--ease);}
 body.has-nasa-bg::after{opacity:.48}
 @media(max-width:700px){body.has-nasa-bg::after{opacity:.42}}
@@ -3825,7 +3825,7 @@ async function resolverUrlImagen(nasaId){
     const j=await r.json();
     const hrefs=(j?.collection?.items||[]).map(x=>x.href).filter(Boolean);
     const porTamano=suf=>hrefs.find(h=>new RegExp("~"+suf+"\\.(jpg|jpeg|png)$","i").test(h));
-    const elegida=porTamano("medium")||porTamano("large")||porTamano("orig")||hrefs[0];
+    const elegida=porTamano("large")||porTamano("orig")||hrefs[0];
     return elegida?elegida.replace(/^http:/,"https:"):null; // forzar https, la app se sirve por https
   }catch(e){ return null; }
 }
