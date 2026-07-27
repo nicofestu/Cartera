@@ -3821,11 +3821,36 @@ function importar(ev){
    repetir las búsquedas cada vez que se abre una pestaña nueva del mismo
    dashboard; si falla (sin red, CORS, etc.) la app sigue funcionando igual,
    simplemente sin foto de fondo. */
-const NASA_TEMAS=[
-  ["rocket launch liftoff exhaust","saturn v rocket launch pad","falcon heavy launch night sky","rocket engine test firing static"],
-  ["earth full disk from space","earth limb horizon from orbit satellite","aurora borealis seen from space station","blue marble earth from space"],
-  ["moon lunar surface crater far side","full moon from orbit","lunar eclipse moon shadow","moon terminator crater shadows apollo"],
-  ["hubble deep field galaxy nebula","webb telescope nebula star forming region","saturn rings from cassini spacecraft","jupiter great red spot voyager"],
+const NASA_TEMAS = [
+
+  [
+    "nebula",
+    "emission nebula",
+    "reflection nebula",
+    "planetary nebula"
+  ],
+
+  [
+    "galaxy",
+    "spiral galaxy",
+    "deep field",
+    "milky way"
+  ],
+
+  [
+    "rocket launch",
+    "saturn v",
+    "artemis launch",
+    "space launch system"
+  ],
+
+  [
+    "james webb telescope",
+    "hubble telescope",
+    "jwst deep field",
+    "hubble deep space"
+  ]
+
 ];
 const NASA_BLACKLIST=["astronaut","cosmonaut","crew member","crew members"," crew ","portrait","spacewalk","extravehicular","eva ","press conference","group photo","photograph beside","poses beside","poses with","poses for","smiling","waves to","walks to","stands beside","stands in front","sits in","sits at","administrator","director of","engineer ","technician","flight controllers","mission control room","selfie","training exercise","suits up","suiting up","students","visit to","tour of","award ceremony","meeting with","spacesuit fitting","handshake","interview with","poses in front","speaks","speaking","addresses","audience","classroom","volunteers","staff photo","team photo"];
 const NASA_BG_KEY="cartera_nasa_bg_v1";
@@ -3867,11 +3892,29 @@ async function buscarFondoNasa(){
     let candidatos=[];
     for(const res of resultados){
       for(const it of (res?.collection?.items||[])){
-        const d=it.data?.[0];
-        if(!d||d.media_type!=="image"||!d.nasa_id) continue;
-        if(nasaTienePersonas(nasaTextoDe(it))) continue;
-        candidatos.push({id:d.nasa_id,titulo:d.title});
-      }
+  const d=it.data?.[0];
+  if(!d || d.media_type!=="image" || !d.nasa_id) continue;
+
+  const texto = nasaTextoDe(it).toLowerCase();
+
+  // Nunca mostrar personas
+  if(nasaTienePersonas(texto)) continue;
+
+  // Descartar planetas, luna, tierra, etc.
+  if(
+      /\b(earth|planet|mars|jupiter|saturn|venus|mercury|uranus|neptune|pluto|moon|lunar|asteroid|comet|eclipse)\b/.test(texto)
+  ) continue;
+
+  // Descartar diagramas e ilustraciones
+  if(
+      /\b(diagram|illustration|drawing|render|artist|concept|animation|infographic|logo|patch)\b/.test(texto)
+  ) continue;
+
+  candidatos.push({
+      id:d.nasa_id,
+      titulo:d.title
+  });
+}
     }
     if(!candidatos.length) return; // sin candidatos válidos: se queda sin foto de fondo
     // Se barajan y se prueban unos pocos hasta que uno resuelva a una imagen
@@ -3880,12 +3923,20 @@ async function buscarFondoNasa(){
     for(const c of candidatos){
       const url=await resolverUrlImagen(c.id);
       if(!url) continue;
-      const carga=await new Promise(res=>{
-        const img=new Image();
-        img.onload=()=>res(true); img.onerror=()=>res(false);
-        img.src=url;
-      });
-      if(!carga) continue;
+      const img = await new Promise(res=>{
+    const i = new Image();
+
+    i.onload = ()=>res(i);
+    i.onerror = ()=>res(null);
+
+    i.src = url;
+});
+
+if(!img) continue;
+
+// Ignorar imágenes chicas
+if(img.naturalWidth < 2500 || img.naturalHeight < 1400)
+    continue;
       const elegido={id:c.id,titulo:c.titulo,url};
       sessionStorage.setItem(NASA_BG_KEY,JSON.stringify(elegido));
       pintarFondoNasa(elegido);
