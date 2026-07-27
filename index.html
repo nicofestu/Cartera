@@ -753,15 +753,82 @@ async function cargarHistorialRemoto(){
   HIST_REMOTO=Object.keys(precios).length?{precios,mepHist,mepFechas}:null;
   return HIST_REMOTO;
 }
+/* ══════════════ Cambios de ratio de CEDEARs (y splits) ══════════════
+   Cuando cambia el ratio de un CEDEAR el precio de mercado cambia de ESCALA de
+   un día para el otro y el tenedor recibe papeles nuevos para compensar: el
+   valor de la tenencia no cambia, pero el precio unitario sí. En `movimientos`
+   no se carga nada (el bróker acredita los papeles solo), así que las
+   cantidades siguen expresadas en la escala VIEJA.
+
+   Sin corregir esto, la cartera parece desplomarse el día del cambio: el
+   dashboard multiplica la cantidad vieja por el precio nuevo. Es exactamente
+   lo que pasó con SPY: 56.000 el 28/05/2026 → 18.760 el 29/05/2026, un ÷3
+   limpio mientras NVDA, MELI y el resto de los cedears no se movieron.
+
+   `factor` = cuántos papeles nuevos entrega cada papel viejo. Todos los
+   precios desde esa fecha se re-expresan en la escala vieja (× factor), que es
+   la escala en la que están las cantidades de `movimientos`.
+
+   IMPORTANTE: si en vez de esto se carga el ajuste como un movimiento (una
+   compra de los papeles nuevos a precio 0), la corrección se duplicaría. Por
+   eso `ratioCargadoAMano()` detecta ese caso y desactiva el ajuste automático
+   para ese ticker. */
+const AJUSTES_RATIO={
+  SPY:[{fecha:"2026-05-29",factor:3}],
+};
+// ¿El usuario ya cargó el ajuste como movimiento? Una compra a precio 0 (o
+// prácticamente 0) de ese ticker es la forma en que se registraría a mano.
+function ratioCargadoAMano(ticker){
+  return (DATOS.movimientos||[]).some(m=>m.op==="compra"&&m.ticker===ticker&&!(m.precio>0));
+}
+// Producto de los factores de todos los cambios de ratio con fecha <= f.
+function factorRatio(ticker,f){
+  const ajs=ticker?AJUSTES_RATIO[ticker]:null;
+  if(!ajs||ratioCargadoAMano(ticker)) return 1;
+  let k=1; for(const a of ajs) if(a.fecha<=f) k*=a.factor;
+  return k;
+}
+// Cambios de ratio que se detectan solos en el historial público y que todavía
+// no están declarados en AJUSTES_RATIO. Un quiebre limpio de escala (×2, ×3,
+// ×4, ×5, ×10 o sus inversos) de un día para el otro, en un solo ticker, no es
+// mercado: es un ajuste de ratio. Se avisa en pantalla para no volver a comerse
+// un salto fantasma sin darse cuenta.
+function detectarRatiosNoDeclarados(tickersEnCartera){
+  if(!HIST_REMOTO) return [];
+  const fechas=Object.keys(HIST_REMOTO.precios).sort();
+  const cand=[2,3,4,5,10], hallazgos=[];
+  for(const {tipo,ticker} of tickersEnCartera){
+    if(AJUSTES_RATIO[ticker]) continue;
+    let prev=null;
+    for(const f of fechas){
+      const p=HIST_REMOTO.precios[f]?.[tipo]?.[ticker];
+      if(p==null||!(p>0)) continue;
+      if(prev){
+        const r=p/prev.p;
+        for(const c of cand){
+          if(Math.abs(r-c)/c<0.02||Math.abs(r-1/c)/(1/c)<0.02){
+            hallazgos.push({ticker,tipo,fecha:f,desde:prev.f,antes:prev.p,despues:p,
+              factor:r<1?c:1/c});
+            break;
+          }
+        }
+      }
+      prev={f,p};
+    }
+  }
+  return hallazgos;
+}
 // Precio de una especie en una fecha, mirando hasta `tolerancia` días para
 // atrás (nunca para adelante) si ese día puntual no tiene cierre registrado
 // — cubre fines de semana, feriados o una especie poco líquida ese día.
+// El precio vuelve ya re-expresado en la escala de las cantidades cargadas
+// (ver AJUSTES_RATIO).
 function precioHistorial(tipo,ticker,fecha,tolerancia=5){
   if(!HIST_REMOTO) return null;
   let f=fecha;
   for(let i=0;i<=tolerancia;i++){
     const p=HIST_REMOTO.precios[f]?.[tipo]?.[ticker];
-    if(p!=null) return {precio:p,fecha:f};
+    if(p!=null) return {precio:p*factorRatio(ticker,f),fecha:f};
     const d=new Date(f+"T12:00:00"); d.setDate(d.getDate()-1); f=d.toLocaleDateString("sv-SE");
   }
   return null;
@@ -780,44 +847,95 @@ async function reconstruirHistorialSnapshots(){
 
   const primeraFecha=DATOS.movimientos.reduce((m,x)=>x.fecha<m?x.fecha:m,DATOS.movimientos[0].fecha);
   const ayer=restarDias(hoy(),1);
-  const yaHay=new Set((DATOS.snapshots||[]).map(s=>s.fecha));
   const hitos=construirHitosCaja();
 
+  // Antes se salteaba directamente el día completo apenas UNA posición no
+  // tenía cobertura de precio (manual/on), y también se salteaba cualquier
+  // día que ya tuviera snapshot guardado. Las dos cosas juntas dejaban
+  // fosilizado para siempre cualquier cierre mal calculado por una versión
+  // vieja del código — y eso es justo lo que pasó: se detectó (comparando el
+  // gist real contra esta misma reconstrucción) que una tanda entera de
+  // snapshots históricos (marcados hist:true) tiene la CAJA excluida del NAV:
+  // quedó guardado solo el valor de las posiciones, sin sumar el efectivo.
+  // Con caja positiva (plata esperando para invertir) el guardado queda por
+  // debajo del real — se ve como una caída. Con caja negativa (después de un
+  // retiro) el guardado queda por arriba — se ve como una suba falsa. Eso es
+  // lo que produce los tres saltos reportados en marzo, junio y julio.
+  //
+  // Ahora, en vez de saltear el día entero por una posición sin cobertura
+  // (manual/on), se reconstruye con lo que SÍ tiene precio y se guarda aparte
+  // qué faltó. La caja se suma siempre (nunca depende de tener cobertura de
+  // precios). Un snapshot ya guardado (hist:true) se revisa así:
+  //   - si la reconstrucción es completa (nada sin precio): se reemplaza si
+  //     difiere del guardado en más de un margen chico, para cualquiera de
+  //     los dos lados (antes solo se corregía si el nuevo era MAYOR).
+  //   - si es parcial (algo sin precio, ej. SOFI): solo se toca si el
+  //     guardado coincide con el valor de las posiciones SIN la caja — la
+  //     firma exacta del bug — y ahí se repara sumando la caja, dejando
+  //     constancia de qué ticker sigue sin precio.
+  // Un snapshot SIN hist:true (capturado en vivo, con precios de mercado
+  // reales al momento) nunca se toca: es más confiable que reconstruir
+  // contra un cierre de fin de día.
+  const TOL_ABS=500, TOL_REL=0.002; // margen para no pisar por ruido de redondeo
+  const guardado=new Map((DATOS.snapshots||[]).map(s=>[s.fecha,s]));
   const fechas=Object.keys(HIST_REMOTO.precios)
-    .filter(f=>f>=primeraFecha&&f<=ayer&&!yaHay.has(f)).sort();
-  const nuevos=[];
+    .filter(f=>f>=primeraFecha&&f<=ayer).sort();
+  const nuevos=[]; const reparados=[];
   for(const f of fechas){
     const {posiciones}=derivarPosiciones(null,f);
     if(!posiciones.length) continue;
-    // manual y ON no tienen precio histórico en ninguna fuente todavía
-    // (historial/*.json cubre "cedear", "bono", y ahora también "accion" y
-    // "fci" para los tickers puntuales que se fueron agregando a mano).
-    // Sin este chequeo, un día con una posición sin cobertura se reconstruye
-    // igual pero esa posición puntual queda sin precio — el NAV de ese día
-    // sale de menos de lo que debería, como si esa plata hubiera
-    // desaparecido, y el snapshot "roto" queda guardado para siempre.
-    if(posiciones.some(p=>p.tipo==="manual"||p.tipo==="on")) continue;
-    let valARS=0, falta=false;
+    let valARS=0, faltan=[];
     for(const p of posiciones){
+      if(p.tipo==="manual"||p.tipo==="on"){ faltan.push(p.tipo+":"+(p.ticker||p.fondo)); continue; }
       const h=precioHistorial(p.tipo,p.ticker,f);
-      if(!h){ falta=true; break; }
+      if(!h){ faltan.push(p.tipo+":"+p.ticker); continue; }
       valARS+=h.precio/divisorDe(p.tipo)*p.qty;
     }
-    if(falta) continue;
     const mep=mepHistorial(f);
     if(!mep) continue;
-    const ars=valARS+cajaEnFecha(hitos,f);
-    const sp=sp500En(f), ndx=ndxEn(f);
-    nuevos.push({fecha:f,ars:Math.round(ars),usd:Math.round(ars/mep*100)/100,
-      mep:Math.round(mep*100)/100,
-      sp:sp!=null?Math.round(sp*100)/100:null,
-      ndx:ndx!=null?Math.round(ndx*100)/100:null, hist:true});
+    const caja=cajaEnFecha(hitos,f);
+    const completo=faltan.length===0;
+    const ars=valARS+caja;
+    const viejo=guardado.get(f);
+
+    if(!viejo){
+      if(!completo) continue; // no fabricar un cierre nuevo con huecos
+      const sp=sp500En(f), ndx=ndxEn(f);
+      nuevos.push({fecha:f,ars:Math.round(ars),usd:Math.round(ars/mep*100)/100,
+        inv:Math.round(valARS),caja:Math.round(caja),mep:Math.round(mep*100)/100,
+        sp:sp!=null?Math.round(sp*100)/100:null,
+        ndx:ndx!=null?Math.round(ndx*100)/100:null, hist:true});
+      continue;
+    }
+    if(viejo.hist!==true) continue; // capturado en vivo: no se toca
+
+    const tol=Math.max(TOL_ABS,Math.abs(ars)*TOL_REL);
+    if(completo){
+      if(Math.abs(viejo.ars-ars)>tol){
+        reparados.push({fecha:f,antes:viejo.ars,ahora:Math.round(ars),motivo:"recalculado"});
+        Object.assign(viejo,{ars:Math.round(ars),usd:Math.round(ars/mep*100)/100,
+          inv:Math.round(valARS),caja:Math.round(caja),mep:Math.round(mep*100)/100});
+      }
+    } else if(Math.abs(caja)>tol){
+      // Firma del bug: lo guardado coincide con las posiciones SIN la caja.
+      const tolParcial=Math.max(TOL_ABS,Math.abs(valARS)*TOL_REL);
+      if(Math.abs(viejo.ars-valARS)<=tolParcial){
+        reparados.push({fecha:f,antes:viejo.ars,ahora:Math.round(ars),
+          motivo:"caja no sumada"+(faltan.length?" · sigue sin precio: "+faltan.join(", "):"")});
+        Object.assign(viejo,{ars:Math.round(ars),usd:Math.round(ars/mep*100)/100,
+          inv:Math.round(valARS),caja:Math.round(caja),mep:Math.round(mep*100)/100,parcial:true});
+      }
+    }
   }
-  if(!nuevos.length) return;
+  if(!nuevos.length&&!reparados.length) return;
+  ULTIMA_REVISION=reparados;
   DATOS.snapshots=[...(DATOS.snapshots||[]),...nuevos].sort((a,b)=>a.fecha.localeCompare(b.fecha));
   persistirYSync();
   if(ESTADO) render();
 }
+// Días cuyo cierre guardado se corrigió en la última reconstrucción (se muestra
+// en Rendimientos para que el cambio no pase inadvertido).
+let ULTIMA_REVISION=[];
 
 function setTab(t){
   TAB=t;
@@ -978,9 +1096,31 @@ function serieRendimiento(){
   const retirado=K==="ars"?retA:retU;
   // Aporte vigente en cada fecha (para normalizar los snapshots de NAV)
   const aporteEn=f=>{
+    // Antes del primer movimiento no hay nada aportado todavía: devolver
+    // hitos[0] ahí adelantaba el primer aporte a fechas en las que la cartera
+    // ni existía y ensuciaba el flujo del primer tramo.
+    if(f<hitos[0].fecha) return {ap:0,cj:0,rt:0};
     let r=hitos[0];
     for(const hh of hitos) if(hh.fecha<=f) r=hh;
     return K==="ars"?{ap:r.aporA,cj:r.cajaA,rt:r.retA}:{ap:r.aporU,cj:r.cajaU,rt:r.retU};
+  };
+  // Flujos netos de capital externo (aporte − retiro) CON SU FECHA, dentro de
+  // (desde, hasta]. Hace falta la fecha de cada uno para poder ponderarlos por
+  // el tiempo que estuvieron efectivamente invertidos dentro del tramo — ver
+  // Modified Dietz en serieDiaria().
+  const flujosEntre=(desde,hasta)=>{
+    const val=hh=>K==="ars"?{ap:hh.aporA,rt:hh.retA}:{ap:hh.aporU,rt:hh.retU};
+    let apPrev=0, rtPrev=0;
+    for(const hh of hitos){ if(hh.fecha<=desde){ const v=val(hh); apPrev=v.ap; rtPrev=v.rt; } }
+    const out=[];
+    for(const hh of hitos){
+      if(hh.fecha<=desde||hh.fecha>hasta) continue;
+      const v=val(hh);
+      const monto=(v.ap-apPrev)-(v.rt-rtPrev);
+      if(Math.abs(monto)>1e-9) out.push({fecha:hh.fecha,monto});
+      apPrev=v.ap; rtPrev=v.rt;
+    }
+    return out;
   };
   const puntos=[];
   puntos.push({fecha:movs[0].fecha,ret:0});
@@ -1012,12 +1152,15 @@ function serieRendimiento(){
     return {en,uniEn,unidades:u};
   };
   const bSP=mkBench(sp500En), bNDX=mkBench(ndxEn);
-  return {puntos,aporte,caja,retirado,desde:movs[0].fecha,hitos,aporteEn,
+  return {puntos,aporte,caja,retirado,desde:movs[0].fecha,hitos,aporteEn,flujosEntre,
     benchEn:bSP.en, benchNdxEn:bNDX.en, uniEn:bSP.uniEn, unidades:bSP.unidades};
 }
 
 /* ══════════════ Rendimientos ══════════════ */
 function diasEntre(a,b){ return Math.max(1,Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5)); }
+// Días calendario crudos entre dos fechas (puede dar 0 o negativo). diasEntre
+// pisa el mínimo en 1 y eso rompe la ponderación de flujos del mismo día.
+function diasCal(a,b){ return Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5); }
 function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null; }
 
 /* ══════════════ Selector de período (pestaña Rendimientos) ══════════════
@@ -1139,6 +1282,9 @@ async function cargar(){
         const r=precios[p.tipo]?.[p.ticker];
         if(r){
           px=r.c||r.px_bid||null; pct=r.pct_change??null;
+          // Mismo criterio que precioHistorial: el precio de hoy se re-expresa
+          // en la escala en que están cargadas las cantidades (ver AJUSTES_RATIO).
+          if(px!=null) px*=factorRatio(p.ticker,hoy());
           const base=p.ticker.slice(0,-1);
           pxMoneda=(/[DC]$/.test(p.ticker)&&precios[p.tipo][base]!=null)?"USD":"ARS";
         }
@@ -1168,11 +1314,14 @@ async function cargar(){
 
     // Snapshot diario (uno por fecha, se pisa si ya existe) — incluye liquidez
     const cashARS=Object.values(DATOS.saldos||{}).reduce((s,x)=>s+(x.ars||0)+(x.usd||0)*MEP,0);
-    const tARS=pos.reduce((s,p)=>s+(p.valARS||0),0)+cashARS;
+    const invARS=pos.reduce((s,p)=>s+(p.valARS||0),0);
+    const tARS=invARS+cashARS;
     const sinPrecio=pos.filter(p=>p.valARS==null).length;
     if(pos.length>0&&sinPrecio===0){
       const f=hoy(), i=DATOS.snapshots.findIndex(s=>s.fecha===f);
-      const snap={fecha:f,ars:Math.round(tARS),usd:Math.round(tARS/MEP*100)/100,mep:Math.round(MEP*100)/100,sp:Math.round(sp500Hoy()*100)/100,ndx:Math.round(ndxHoy()*100)/100};
+      const snap={fecha:f,ars:Math.round(tARS),usd:Math.round(tARS/MEP*100)/100,
+        inv:Math.round(invARS),caja:Math.round(cashARS),
+        mep:Math.round(MEP*100)/100,sp:Math.round(sp500Hoy()*100)/100,ndx:Math.round(ndxHoy()*100)/100};
       if(i>=0) DATOS.snapshots[i]=snap; else DATOS.snapshots.push(snap);
       DATOS.snapshots.sort((a,b)=>a.fecha.localeCompare(b.fecha));
       persistir();
@@ -1231,15 +1380,31 @@ function serieDiaria(){
     const prev=snaps[i-1], cur=snaps[i];
     const v0=prev[K], v1=cur[K];
     if(!(v0>0)||!(v1>=0)) continue;
-    const a0=sr.aporteEn(prev.fecha), a1=sr.aporteEn(cur.fecha);
-    const flujo=(a1.ap-a0.ap)-(a1.rt-a0.rt);   // capital que entró (o salió) entre ambos días
-    const r=(v1-flujo)/v0-1;
+    // ── Modified Dietz ──────────────────────────────────────────────────
+    // El criterio viejo era r=(v1−flujo)/v0−1, que asume que TODO el capital
+    // entró justo al cierre del último día del tramo (y por lo tanto no rindió
+    // nada). Con un depósito grande sobre una cartera todavía chica eso da
+    // números delirantes: v0=US$1.000, entra un depósito de US$10.000 que rinde
+    // 5%, v1=US$11.550 → el criterio viejo devuelve +55% cuando la ganancia
+    // real fue +5%. Ese es el origen del salto vertical de fin de marzo.
+    // Ahora cada flujo pesa por la fracción del tramo que estuvo invertido.
+    const T=diasCal(prev.fecha,cur.fecha);
+    const flujos=sr.flujosEntre(prev.fecha,cur.fecha);
+    let flujo=0, pond=0;
+    for(const fl of flujos){
+      const t=diasCal(prev.fecha,fl.fecha);
+      const w=T>0?Math.min(1,Math.max(0,(T-t)/T)):0;
+      flujo+=fl.monto; pond+=w*fl.monto;
+    }
+    const base=v0+pond;                        // capital medio empleado en el tramo
+    if(!(base>0)) continue;
+    const r=(v1-v0-flujo)/base;
     if(!isFinite(r)) continue;
     // Nivel del índice en la misma moneda que la cartera, para poder comparar
     const spN=(cur.sp??sp500En(cur.fecha)), spP=(prev.sp??sp500En(prev.fecha));
     const ndxN=(cur.ndx??ndxEn(cur.fecha)), ndxP=(prev.ndx??ndxEn(prev.fecha));
     const fx=K==="ars"?(cur.mep&&prev.mep?cur.mep/prev.mep:1):1;
-    out.push({fecha:cur.fecha,v:v1,flujo,r,
+    out.push({fecha:cur.fecha,desde:prev.fecha,dias:T,v0,v:v1,flujo,base,r,
       rsp:(spN&&spP)?(spN/spP)*fx-1:null,
       rndx:(ndxN&&ndxP)?(ndxN/ndxP)*fx-1:null});
   }
@@ -1258,6 +1423,60 @@ function retornoEntre(serie,desde,hasta){
   }
   return {ret:c-1,sp:haySp?csp-1:null,ndx:haySp?cndx-1:null,
     dias:tramo.length,desde:tramo[0].fecha,hasta:tramo[tramo.length-1].fecha};
+}
+
+/* ══════════════ Diagnóstico de la serie ══════════════
+   Los saltos raros de la curva de rendimiento casi siempre salen de una de
+   cuatro cosas, y las cuatro se detectan sin necesidad de mirar el gráfico:
+     1. un cambio de ratio de un CEDEAR que nadie declaró — el precio cambia de
+        escala de un día para el otro y la cantidad cargada queda en la vieja;
+     2. un movimiento de plata mal fechado o directamente no cargado — el motor
+        lo lee como rendimiento en vez de como flujo;
+     3. un tramo largo sin cierre diario — la curva se dibuja como una recta y
+        el rendimiento de semanas enteras aterriza en un solo punto;
+     4. un cierre viejo que quedó mal guardado y se acaba de corregir.
+   Listarlas en pantalla es mejor que dejarlas envenenar la curva en silencio. */
+function diagnosticoSerieHtml(serie,pos){
+  const items=[];
+
+  const enCartera=(pos||[]).filter(p=>p.ticker&&p.tipo!=="fci"&&p.tipo!=="manual")
+    .map(p=>({tipo:p.tipo,ticker:p.ticker}));
+  for(const r of detectarRatiosNoDeclarados(enCartera)){
+    items.push(`<b>${r.ticker}</b> cambia de escala (×${fmt(r.factor,0)}) entre el ${r.desde} y el ${r.fecha}
+      — de ${fmt(r.antes,0)} a ${fmt(r.despues,0)} — sin que ningún otro papel se mueva parecido.
+      Tiene pinta de cambio de ratio del CEDEAR: hay que declararlo en AJUSTES_RATIO o la cartera
+      va a mostrar un salto fantasma ese día.`);
+  }
+
+  const raros=(serie||[]).filter(d=>Math.abs(d.r)>=0.25&&(d.dias||1)<=5)
+    .sort((a,b)=>Math.abs(b.r)-Math.abs(a.r)).slice(0,6);
+  for(const d of raros){
+    items.push(`<b>${d.fecha}</b>: ${sgn(d.r*100)} en ${d.dias||1} día${(d.dias||1)>1?"s":""}
+      — cartera ${money(d.v0)} → ${money(d.v)}, flujo de capital ${signoMoney(d.flujo||0)}.
+      Un movimiento así en tan poco tiempo casi nunca es mercado: suele ser un precio o un movimiento mal cargado.`);
+  }
+
+  const huecos=(serie||[]).filter(d=>(d.dias||1)>=10)
+    .sort((a,b)=>b.dias-a.dias).slice(0,4);
+  for(const d of huecos){
+    items.push(`Entre el <b>${d.desde}</b> y el <b>${d.fecha}</b> hay ${d.dias} días sin cierre registrado:
+      ahí la curva es una recta y todo el rendimiento del tramo aterriza en un solo punto.
+      Se cierra solo a medida que el historial público cubra esos días para todas las posiciones.`);
+  }
+
+  if(ULTIMA_REVISION.length){
+    const n=ULTIMA_REVISION.length, x=ULTIMA_REVISION[0];
+    items.push(n>1
+      ? `Se corrigieron <b>${n}</b> cierres guardados que estaban mal calculados
+         — por ejemplo el ${x.fecha} (${x.motivo}): $ ${fmt(x.antes,0)} → $ ${fmt(x.ahora,0)}.`
+      : `Se corrigió <b>1</b> cierre guardado que estaba mal calculado
+         — el ${x.fecha} (${x.motivo}): $ ${fmt(x.antes,0)} → $ ${fmt(x.ahora,0)}.`);
+  }
+
+  if(!items.length) return "";
+  return `<div class="chart-warn" style="margin-top:14px"><b>Diagnóstico de la serie</b>
+    — ${items.length} cosa${items.length>1?"s":""} para mirar:
+    <ul style="margin:8px 0 0 18px;padding:0">${items.map(t=>`<li style="margin-bottom:6px">${t}</li>`).join("")}</ul></div>`;
 }
 
 function ymd(d){ return d.toISOString().slice(0,10); }
@@ -1844,6 +2063,7 @@ function render(soloEstructura){
     html+=cardsPerf
       ? filasGrid(cardsPerf,"perf-grid",4)+tablaHtml+notaHtml
       : `<div class="chart-warn">No hay datos suficientes todavía para calcular ${rango.etiqueta.toLowerCase()}.</div>`;
+    html+=diagnosticoSerieHtml(serieT,pos);
   }
   // Riesgo depende de los snapshots diarios, no de tener posiciones abiertas:
   // se muestra igual aunque la cartera esté cerrada o algún precio no cargue.
