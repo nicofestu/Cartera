@@ -228,12 +228,35 @@ h1{font-family:var(--din);font-size:44px;font-weight:700;text-transform:uppercas
 .grupo-h .tot{margin-left:auto;font-size:13px;color:var(--grey);letter-spacing:.02em}
 .grupo-h .tot b{color:var(--white);font-weight:500}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:right;font-family:var(--din);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
-  font-weight:600;color:var(--grey-dim);padding:11px 12px 9px;white-space:nowrap;border-bottom:1px solid var(--hair)}
+th{
+  text-align:right;
+  font-family:var(--din);
+  font-size:10.8px;
+  text-transform:uppercase;
+  letter-spacing:.12em;
+  font-weight:700;
+  color:#9B9B9B;
+  padding:12px 12px 10px;
+  white-space:nowrap;
+  border-bottom:1px solid rgba(255,255,255,.08);
+
+  text-shadow:
+      0 1px 2px rgba(0,0,0,.85);
+
+  background:
+      linear-gradient(
+          to bottom,
+          rgba(0,0,0,.18),
+          rgba(0,0,0,.05)
+      );
+}
 th:first-child,td:first-child{text-align:left;padding-left:2px}
 th.l,td.l{text-align:left}
 td{text-align:right;padding:10px 12px;border-bottom:1px solid #171717;white-space:nowrap;letter-spacing:0;color:#B4B4B4}
 tbody tr{transition:background .14s var(--ease)}
+  thead tr{
+    backdrop-filter:blur(2px);
+}
 tbody tr:hover td{background:#131313;color:var(--white)}
 td.tk{font-family:var(--din);font-size:14.5px;font-weight:600;letter-spacing:.04em;color:var(--white);text-transform:uppercase}
 td .cta-tag{font-family:var(--din);font-size:10.5px;font-weight:600;letter-spacing:.07em;color:var(--grey);
