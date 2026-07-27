@@ -3742,6 +3742,39 @@ function clasificarTickerCocos(instrumento){
   const pseudo=(base+sufFecha).slice(0,16);
   return {ticker:pseudo||"SINTICKER",tipo:/^ON\b/i.test(inst)?"on":"bono",sinClasificar:true};
 }
+// ── Cauciones: se emparejan la colocación ("Contado") con su vencimiento
+// ("Termino") para poder modelarlas como compra + venta de un activo
+// sintético "manual" — se "compra" al monto colocado y se "vende" al monto
+// recibido (que ya incluye el interés): la diferencia queda como ganancia
+// realizada, exactamente igual que vender un bono con renta. Cada par usa un
+// ticker propio (CAUCIONyyyymmdd-N) para que dos cauciones que se solapen en
+// el tiempo no terminen mezclando sus costos. El emparejamiento es por orden
+// cronológico + un chequeo de magnitud (el vencimiento tiene que ser un monto
+// razonablemente parecido al colocado, entre 0% y 30% más — cubre tasas de
+// caución normales incluso a varias semanas) para no aparear por error dos
+// cauciones que no son la misma. Lo que no encuentra pareja queda para
+// revisar a mano en vez de inventar un cierre. ──
+function emparejarCaucion(filas){
+  const contados=filas.filter(f=>f.tipo==="contado").sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
+  const terminos=filas.filter(f=>f.tipo==="termino").sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
+  const usados=new Set();
+  const pares=[], sinPar=[];
+  for(const c of contados){
+    let idx=-1;
+    for(let i=0;i<terminos.length;i++){
+      if(usados.has(i)) continue;
+      const t=terminos[i];
+      if(!c.fecha||!t.fecha||t.fecha<c.fecha) continue;
+      if(!c.total||!t.total) continue;
+      const ratio=Math.abs(t.total)/Math.abs(c.total);
+      if(ratio>=1&&ratio<=1.3){ idx=i; break; } // primer vencimiento cronológico con monto compatible
+    }
+    if(idx>=0){ usados.add(idx); pares.push({contado:c,termino:terminos[idx]}); }
+    else sinPar.push(c);
+  }
+  terminos.forEach((t,i)=>{ if(!usados.has(i)) sinPar.push(t); });
+  return {pares,sinPar};
+}
 function parseCocosMovimientos(rows){
   const candidatos=[], omitidos=[], revisar=[];
   const aNum=s=>{ if(s==null||s==="") return null; const n=parseFloat(String(s).trim().replace(/\./g,"").replace(",",".")); return isNaN(n)?null:n; };
@@ -3755,13 +3788,33 @@ function parseCocosMovimientos(rows){
     "Credito Derechos Mercado Byma","Ajuste Byma Debito","Nota De Credito Conversion","Nota De Credito Conversion Cable",
     "Nota De Debito Usd","Nota De Credito Usd"]);
   const OMITIR_SIEMPRE={
-    "Colocador Caucion Contado":"colocación a plazo (caución), no es una posición de cartera",
-    "Colocador Caucion Termino":"colocación a plazo (caución), no es una posición de cartera",
     "Canje":"canje de especie sin cantidad informada por Cocos — revisar manualmente",
-    "DIVIDENDOS EN ESPECIE":"dividendo en especie en moneda extranjera — cargar manualmente",
   };
 
+  // Cauciones: se sacan del flujo principal y se procesan aparte (ver
+  // emparejarCaucion), el resto de las filas sigue el camino de siempre.
+  const filasCaucion=[], resto=[];
   for(const r of rows){
+    const op=String(r.tipoOperacion||"").trim();
+    if(op==="Colocador Caucion Contado"||op==="Colocador Caucion Termino"){
+      filasCaucion.push({fecha:fechaCocos(r.fechaEjecucion),tipo:op==="Colocador Caucion Contado"?"contado":"termino",
+        total:aNum(r.total)??aNum(r.montoBruto)});
+    } else resto.push(r);
+  }
+  const {pares,sinPar}=emparejarCaucion(filasCaucion);
+  pares.forEach(({contado,termino},i)=>{
+    const ticker="CAUCION"+contado.fecha.replace(/-/g,"")+"-"+(i+1);
+    candidatos.push({fecha:contado.fecha,tipo:"manual",op:"compra",ticker,cantidad:1,
+      precioBruto:Math.abs(contado.total),moneda:"ARS",origen:"Caución (colocación)"});
+    candidatos.push({fecha:termino.fecha,tipo:"manual",op:"venta",ticker,cantidad:1,
+      precioBruto:Math.abs(termino.total),moneda:"ARS",origen:"Caución (vencimiento, con interés)"});
+  });
+  for(const s of sinPar){
+    omitidos.push({fecha:s.fecha||"—",op:s.tipo==="contado"?"Colocador Caucion Contado":"Colocador Caucion Termino",
+      ticker:"",motivo:"caución sin su contraparte de colocación/vencimiento — revisar manualmente"});
+  }
+
+  for(const r of resto){
     const op=String(r.tipoOperacion||"").trim();
     const fecha=fechaCocos(r.fechaEjecucion);
     const instrumento=String(r.instrumento||"").trim();
@@ -3774,6 +3827,22 @@ function parseCocosMovimientos(rows){
     if(!fecha){ omitidos.push({fecha:r.fechaEjecucion||"—",op:op.slice(0,30),ticker:instrumento,motivo:"fecha no reconocida"}); continue; }
 
     if(OMITIR_SIEMPRE[op]){ omitidos.push({fecha,op,ticker:instrumento,motivo:OMITIR_SIEMPRE[op]}); continue; }
+
+    // Dividendo en especie: el emisor entrega la especie directamente (acá
+    // siempre "Dólar estadounidense") en vez de acreditar pesos — es un
+    // ingreso real, igual que una renta cobrada. La "cantidad" viene en la
+    // moneda de la especie entregada, no en pesos. Cocos además cobra un
+    // cargo (Ganancias/IIBB) en pesos sobre ese dividendo, que sale con
+    // signo propio en "total" — se carga aparte como gasto para no perder
+    // ese costo real ni mezclarlo con el ingreso en dólares.
+    if(op==="DIVIDENDOS EN ESPECIE"){
+      if(!cantidad){ omitidos.push({fecha,op,ticker:instrumento,motivo:"dividendo en especie sin cantidad"}); continue; }
+      const monedaEspecie=/d[oó]lar|usd/i.test(instrumento)?"USD":"ARS";
+      candidatos.push({fecha,tipo:"cash",op:"dividendo",cantidad:1,precio:Math.abs(cantidad),moneda:monedaEspecie,origen:op+" — "+instrumento});
+      const cargo=total!=null?total:montoBruto;
+      if(cargo) candidatos.push({fecha,tipo:"cash",op:"gasto",cantidad:1,precio:Math.abs(cargo),moneda:"ARS",origen:op+" (retención)"});
+      continue;
+    }
 
     if(TRADE_OPS.has(op)){
       if(!instrumento){ omitidos.push({fecha,op,ticker:"",motivo:"operación sin especie identificada"}); continue; }
