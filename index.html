@@ -61,7 +61,7 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
    una vez que encuentra una foto que pasa el filtro (ver buscarFondoNasa()). */
 body::after{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
   background-image:var(--nasa-bg,none);background-size:cover;background-position:center;
-  filter:brightness(.30) saturate(.80);
+  filter:brightness(.35) saturate(.80);
   opacity:0;transition:opacity 2s var(--ease);}
 body.has-nasa-bg::after{opacity:.40}
 @media(max-width:700px){body.has-nasa-bg::after{opacity:.42}}
