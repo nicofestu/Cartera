@@ -3866,18 +3866,37 @@ function nasaTienePersonas(txt){ return NASA_BLACKLIST.some(w=>txt.includes(w));
 // de resultados, no para fondo de pantalla). Para tener buena resolución hay
 // que resolver el manifest de /asset/{nasa_id} y elegir el archivo más grande
 // que no sea excesivo (medium/large si existen, si no small/orig/lo que haya).
-async function resolverUrlImagen(nasaId){
+async function resolverUrlsImagen(nasaId){
   try{
-    const r=await fetch("https://images-api.nasa.gov/asset/"+encodeURIComponent(nasaId));
-    if(!r.ok) return null;
-    const j=await r.json();
-    const hrefs=(j?.collection?.items||[]).map(x=>x.href).filter(Boolean);
-    const porTamano=suf=>hrefs.find(h=>new RegExp("~"+suf+"\\.(jpg|jpeg|png)$","i").test(h));
-    const elegida=porTamano("large")||porTamano("orig")||hrefs[0];
-    return elegida?elegida.replace(/^http:/,"https:"):null; // forzar https, la app se sirve por https
-  }catch(e){ return null; }
-}
+    const r = await fetch(
+      "https://images-api.nasa.gov/asset/" + encodeURIComponent(nasaId)
+    );
 
+    if(!r.ok) return [];
+
+    const j = await r.json();
+
+    const hrefs = (j?.collection?.items || [])
+      .map(x => x.href)
+      .filter(h => /\.(jpg|jpeg|png)$/i.test(h));
+
+    const prioridad = href => {
+      if(/~orig\.(jpg|jpeg|png)$/i.test(href)) return 0;
+      if(/~large\.(jpg|jpeg|png)$/i.test(href)) return 1;
+      if(/~medium\.(jpg|jpeg|png)$/i.test(href)) return 2;
+      if(/~small\.(jpg|jpeg|png)$/i.test(href)) return 3;
+      return 4;
+    };
+
+    return hrefs
+      .sort((a, b) => prioridad(a) - prioridad(b))
+      .map(href => href.replace(/^http:/, "https:"));
+
+  }catch(e){
+    console.warn("No se pudo resolver el asset NASA:", nasaId, e);
+    return [];
+  }
+}
 async function buscarFondoNasa(){
   try{
     const cache=sessionStorage.getItem(NASA_BG_KEY);
@@ -3921,22 +3940,34 @@ async function buscarFondoNasa(){
     // que realmente cargue (algún nasa_id puntual puede no tener manifest).
     candidatos=candidatos.sort(()=>Math.random()-0.5).slice(0,8);
     for(const c of candidatos){
-      const url=await resolverUrlImagen(c.id);
-      if(!url) continue;
-      const img = await new Promise(res=>{
+      const urls = await resolverUrlsImagen(c.id);
+
+if(!urls.length) continue;
+
+let urlValida = null;
+
+for(const url of urls.slice(0, 5)){
+  const img = await new Promise(res => {
     const i = new Image();
 
-    i.onload = ()=>res(i);
-    i.onerror = ()=>res(null);
+    i.onload = () => res(i);
+    i.onerror = () => res(null);
 
+    i.referrerPolicy = "no-referrer";
     i.src = url;
-});
+  });
 
-if(!img) continue;
+  if(!img) continue;
 
-// Ignorar imágenes chicas
-if(img.naturalWidth < 2500 || img.naturalHeight < 1400)
-    continue;
+  if(img.naturalWidth >= 1600 && img.naturalHeight >= 900){
+    urlValida = url;
+    break;
+  }
+}
+
+if(!urlValida) continue;
+
+const url = urlValida;
       const elegido={id:c.id,titulo:c.titulo,url};
       sessionStorage.setItem(NASA_BG_KEY,JSON.stringify(elegido));
       pintarFondoNasa(elegido);
