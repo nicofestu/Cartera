@@ -3825,7 +3825,7 @@ async function resolverUrlImagen(nasaId){
     const j=await r.json();
     const hrefs=(j?.collection?.items||[]).map(x=>x.href).filter(Boolean);
     const porTamano=suf=>hrefs.find(h=>new RegExp("~"+suf+"\\.(jpg|jpeg|png)$","i").test(h));
-    const elegida=porTamano("medium")||porTamano("large")||porTamano("small")||porTamano("orig")||hrefs[0];
+    const elegida=porTamano("medium")||porTamano("large")||porTamano("orig")||hrefs[0];
     return elegida?elegida.replace(/^http:/,"https:"):null; // forzar https, la app se sirve por https
   }catch(e){ return null; }
 }
