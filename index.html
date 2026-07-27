@@ -833,6 +833,22 @@ function precioHistorial(tipo,ticker,fecha,tolerancia=5){
   }
   return null;
 }
+// Precio histórico de una posición "manual" (activos sin feed local, ej.
+// acciones de EE.UU. compradas en un bróker extranjero: SOFI, etc). A
+// diferencia de bono/cedear/accion/fci — cuyo precio en historial/*.json ya
+// viene en ARS de BYMA — estas cotizan en USD, así que hace falta el MEP de
+// esa fecha para pasarlo a ARS. Se guardan bajo la categoría "manual" del
+// mismo archivo público (es precio de mercado de una acción de NASDAQ, dato
+// público; lo único privado es que el usuario la tenga en cartera, y eso
+// nunca se toca acá).
+function precioManualHistorial(ticker,fecha,tolerancia=5){
+  if(!HIST_REMOTO) return null;
+  const usd=precioHistorial("manual",ticker,fecha,tolerancia);
+  if(!usd) return null;
+  const mep=mepHistorial(usd.fecha);
+  if(!mep) return null;
+  return {precio:usd.precio*mep,fecha:usd.fecha};
+}
 function mepHistorial(fecha){
   if(!HIST_REMOTO||!HIST_REMOTO.mepFechas.length) return null;
   return nivelEn(HIST_REMOTO.mepHist,HIST_REMOTO.mepFechas,fecha);
@@ -886,7 +902,13 @@ async function reconstruirHistorialSnapshots(){
     if(!posiciones.length) continue;
     let valARS=0, faltan=[];
     for(const p of posiciones){
-      if(p.tipo==="manual"||p.tipo==="on"){ faltan.push(p.tipo+":"+(p.ticker||p.fondo)); continue; }
+      if(p.tipo==="on"){ faltan.push(p.tipo+":"+(p.ticker||p.fondo)); continue; }
+      if(p.tipo==="manual"){
+        const h=precioManualHistorial(p.ticker,f);
+        if(!h){ faltan.push("manual:"+p.ticker); continue; }
+        valARS+=h.precio*p.qty; // precioManualHistorial ya devuelve ARS
+        continue;
+      }
       const h=precioHistorial(p.tipo,p.ticker,f);
       if(!h){ faltan.push(p.tipo+":"+p.ticker); continue; }
       valARS+=h.precio/divisorDe(p.tipo)*p.qty;
