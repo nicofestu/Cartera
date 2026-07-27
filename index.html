@@ -1205,16 +1205,54 @@ function rangoPeriodo(periodo){
 }
 function setPeriodo(v){ PERIODO=v; if(ESTADO) render(); }
 
+// Fecha de primera compra por posición (tipo|ticker o fondo|cuenta). Se usa
+// tanto para el ranking "todo" como para el de período, así ninguno de los
+// dos mide una posición desde antes de que existiera en tu cartera.
+function primeraCompraMap(){
+  const primera={};
+  for(const m of [...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))){
+    if(m.tipo==="cash") continue;
+    const k=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
+    if(m.op==="compra"&&!primera[k]) primera[k]=m.fecha;
+  }
+  return primera;
+}
 // Ranking de posiciones por precio dentro de un período puntual (no desde la
-// primera compra). Se apoya en el historial público, así que solo cubre lo
-// que tenga precio ahí y quede cotizado en pesos (se excluyen fci/manual y
-// tickers en liquidación USD, que mezclarían escalas distintas).
-function metricasPorPosicionEnPeriodo(pos,desde,hasta){
+// primera compra de toda la posición, pero SÍ acotado a que ya la tuvieras).
+// Dos correcciones sobre la versión anterior:
+//  1) `desde`/`hasta` tienen que ser la ventana EFECTIVA que ya se usó para
+//     calcular "Retorno del período" (r.desde/r.hasta, ver más abajo), no el
+//     límite nominal del selector (rango.desde) — si la serie diaria arranca
+//     más tarde por un hueco de datos, mejor/peor posición tiene que medir
+//     lo mismo que se muestra arriba, o los dos números quedan hablando de
+//     ventanas distintas sin que se note. Además, si compraste la posición
+//     DESPUÉS de `desde`, se mide desde tu primera compra real — si no,
+//     "mejor/peor posición" te muestra la suerte de haber estado invertido
+//     antes de tenerlo, no tu resultado real.
+//  2) El retorno se expresa en la moneda de VISTA (antes siempre era un
+//     cociente de precios en pesos, aunque estuvieras mirando la cartera en
+//     USD MEP/CCL) — se corrige por el movimiento del dólar en la ventana,
+//     igual criterio que el resto de la sección Rendimientos.
+function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
+  primera=primera||primeraCompraMap();
   return pos.map(p=>{
     if(p.tipo==="fci"||p.tipo==="manual"||p.pxMoneda!=="ARS"||p.px==null) return null;
-    const h=precioHistorial(p.tipo,p.ticker,desde);
+    const k=p.tipo+"|"+p.ticker+"|"+p.cuenta;
+    const entrada=primera[k];
+    const desdeEf=(entrada&&entrada>desde)?entrada:desde;
+    const h=precioHistorial(p.tipo,p.ticker,desdeEf);
     if(!h) return null;
-    return {...p,ret:p.px/h.precio-1};
+    let ret;
+    if(VISTA==="ARS"){
+      ret=p.px/h.precio-1;
+    } else {
+      // MEP y CCL comparten la misma base dólar histórica (no hay CCL
+      // histórico por instrumento todavía — ver nota en cargarHistorialRemoto).
+      const mepHoy=ESTADO?.MEP, mepDesde=mepHistorial(h.fecha);
+      if(!mepHoy||!mepDesde) return null;
+      ret=(p.px/mepHoy)/(h.precio/mepDesde)-1;
+    }
+    return {...p,ret,desdeEf};
   }).filter(Boolean);
 }
 // Resultado realizado (ventas ya cerradas) que cayó específicamente dentro de
@@ -1246,12 +1284,7 @@ function realizadoEnPeriodo(desde,hasta){
 
 function metricasPorPosicion(pos){
   // Fecha de primera compra y monto invertido por posición (para TIR simple y anualizado)
-  const primera={};
-  for(const m of [...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))){
-    if(m.tipo==="cash") continue;
-    const k=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
-    if(m.op==="compra"&&!primera[k]) primera[k]=m.fecha;
-  }
+  const primera=primeraCompraMap();
   return pos.map(p=>{
     const k=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
     const desde=primera[k];
@@ -1980,11 +2013,12 @@ function render(soloEstructura){
         met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
         const mejor=met[0], peor=met[met.length-1];
         const realTot=VISTA==="ARS"?realARS:realUSD;
+        const monedaLblTot=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno total</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
-            <div class="d">${signoMoney(total+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""}</div></div>`,
+            <div class="d">${signoMoney(total+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
             <div class="d">anualizado · ${diasTot}d</div></div>`,
@@ -2040,15 +2074,24 @@ function render(soloEstructura){
         const a0=srT?srT.aporteEn(rango.desde):null, a1=srT?srT.aporteEn(rango.hasta):null;
         const aportePer=(a0&&a1)?(a1.ap-a0.ap):null;
         const tnaPer=anualizar(r.ret,r.dias);
-        const metP=metricasPorPosicionEnPeriodo(pos,rango.desde,rango.hasta).sort((a,b)=>b.ret-a.ret);
+        // Mejor/peor posición miden EXACTAMENTE la misma ventana que "Retorno
+        // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
+        // serie diaria arranca más tarde que el período nominal por un hueco
+        // de cierres, los dos números tienen que hablar de lo mismo.
+        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,r.hasta).sort((a,b)=>b.ret-a.ret);
         const mejor=metP[0], peor=metP[metP.length-1];
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(rango.desde,rango.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
+        const monedaLbl=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
+        // Si el período nominal (rango.desde) no coincide con donde arranca
+        // de verdad la serie (r.desde), es porque hay un hueco de cierres en
+        // el medio — se avisa en vez de dejar que parezca el mismo período.
+        const huecoInicio=rango.desde&&r.desde>rango.desde&&diasEntre(rango.desde,r.desde)>5;
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
-            <div class="d">time-weighted · ${r.dias} día${r.dias>1?"s":""}</div></div>`,
+            <div class="d">time-weighted · ${r.dias} día${r.dias>1?"s":""} · ${monedaLbl}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
             <div class="d">anualizado · ${r.dias}d</div></div>`,
@@ -2072,9 +2115,13 @@ function render(soloEstructura){
             <div class="d">ventas cerradas en el período</div></div>`:null,
         ];
         metaHtml=`<span>${r.dias} días · ${r.desde} → ${r.hasta}</span>`;
-        notaHtml=`<div class="perf-note">Retorno <b>time-weighted</b>: cada día se descuenta el dinero que entró o
-          salió, así un depósito no se confunde con una ganancia. Mejor/peor posición y vs. índices comparan
-          precio contra el arranque del período, no contra tu costo de compra. Los días con menos de
+        notaHtml=`<div class="perf-note">${huecoInicio?`<b>Ojo:</b> pediste desde ${rango.desde}, pero no hay cierres
+          registrados entre esa fecha y ${r.desde} — todo lo que se muestra acá (retorno del período, mejor/peor
+          posición, comparación vs. índices) arranca en ${r.desde}, no en ${rango.desde}. Se cierra solo a medida
+          que el historial público cubra esos días.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
+          salió, así un depósito no se confunde con una ganancia. Mejor/peor posición se mide desde el arranque
+          efectivo del período (o desde tu primera compra de esa posición, si es más tarde) y también en ${monedaLbl}
+          — no contra tu costo de compra original. Los días con menos de
           US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
           % sin sentido.</div>`;
       }
