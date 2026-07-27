@@ -704,11 +704,16 @@ const QQQ_K=778.32;
 const MACRO_K={"sp": 573.4, "ndx": 787.35, "dji": 1911.93, "rut": 96.066, "eem": 4.7905, "oro": 521.3, "plata": 6.413, "wti": 9.604};
 const SP500_FECHAS=Object.keys(SP500_HIST).sort();
 const NDX_FECHAS=Object.keys(NDX_HIST).sort();
-// Nivel del índice en una fecha; si ese día no cotizó, toma el último cierre previo.
+// Nivel del índice en una fecha; si ese día no cotizó, toma el último cierre
+// previo. Búsqueda binaria: se consulta miles de veces dentro de los bucles
+// del backfill y del benchmark, y el escaneo lineal era O(n) por consulta.
 function nivelEn(hist,fechas,f){
   if(hist[f]!=null) return hist[f];
-  let r=null;
-  for(const k of fechas){ if(k<=f) r=hist[k]; else break; }
+  let lo=0,hi=fechas.length-1,r=null;
+  while(lo<=hi){
+    const mid=(lo+hi)>>1;
+    if(fechas[mid]<=f){ r=hist[fechas[mid]]; lo=mid+1; } else hi=mid-1;
+  }
   return r;
 }
 const sp500En=f=>nivelEn(SP500_HIST,SP500_FECHAS,f);
@@ -969,22 +974,37 @@ function setTab(t){
 }
 try{ localStorage.setItem("__t","1"); localStorage.removeItem("__t"); }catch(e){ hayStorage=false; }
 
+/* Caché de las series derivadas (serieRendimiento / serieDiaria). Hoy cada
+   render las recalculaba 4-6 veces (gráfico, cards, riesgo, diagnóstico…) y
+   cada cálculo re-ordena todos los movimientos. Como TODA mutación de datos
+   pasa por persistir() (guardar/borrar/importar/sync/snapshot), invalidar ahí
+   garantiza que nunca se sirve un resultado viejo; la clave incluye VISTA
+   porque la moneda cambia el resultado. */
+let _MEMO={};
+function invalidarMemo(){ _MEMO={}; }
 function persistir(){
+  invalidarMemo();
   if(!hayStorage) return;
   try{ localStorage.setItem(LS_KEY, JSON.stringify(DATOS)); }catch(e){}
 }
-// Evolución día a día de caja y aporte acumulado en ARS. Se usa tanto para
-// purgar snapshots rotos como para reconstruir el NAV de fechas pasadas.
+// Evolución día a día de caja, aporte y retiros acumulados en ARS. Se usa
+// tanto para purgar snapshots rotos como para reconstruir el NAV de fechas
+// pasadas. OJO: antes los depósitos NO sumaban al aportado (solo lo hacían
+// las compras sin caja previa), con lo que `apor` quedaba en cero para
+// cualquiera que depositara primero y comprara después — el mismo criterio
+// que serieRendimiento() usa desde siempre es el correcto: depósito = aporte.
 function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
-  let caja=0,apor=0; const hitos=[];
+  let caja=0,apor=0,ret=0; const hitos=[];
   for(const m of movs){
     const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
     const a=m.moneda==="USD"?bruto*m.mep:bruto;
     if(m.op==="compra"){ const d=Math.min(caja,a); caja-=d; apor+=a-d; }
-    else if(m.op==="retiro"||m.op==="gasto") caja-=a;
-    else caja+=a;
-    hitos.push({fecha:m.fecha,apor,caja});
+    else if(m.op==="deposito"){ caja+=a; apor+=a; }
+    else if(m.op==="retiro"){ caja-=a; ret+=a; }
+    else if(m.op==="gasto") caja-=a;
+    else caja+=a; // venta y dividendo acreditan caja pero no son aporte externo
+    hitos.push({fecha:m.fecha,apor,ret,caja});
   }
   return hitos;
 }
@@ -994,12 +1014,21 @@ function cajaEnFecha(hitos,fecha){
 }
 function purgarSnapshots(){
   // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
-  // Se detectan porque quedan muy por debajo del capital aportado a esa fecha.
+  // Se detectan porque quedan muy por debajo del capital VIGENTE (aportado −
+  // retirado) a esa fecha. Dos correcciones sobre la versión anterior:
+  //  1) s.ars YA incluye la caja (tanto el snapshot en vivo como el
+  //     reconstruido la suman) — sumarle hh.caja de nuevo la contaba doble.
+  //  2) La base es aportado − retirado: comparar contra el aportado
+  //     histórico total hacía que, después de retirar toda la plata, los
+  //     cierres legítimos de NAV ~0 parecieran un −100% y se borraran del
+  //     gist en cada carga. Con capital vigente ~0 no hay nada que juzgar.
   if(!DATOS.movimientos.length||!DATOS.snapshots?.length) return;
   const hitos=construirHitosCaja();
   DATOS.snapshots=DATOS.snapshots.filter(s=>{
     let hh=hitos[0]; for(const x of hitos) if(x.fecha<=s.fecha) hh=x;
-    return (s.ars+hh.caja)/hh.apor-1 > -0.5; // −50% en un mes es casi seguro dato roto
+    const vigente=hh.apor-hh.ret;
+    if(!(vigente>1)) return true; // sin plata adentro: un NAV ~0 es legítimo
+    return s.ars/vigente-1 > -0.5; // −50% de un día para otro es casi seguro dato roto
   });
 }
 /* Orden de las operaciones para el cálculo de caja. Dentro de un mismo día no
@@ -1044,7 +1073,7 @@ function setMoneda(m){
 
 /* ══════════════ Derivación de posiciones (CPP) ══════════════ */
 function derivarPosiciones(excluirId,hastaFecha){
-  const map={}; let realARS=0, realUSD=0;
+  const map={}; let realARS=0, realUSD=0; const sobreventas=[];
   // Al revés que la caja: para el precio promedio hay que tener el papel antes
   // de venderlo, así que dentro del mismo día las compras van primero.
   // hastaFecha (opcional) reconstruye la cartera COMO ESTABA ese día, para el
@@ -1062,12 +1091,18 @@ function derivarPosiciones(excluirId,hastaFecha){
     const p=map[key];
     if(m.op==="compra"){ p.qty+=m.cantidad; p.costARS+=cARS; p.costUSD+=cUSD; }
     else{
+      // Venta de más papeles de los que hay registrados a esa fecha: el
+      // faltante se mide contra costo promedio 0 y el realizado queda
+      // inflado. Casi siempre es una compra que quedó fuera del rango del
+      // import. Se registra para avisarlo en el diagnóstico de la serie.
+      if(m.cantidad>p.qty+1e-9) sobreventas.push({nombre:m.tipo==="fci"?(m.fondo||"").split(" - ")[0]:m.ticker,
+        fecha:m.fecha,vendida:m.cantidad,habia:Math.max(0,p.qty)});
       const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
       realARS+=cARS-aARS*m.cantidad; realUSD+=cUSD-aUSD*m.cantidad;
       p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
     }
   }
-  return {posiciones:Object.values(map).filter(p=>p.qty>1e-9), realARS, realUSD};
+  return {posiciones:Object.values(map).filter(p=>p.qty>1e-9), realARS, realUSD, sobreventas};
 }
 function qtyDisponible(tipo,ticker,fondo,cuenta,excluirId){
   const {posiciones}=derivarPosiciones(excluirId);
@@ -1087,8 +1122,10 @@ function qtyDisponible(tipo,ticker,fondo,cuenta,excluirId){
    precios históricos por especie disponibles en fuentes gratuitas, así que
    la serie se ancla en los hitos ciertos: cada operación y cada cierre. */
 function serieRendimiento(){
+  const _k="sr:"+VISTA;
+  if(_k in _MEMO) return _MEMO[_k];
   const movs=[...DATOS.movimientos].sort(cmpCaja);
-  if(!movs.length) return null;
+  if(!movs.length) return _MEMO[_k]=null;
   const K=VISTA==="ARS"?"ars":"usd"; // MEP y CCL comparten la misma base dólar bimonetaria
   let cajaA=0, cajaU=0, aporA=0, aporU=0, retA=0, retU=0;
   const hitos=[], eventosAporte=[];
@@ -1174,7 +1211,7 @@ function serieRendimiento(){
     return {en,uniEn,unidades:u};
   };
   const bSP=mkBench(sp500En), bNDX=mkBench(ndxEn);
-  return {puntos,aporte,caja,retirado,desde:movs[0].fecha,hitos,aporteEn,flujosEntre,
+  return _MEMO[_k]={puntos,aporte,caja,retirado,desde:movs[0].fecha,hitos,aporteEn,flujosEntre,
     benchEn:bSP.en, benchNdxEn:bNDX.en, uniEn:bSP.uniEn, unidades:bSP.unidades};
 }
 
@@ -1370,7 +1407,7 @@ async function cargar(){
         plARS:valARS==null?null:valARS-p.costARS,
         plUSD:valUSD==null?null:valUSD-p.costUSD,
         plCCL:valCCL==null?null:valCCL-p.costUSD,
-        varDiaARS:(valARS!=null&&pct!=null)?valARS-valARS/(1+pct/100):0};
+        varDiaARS:(valARS!=null&&pct!=null&&pct>-100)?valARS-valARS/(1+pct/100):0};
     });
 
     ESTADO={pos,fx,MEP,CCL,realARS,realUSD,hora:new Date(),preciosCedears:precios.cedear||{}};
@@ -1396,7 +1433,11 @@ async function cargar(){
         mep:Math.round(MEP*100)/100,sp:Math.round(sp500Hoy()*100)/100,ndx:Math.round(ndxHoy()*100)/100};
       if(i>=0) DATOS.snapshots[i]=snap; else DATOS.snapshots.push(snap);
       DATOS.snapshots.sort((a,b)=>a.fecha.localeCompare(b.fecha));
-      persistir();
+      // El PRIMER cierre del día sube al gist (si no, un dispositivo que solo
+      // mira nunca comparte sus snapshots en vivo con los demás). Las
+      // re-capturas del mismo día (cada 2 min) solo persisten local, para no
+      // pegarle a la API de GitHub en cada refresco de precios.
+      if(i<0) persistirYSync(); else persistir();
     }
     render();
   }catch(e){
@@ -1442,11 +1483,13 @@ function capitalVigenteUSD(hitos,f){
   return r?r.aporU-r.retU:0;
 }
 function serieDiaria(){
+  const _k="sd:"+VISTA;
+  if(_k in _MEMO) return _MEMO[_k];
   const sr=serieRendimiento();
-  if(!sr) return [];
+  if(!sr) return _MEMO[_k]=[];
   const K=VISTA==="ARS"?"ars":"usd"; // idem serieRendimiento: MEP/CCL comparten base dólar
   const snaps=(DATOS.snapshots||[]).filter(s=>s.usd>=NAV_MIN_USD).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  if(snaps.length<2) return [];
+  if(snaps.length<2) return _MEMO[_k]=[];
   const out=[];
   for(let i=1;i<snaps.length;i++){
     const prev=snaps[i-1], cur=snaps[i];
@@ -1480,7 +1523,7 @@ function serieDiaria(){
       rsp:(spN&&spP)?(spN/spP)*fx-1:null,
       rndx:(ndxN&&ndxP)?(ndxN/ndxP)*fx-1:null});
   }
-  return out;
+  return _MEMO[_k]=out;
 }
 
 // Encadena los retornos diarios de un tramo (desde exclusivo, hasta inclusive).
@@ -1526,6 +1569,15 @@ function diagnosticoSerieHtml(serie,pos){
       — de ${fmt(r.antes,0)} a ${fmt(r.despues,0)} — sin que ningún otro papel se mueva parecido.
       Tiene pinta de cambio de ratio del CEDEAR: hay que declararlo en AJUSTES_RATIO o la cartera
       va a mostrar un salto fantasma ese día.`);
+  }
+
+  // Ventas con más papeles de los registrados hasta esa fecha (ver
+  // derivarPosiciones): compras faltantes que inflan el realizado.
+  const {sobreventas}=derivarPosiciones();
+  for(const s of (sobreventas||[]).slice(0,4)){
+    items.push(`<b>${s.nombre}</b>: el ${s.fecha} se vendieron ${fmt(s.vendida,s.vendida%1?2:0)} unidades pero la posición
+      registrada hasta ese día era ${fmt(s.habia,s.habia%1?2:0)}. Falta la compra previa (probablemente quedó fuera del
+      rango importado) y el resultado realizado de esa venta se está midiendo contra costo cero — queda inflado.`);
   }
 
   const raros=(serie||[]).filter(d=>Math.abs(d.r)>=0.25&&(d.dias||1)<=5)
@@ -2371,7 +2423,9 @@ function renombrarCuenta(){
     const d=DATOS.saldos[final]||{ars:0,usd:0};
     DATOS.saldos[final]={ars:(d.ars||0)+(s.ars||0),usd:(d.usd||0)+(s.usd||0)};
   }
-  persistir(); cerrarModales(); cargar();
+  // persistirYSync (no solo persistir): un rename es un cambio de datos como
+  // cualquier otro — si no sube al gist, el próximo bajarNube lo pisa.
+  persistirYSync(); cerrarModales(); cargar();
 }
 function agregarCuentaSaldo(){
   const n=canonizarCta(document.getElementById("s-nueva").value);
@@ -3498,20 +3552,20 @@ function parseBalanzMovimientos(rows){
     // plata sale de lo que este dashboard sigue, así que además de vender el
     // fondo se registra un retiro por el mismo importe.
     if(desc==="Rescate"){
-      if(!ticker||!cantidad||!precio||precio===-1){ omitidos.push({fecha,op:desc,ticker,motivo:"sin datos suficientes"}); continue; }
+      if(!ticker||!cantidad||!precio||precio===-1||!importe){ omitidos.push({fecha,op:desc,ticker,motivo:"sin datos suficientes"}); continue; }
       const precioEf=Math.abs(importe)/Math.abs(cantidad); // precio efectivo real (Importe), no el "de pizarra"
       candidatos.push({fecha,tipo:"fci",op:"venta",ticker,fondo:ticker,cantidad:Math.abs(cantidad),precio:precioEf*1000,moneda:monApp,origen:desc});
       candidatos.push({fecha,tipo:"cash",op:"retiro",cantidad:1,precio:Math.abs(importe),moneda:monApp,origen:desc+" (retiro a banco)"});
       continue;
     }
     if(desc.startsWith("Liquidación de Rescate")){
-      if(!ticker||!cantidad||!precio||precio===-1){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"sin datos suficientes"}); continue; }
+      if(!ticker||!cantidad||!precio||precio===-1||!importe){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"sin datos suficientes"}); continue; }
       const precioEf=Math.abs(importe)/Math.abs(cantidad);
       candidatos.push({fecha,tipo:"fci",op:"venta",ticker,fondo:ticker,cantidad:Math.abs(cantidad),precio:precioEf*1000,moneda:monApp,origen:desc});
       continue;
     }
     if(desc.startsWith("Liquidación de Suscripción")){
-      if(!ticker||!cantidad||!precio||precio===-1){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"sin datos suficientes"}); continue; }
+      if(!ticker||!cantidad||!precio||precio===-1||!importe){ omitidos.push({fecha,op:desc.slice(0,28),ticker,motivo:"sin datos suficientes"}); continue; }
       const precioEf=Math.abs(importe)/Math.abs(cantidad);
       candidatos.push({fecha,tipo:"fci",op:"compra",ticker,fondo:ticker,cantidad:Math.abs(cantidad),precio:precioEf*1000,moneda:monApp,origen:desc});
       continue;
@@ -3520,6 +3574,9 @@ function parseBalanzMovimientos(rows){
     // efectivo sale del Importe real (incluye comisiones/aranceles), no del
     // precio "de pizarra" — es el costo real que salió/entró de la cuenta.
     if(bol&&ticker&&precio!==-1&&cantidad){
+      // Sin Importe no hay precio efectivo posible: cargarlo daría una compra
+      // a precio 0 (unidades "gratis" que deforman el promedio y el aportado).
+      if(!importe){ omitidos.push({fecha,op:desc.slice(0,30),ticker,motivo:"boleto con importe en cero"}); continue; }
       const tipo=TIPO_MAP[tipoInstr]||clasificarTickerImport(ticker);
       const precioEf=Math.abs(importe)/Math.abs(cantidad);
       const item={fecha,op:cantidad>0?"compra":"venta",ticker,cantidad:Math.abs(cantidad),
@@ -3678,9 +3735,14 @@ async function confirmarImportBroker(){
   let cargados=0, sinMep=0, sinCategoria=0;
   for(const m of todos){
     if(m.tipo==="cash"){
+      // El ??1 no es decorativo: un mep null en un movimiento en USD mete
+      // NaN en construirHitosCaja, y en uno en ARS mete Infinity en la caja
+      // en dólares de serieRendimiento — un solo movimiento así rompe toda
+      // la serie. Mismo criterio y mismo aviso que la rama de instrumentos.
+      if(mepPorFecha[m.fecha]==null) sinMep++;
       DATOS.movimientos.push({id:Date.now()+cargados,fecha:m.fecha,op:m.op,tipo:"cash",
         ticker:(ETIQ_CASH[m.op]||"MOVIMIENTO").replace("Ó","O"),cuenta,cantidad:1,precio:m.precio,moneda:m.moneda,
-        mep:mepPorFecha[m.fecha]});
+        mep:mepPorFecha[m.fecha]??1});
     } else {
       const div=divisorDe(m.tipo);
       const precio=m.tipo==="fci"?m.precio:(m.precioBruto!=null?m.precioBruto*div:m.precio);
