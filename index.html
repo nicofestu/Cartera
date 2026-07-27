@@ -1194,12 +1194,20 @@ function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null;
    ventana corta. */
 function rangoPeriodo(periodo){
   const hoyF=hoy(), anioAct=+hoyF.slice(0,4);
-  if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD"};
-  if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes"};
-  if(periodo==="semanal") return {desde:restarDias(hoyF,7),hasta:hoyF,etiqueta:"Esta semana"};
+  // "dias" es el calendario real y nominal del período — 1/ene→hoy en YTD,
+  // día 1 del mes→hoy, hoy−7→hoy en semanal — SIEMPRE fijo según la fecha de
+  // hoy, sin importar cuántos snapshots con datos haya en el medio (huecos,
+  // días de saldo bajo descartados, o que no se haya abierto la app todos los
+  // días). Es la base que usa TNA para anualizar; si se calculara a partir de
+  // los datos disponibles, un período con pocos cierres cargados anualizaría
+  // sobre menos días de los que en realidad pasaron y dispararía el número.
+  if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD",dias:diasEntre(anioAct+"-01-01",hoyF),desdeNominal:anioAct+"-01-01"};
+  if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(hoyF.slice(0,8)+"01",hoyF),desdeNominal:hoyF.slice(0,8)+"01"};
+  if(periodo==="semanal") return {desde:restarDias(hoyF,7),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(restarDias(hoyF,7),hoyF),desdeNominal:restarDias(hoyF,7)};
   if(/^\d{4}$/.test(periodo)){
     const fin=periodo+"-12-31";
-    return {desde:(+periodo-1)+"-12-31",hasta:fin>hoyF?hoyF:fin,etiqueta:periodo};
+    const hastaEf=fin>hoyF?hoyF:fin;
+    return {desde:(+periodo-1)+"-12-31",hasta:hastaEf,etiqueta:periodo,dias:diasEntre(periodo+"-01-01",hastaEf),desdeNominal:periodo+"-01-01"};
   }
   return {desde:null,hasta:hoyF,etiqueta:"Histórico completo"}; // "todo"
 }
@@ -1476,7 +1484,7 @@ function serieDiaria(){
 }
 
 // Encadena los retornos diarios de un tramo (desde exclusivo, hasta inclusive).
-function retornoEntre(serie,desde,hasta){
+function retornoEntre(serie,desde,hasta,diasNominal){
   const tramo=serie.filter(d=>d.fecha>desde&&d.fecha<=hasta);
   if(!tramo.length) return null;
   let c=1,csp=1,cndx=1,haySp=false,gan=0;
@@ -1487,14 +1495,14 @@ function retornoEntre(serie,desde,hasta){
     if(d.rndx!=null) cndx*=(1+d.rndx);
   }
   const desdeR=tramo[0].fecha, hastaR=tramo[tramo.length-1].fecha;
-  // "dias" tiene que ser tiempo de calendario real (desdeR→hastaR), no
-  // tramo.length: la serie diaria descarta días de saldo bajo y depende de
-  // cuándo se abrió la app, así que la cantidad de snapshots puede ser mucho
-  // menor a los días corridos — eso hacía que TNA anualizara sobre una base
-  // chica y diera un número disparatado (mismo criterio que ya usa bien el
-  // gráfico de "Histórico completo" con diasEntre(sr.desde,hoy())).
+  // "dias" para anualizar usa el calendario nominal del período pedido
+  // (diasNominal, ver rangoPeriodo) y no el tramo cubierto por snapshots con
+  // datos (desdeR/hastaR): si hay huecos, o el último cierre no es el de hoy,
+  // eso daba menos días de los realmente transcurridos y disparaba la TNA.
+  // desdeR/hastaR se conservan solo para mostrar dónde arranca/termina la
+  // data real (aviso de hueco, "período efectivo").
   return {ret:c-1,sp:haySp?csp-1:null,ndx:haySp?cndx-1:null,
-    dias:diasEntre(desdeR,hastaR),desde:desdeR,hasta:hastaR,gan};
+    dias:diasNominal!=null?diasNominal:diasEntre(desde,hasta),desde:desdeR,hasta:hastaR,gan};
 }
 
 /* ══════════════ Diagnóstico de la serie ══════════════
@@ -1945,7 +1953,7 @@ function render(soloEstructura){
         haySp=bPts.length>1; benchHoy=haySp?bPts[bPts.length-1].ret:null;
       }
       const desdeCh=rango.desde, hastaCh=tramo[tramo.length-1].fecha;
-      const diasCh=diasEntre(desdeCh,hastaCh);
+      const diasCh=rango.dias!=null?rango.dias:diasEntre(desdeCh,hastaCh);
       const t0=new Date(desdeCh+"T12:00").getTime(), t1=new Date(hastaCh+"T12:00").getTime();
       const span=Math.max(1,t1-t0);
       const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
@@ -2086,7 +2094,7 @@ function render(soloEstructura){
     } else {
       // Cualquier otro período: retorno time-weighted sobre la serie diaria
       // (la misma que usa Riesgo), que sí tiene sentido para una ventana corta.
-      const r=retornoEntre(serieT,rango.desde,rango.hasta);
+      const r=retornoEntre(serieT,rango.desde,rango.hasta,rango.dias);
       if(r){
         const srT=serieRendimiento();
         const a0=srT?srT.aporteEn(rango.desde):null, a1=srT?srT.aporteEn(rango.hasta):null;
@@ -2096,7 +2104,7 @@ function render(soloEstructura){
         // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
         // serie diaria arranca más tarde que el período nominal por un hueco
         // de cierres, los dos números tienen que hablar de lo mismo.
-        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,r.hasta).sort((a,b)=>b.ret-a.ret);
+        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,rango.hasta).sort((a,b)=>b.ret-a.ret);
         const mejor=metP[0], peor=metP[metP.length-1];
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(rango.desde,rango.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
@@ -2132,7 +2140,7 @@ function render(soloEstructura){
             <div class="v ${cls(realPer)}">${signoMoney(realPer)}</div>
             <div class="d">ventas cerradas en el período</div></div>`:null,
         ];
-        metaHtml=`<span>${r.dias} días · ${r.desde} → ${r.hasta}</span>`;
+        metaHtml=`<span>${r.dias} días · ${rango.desdeNominal||r.desde} → ${rango.hasta}</span>`;
         if(metP.length){
           // Contribución relativa al valor total de las posiciones con precio
           // en esta ventana (no al capital aportado, que no aplica igual acá:
