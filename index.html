@@ -1859,12 +1859,23 @@ function primeraCompraMap(){
 function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
   primera=primera||primeraCompraMap();
   return pos.map(p=>{
-    if(p.tipo==="fci"||p.tipo==="manual"||p.pxMoneda!=="ARS"||p.px==null) return null;
-    const k=p.tipo+"|"+p.ticker+"|"+p.cuenta;
+    // NINGUNA posición se descarta. Antes esta función devolvía null en cinco
+    // situaciones distintas y el cuadro por activo se quedaba callado: una
+    // tenencia que estaba en Inicio simplemente no aparecía en Rendimientos,
+    // sin decir por qué. Ahora siempre vuelve una fila; si no se puede medir
+    // el retorno de la ventana, viene con ret=null y el motivo a la vista.
+    const valHoy=VISTA==="ARS"?p.valARS:p.valUSD;
+    const k=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
     const entrada=primera[k];
+    const fila={...p,ret:null,motivo:null,desdeEf:null,desdeCompra:entrada,
+      dias:null,tna:null,valHoy,valDesde:null,gan:null};
+    if(p.tipo==="fci")     return {...fila,motivo:"FCI: el historial público no tiene serie diaria por fondo"};
+    if(p.tipo==="manual")  return {...fila,motivo:"precio manual: no hay cierre diario archivado"};
+    if(p.px==null)         return {...fila,motivo:"sin precio de hoy"};
+    if(p.pxMoneda!=="ARS") return {...fila,motivo:"cotiza en USD: el historial guarda el cierre en pesos"};
     const desdeEf=(entrada&&entrada>desde)?entrada:desde;
     const h=precioHistorial(p.tipo,p.ticker,desdeEf);
-    if(!h) return null;
+    if(!h) return {...fila,desdeEf,motivo:`sin cierre archivado de ${p.ticker} (${p.tipo}) al ${desdeEf}`};
     let ret;
     if(VISTA==="ARS"){
       ret=p.px/h.precio-1;
@@ -1872,7 +1883,7 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
       // MEP y CCL comparten la misma base dólar histórica (no hay CCL
       // histórico por instrumento todavía — ver nota en cargarHistorialRemoto).
       const mepHoy=ESTADO?.MEP, mepDesde=mepHistorial(h.fecha);
-      if(!mepHoy||!mepDesde) return null;
+      if(!mepHoy||!mepDesde) return {...fila,desdeEf,motivo:`sin MEP histórico al ${h.fecha}`};
       ret=(p.px/mepHoy)/(h.precio/mepDesde)-1;
     }
     // Valor actual (en la moneda de VISTA) y valor implícito al arranque
@@ -1880,13 +1891,15 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
     // dentro de la ventana — igual limitación que "ret" arriba). Con eso se
     // puede mostrar la ganancia en moneda y armar el cuadro por activo en
     // cualquier período, no solo en "Histórico completo".
-    const valHoy=VISTA==="ARS"?p.valARS:p.valUSD; // idem: base de comparación
     const valDesde=valHoy!=null?valHoy/(1+ret):null;
     const dias=diasEntre(desdeEf,hasta);
-    return {...p,ret,desdeEf,desdeCompra:entrada,dias,tna:anualizar(ret,dias),valHoy,valDesde,
+    return {...fila,ret,desdeEf,dias,tna:anualizar(ret,dias),valDesde,
       gan:(valHoy!=null&&valDesde!=null)?valHoy-valDesde:null};
-  }).filter(Boolean);
+  });
 }
+// Orden común de los dos cuadros por activo: primero lo que se pudo medir
+// (mejor a peor retorno), y al final lo que no, para que no se mezcle.
+const ordenPorRet=(a,b)=>((a.ret==null)-(b.ret==null))||(b.ret-a.ret);
 // Resultado realizado (ventas ya cerradas) que cayó específicamente dentro de
 // (desde,hasta]. Recorre TODO el historial de movimientos para llevar el
 // costo promedio correcto, pero solo suma a la cuenta el resultado de las
@@ -1926,7 +1939,12 @@ function metricasPorPosicion(pos){
     const val=VISTA==="ARS"?p.valARS:p.valUSD;
     const ret=(val!=null&&costo>0)?val/costo-1:null;
     const dias=desde?diasEntre(desde,hoy()):null;
-    return {...p,desde,dias,ret,tna:(ret!=null&&dias)?anualizar(ret,dias):null,
+    // Mismo criterio que metricasPorPosicionEnPeriodo: la fila sale igual y el
+    // motivo queda escrito, en vez de que la posición se evapore del cuadro.
+    const motivo=ret!=null?null
+      :val==null?"sin precio de hoy"
+      :"costo promedio en cero (canje, compra sin precio, o una venta sin su compra previa)";
+    return {...p,desde,dias,ret,motivo,tna:(ret!=null&&dias)?anualizar(ret,dias):null,
       costoM:costo,valM:val,contrib:null};
   });
 }
@@ -2797,9 +2815,12 @@ function render(soloEstructura){
     if(PERIODO==="todo"){
       // Camino de siempre: retorno money-weighted sobre el capital aportado
       // total, con la tabla detallada por posición desde su primera compra.
-      const met=metricasPorPosicion(pos).filter(p=>p.ret!=null).sort((a,b)=>b.ret-a.ret);
+      // Se listan TODAS las posiciones; las que no se pueden medir van al
+      // final con el motivo escrito (antes se filtraban y desaparecían).
+      const met=metricasPorPosicion(pos).sort(ordenPorRet);
+      const metMed=met.filter(p=>p.ret!=null);
       if(met.length){
-        const invTot=met.reduce((s,p)=>s+p.costoM,0);
+        const invTot=met.reduce((s,p)=>s+(p.costoM>0?p.costoM:0),0);
         const srT=serieRendimiento();
         const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
         const retTot=baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0;
@@ -2808,8 +2829,10 @@ function render(soloEstructura){
         const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
         const diasTot=diasEntre(fPrim,hoy());
         const tnaTot=anualizar(retTot,diasTot);
-        met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
-        const mejor=met[0], peor=met[met.length-1];
+        met.forEach(p=>{ p.contrib=(baseCap>0&&p.ret!=null)?(p.valM-p.costoM)/baseCap:null; });
+        // Mejor/peor solo entre las medibles: si no, "peor posición" termina
+        // siendo una fila sin retorno calculable.
+        const mejor=metMed[0], peor=metMed[metMed.length-1];
         const realTot=VISTA==="ARS"?realARS:realUSD;
         const monedaLblTot=tituloMoneda;
 
@@ -2844,17 +2867,20 @@ function render(soloEstructura){
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
             <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
           </tr></thead><tbody>
-          ${met.map(p=>{
-            const maxC=Math.max(...met.map(x=>Math.abs(x.contrib)))||1;
-            const w=Math.abs(p.contrib)/maxC*100;
-            return `<tr><td class="tk">${p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker}</td>
+          ${(()=>{const maxC=Math.max(...met.map(x=>Math.abs(x.contrib||0)))||1;
+            return met.map(p=>{
+            const w=Math.abs(p.contrib||0)/maxC*100;
+            const medible=p.ret!=null;
+            return `<tr${medible?"":' style="opacity:.72"'}><td class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}</td>
             <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
             <td>${p.desde||"—"}</td><td>${p.dias||"—"}</td>
-            <td>${money(p.costoM)}</td><td>${money(p.valM)}</td>
-            <td class="${cls(p.valM-p.costoM)}">${signoMoney(p.valM-p.costoM)}</td>
-            <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
-            <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
-              <span>${sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
+            <td>${p.costoM>0?money(p.costoM):"—"}</td><td>${p.valM==null?"—":money(p.valM)}</td>
+            <td class="${medible?cls(p.valM-p.costoM):""}">${medible?signoMoney(p.valM-p.costoM):"—"}</td>
+            <td class="${cls(p.ret)}">${medible?sgn(p.ret*100):"—"}</td>
+            <td class="l">${medible
+              ?`<div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
+              <span>${sgn(p.contrib*100)}</span></div>`
+              :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("");})()}
           </tbody></table></div>`;
         notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
@@ -2874,8 +2900,11 @@ function render(soloEstructura){
         // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
         // serie diaria arranca más tarde que el período nominal por un hueco
         // de cierres, los dos números tienen que hablar de lo mismo.
-        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,r.hasta).sort((a,b)=>b.ret-a.ret);
-        const mejor=metP[0], peor=metP[metP.length-1];
+        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,r.hasta).sort(ordenPorRet);
+        // Mejor/peor solo entre las medibles (las demás van igual al cuadro,
+        // con el motivo, pero no pueden ganar ni perder un ranking).
+        const metPMed=metP.filter(x=>x.ret!=null);
+        const mejor=metPMed[0], peor=metPMed[metPMed.length-1];
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(r.desde,r.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
         const monedaLbl=tituloMoneda;
@@ -2938,14 +2967,17 @@ function render(soloEstructura){
             </tr></thead><tbody>
             ${metP.map(p=>{
               const w=p.contrib!=null?Math.abs(p.contrib)/maxC*100:0;
-              return `<tr><td class="tk">${p.ticker}</td>
+              const medible=p.ret!=null;
+              return `<tr${medible?"":' style="opacity:.72"'}><td class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}</td>
               <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
               <td>${p.desdeCompra||"—"}</td><td>${p.dias||"—"}</td>
               <td>${p.valHoy==null?"—":money(p.valHoy)}</td>
               <td class="${cls(p.gan||0)}">${p.gan==null?"—":signoMoney(p.gan)}</td>
-              <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
-              <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${(p.contrib||0)>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
-                <span>${p.contrib==null?"—":sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
+              <td class="${cls(p.ret)}">${medible?sgn(p.ret*100):"—"}</td>
+              <td class="l">${medible
+                ?`<div class="contrib-wrap"><div class="contrib-bar ${(p.contrib||0)>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
+                <span>${p.contrib==null?"—":sgn(p.contrib*100)}</span></div>`
+                :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("")}
             </tbody></table></div>`;
         }
         notaHtml=`<div class="perf-note">${desalineado?`<b>Ojo:</b> pediste ${rango.desdeNominal||rango.desde} → ${rango.hasta},
@@ -2957,8 +2989,9 @@ function render(soloEstructura){
           solo a medida que ese historial avance.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
           salió, así un depósito no se confunde con una ganancia. El cuadro por activo y mejor/peor posición se
           miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
-          tarde), también en ${monedaLbl} y no contra tu costo de compra original — no incluyen FCI ni posiciones
-          con precio manual, que no tienen historial diario. La columna "Desde" conserva siempre la fecha de compra,
+          tarde), también en ${monedaLbl} y no contra tu costo de compra original. El cuadro lista <b>todas</b> las
+          posiciones en cartera: las que no se pueden medir en esta ventana aparecen igual, con "—" en Retorno y el
+          motivo escrito en la última columna (antes se descartaban sin avisar). La columna "Desde" conserva siempre la fecha de compra,
           aunque el cálculo respete el período elegido. Los días con menos de
           US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
           % sin sentido.${notaBaseCCL?"<br><br>"+notaBaseCCL:""}</div>`;
