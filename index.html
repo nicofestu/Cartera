@@ -1835,7 +1835,7 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
     // dentro de la ventana — igual limitación que "ret" arriba). Con eso se
     // puede mostrar la ganancia en moneda y armar el cuadro por activo en
     // cualquier período, no solo en "Histórico completo".
-    const valHoy=VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
+    const valHoy=VISTA==="ARS"?p.valARS:p.valUSD; // idem: base de comparación
     const valDesde=valHoy!=null?valHoy/(1+ret):null;
     const dias=diasEntre(desdeEf,hasta);
     return {...p,ret,desdeEf,desdeCompra:entrada,dias,tna:anualizar(ret,dias),valHoy,valDesde,
@@ -1876,7 +1876,9 @@ function metricasPorPosicion(pos){
     const k=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
     const desde=primera[k];
     const costo=VISTA==="ARS"?p.costARS:p.costUSD;
-    const val=VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
+    // Base de comparación (ver render): en CCL se mide contra dólares MEP,
+    // que es la moneda en la que está expresado el costo promedio.
+    const val=VISTA==="ARS"?p.valARS:p.valUSD;
     const ret=(val!=null&&costo>0)?val/costo-1:null;
     const dias=desde?diasEntre(desde,hoy()):null;
     return {...p,desde,dias,ret,tna:(ret!=null&&dias)?anualizar(ret,dias):null,
@@ -2147,33 +2149,66 @@ function diagnosticoSerieHtml(serie,pos){
 function ymd(d){ return d.toISOString().slice(0,10); }
 function restarDias(f,n){ const d=new Date(f+"T00:00:00Z"); d.setUTCDate(d.getUTCDate()-n); return ymd(d); }
 
-// Métricas de riesgo estándar sobre la serie de retornos diarios.
+/* Métricas de riesgo estándar sobre la serie de retornos.
+
+   OJO: los tramos de serieDiaria() NO son todos de un día. Cuando faltan
+   cierres —fin de semana largo, días sin abrir la app, huecos de cobertura de
+   precios— un solo punto puede cubrir 10, 20 o 40 días de calendario. La
+   versión anterior trataba cada punto como si fuera una rueda: metía el
+   movimiento de tres semanas en la misma bolsa que el de un día, y con eso
+   inflaba la volatilidad estimada (y hundía el Sharpe) sin que hubiera pasado
+   nada raro en la cartera. Además anualizaba con 252/n, o sea sobre la
+   CANTIDAD de cierres cargados en vez de sobre el tiempo realmente
+   transcurrido: con huecos, un período de un año con 60 cierres se anualizaba
+   como si fueran 60 ruedas.
+
+   Corrección: cada observación se estandariza a "una rueda". Se toma el
+   retorno logarítmico del tramo y se lo divide por la raíz de su duración en
+   ruedas, que es como escala el desvío estándar cuando se acumulan días
+   independientes (σ de T días = σ diario × √T). Así todas las observaciones
+   quedan en la misma unidad y recién ahí se anualiza. El retorno anualizado
+   pasa a usar los días de calendario efectivamente cubiertos.
+
+   La máxima caída no necesita corrección: es un encadenamiento del retorno
+   acumulado y no depende de cuántos días abarque cada tramo. */
 function metricasRiesgo(serie){
-  const rs=serie.map(d=>d.r).filter(isFinite);
-  const n=rs.length;
+  const RUEDAS=252, CAL=365;
+  const obs=(serie||[]).filter(d=>isFinite(d.r)&&d.r>-1).map(d=>{
+    const dCal=Math.max(1,d.dias||1);
+    const ruedas=Math.max(1,dCal*RUEDAS/CAL); // días de calendario -> ruedas equivalentes
+    const x=Math.log(1+d.r);                  // log-retorno del tramo completo
+    return {r:d.r,rsp:d.rsp,dCal,ruedas,u:x/Math.sqrt(ruedas)}; // u = retorno por rueda estandarizado
+  });
+  const n=obs.length;
   if(n<2) return null;
-  const media=rs.reduce((a,b)=>a+b,0)/n;
-  const sd=Math.sqrt(rs.reduce((a,b)=>a+(b-media)**2,0)/(n-1));
-  const vol=sd*Math.sqrt(252);
-  const acum=rs.reduce((a,b)=>a*(1+b),1);
-  const retAnual=Math.pow(acum,252/n)-1;
-  const neg=rs.filter(r=>r<0);
-  const dd=neg.length?Math.sqrt(neg.reduce((a,b)=>a+b*b,0)/neg.length)*Math.sqrt(252):0;
+  const us=obs.map(o=>o.u);
+  const media=us.reduce((a,b)=>a+b,0)/n;
+  const sd=Math.sqrt(us.reduce((a,b)=>a+(b-media)**2,0)/(n-1)); // desvío por rueda
+  const vol=sd*Math.sqrt(RUEDAS);
+  const diasTot=obs.reduce((s,o)=>s+o.dCal,0);
+  const acum=obs.reduce((a,o)=>a*(1+o.r),1);
+  const retAnual=(acum>0&&diasTot>0)?Math.pow(acum,CAL/diasTot)-1:null;
+  const neg=us.filter(u=>u<0);
+  const dd=neg.length?Math.sqrt(neg.reduce((a,b)=>a+b*b,0)/neg.length)*Math.sqrt(RUEDAS):0;
   // Máxima caída desde un pico, sobre el índice de retorno acumulado
   let pico=1,cum=1,mdd=0;
-  for(const r of rs){ cum*=(1+r); if(cum>pico) pico=cum; const c=cum/pico-1; if(c<mdd) mdd=c; }
-  // Beta y correlación contra el S&P, solo con los días que tienen ambos datos
-  const pares=serie.filter(d=>isFinite(d.r)&&d.rsp!=null);
+  for(const o of obs){ cum*=(1+o.r); if(cum>pico) pico=cum; const c=cum/pico-1; if(c<mdd) mdd=c; }
+  // Beta y correlación contra el S&P, con los tramos que tienen ambos datos y
+  // la misma estandarización (si no, un tramo de 20 días pesaría de más).
+  const pares=obs.filter(o=>o.rsp!=null&&o.rsp>-1)
+    .map(o=>({p:o.u,b:Math.log(1+o.rsp)/Math.sqrt(o.ruedas)}));
   let beta=null,correl=null;
   if(pares.length>=20){
-    const rp=pares.map(d=>d.r), rb=pares.map(d=>d.rsp);
-    const mp=rp.reduce((a,b)=>a+b,0)/rp.length, mb=rb.reduce((a,b)=>a+b,0)/rb.length;
+    const mp=pares.reduce((a,o)=>a+o.p,0)/pares.length, mb=pares.reduce((a,o)=>a+o.b,0)/pares.length;
     let cov=0,varb=0,varp=0;
-    for(let i=0;i<rp.length;i++){ cov+=(rp[i]-mp)*(rb[i]-mb); varb+=(rb[i]-mb)**2; varp+=(rp[i]-mp)**2; }
+    for(const o of pares){ cov+=(o.p-mp)*(o.b-mb); varb+=(o.b-mb)**2; varp+=(o.p-mp)**2; }
     if(varb>0) beta=cov/varb;
     if(varb>0&&varp>0) correl=cov/Math.sqrt(varb*varp);
   }
-  return {n,vol,retAnual,sharpe:vol>0?retAnual/vol:null,sortino:dd>0?retAnual/dd:null,
+  const huecos=obs.filter(o=>o.dCal>=5).length;
+  return {n,dias:diasTot,huecos,vol,retAnual,
+    sharpe:(vol>0&&retAnual!=null)?retAnual/vol:null,
+    sortino:(dd>0&&retAnual!=null)?retAnual/dd:null,
     mdd,beta,correl,paresBench:pares.length};
 }
 
@@ -2187,16 +2222,17 @@ function seccionRiesgo(secIdxRef,rango){
   const m=metricasRiesgo(serie);
   const MIN_VOL=20, MIN_BETA=20;
   let html=`<div class="section-h"><span class="idx">${secIdxRef}</span><h2>Riesgo</h2>
-    <span style="margin-left:auto">${m?.n||0} retornos diarios · ${rango.etiqueta}</span></div>`;
+    <span style="margin-left:auto">${m?.n||0} tramos${m?.dias?` · ${m.dias} días`:""} · ${rango.etiqueta}</span></div>`;
   if(!m||m.n<MIN_VOL){
-    html+=`<div class="chart-warn">Con ${m?.n||0} día${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
+    html+=`<div class="chart-warn">Con ${m?.n||0} cierre${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
       todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
       ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
       más largo, o esperá a que se acumulen más días.</div>`;
   } else {
     const cardsR=[
-      card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío de los retornos diarios"),
-      card("Retorno anualizado",sgn(m.retAnual*100),"del período elegido",cls(m.retAnual)),
+      card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío por rueda, anualizado"),
+      card("Retorno anualizado",m.retAnual==null?"—":sgn(m.retAnual*100),
+        `sobre ${m.dias} días de calendario`,m.retAnual==null?"":cls(m.retAnual)),
       card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),"retorno por unidad de riesgo · tasa libre 0",
         m.sharpe==null?"":cls(m.sharpe)),
       card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),"idem, solo penaliza caídas",
@@ -2211,7 +2247,10 @@ function seccionRiesgo(secIdxRef,rango){
     ];
     html+=filasGrid(cardsR,"perf-grid",4);
     html+=`<div class="hint" style="margin-top:12px;line-height:1.9">
-      Calculado con ${m.n} retornos diarios de ${rango.etiqueta.toLowerCase()} y anualizado a 252 ruedas. Sharpe
+      Calculado con ${m.n} cierres de ${rango.etiqueta.toLowerCase()}, que cubren ${m.dias} días de calendario, y anualizado a 252 ruedas.
+      Los tramos no son todos de un día: cuando falta un cierre en el medio, ese punto abarca varios días y se
+      pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
+      si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada. Sharpe
       y Sortino usan tasa libre de riesgo 0: en pesos no hay una referencia razonable y en dólares cambiaría
       poco el orden de magnitud, así que conviene leerlos como comparación relativa entre períodos más que
       como un valor absoluto.</div>`;
@@ -2312,15 +2351,32 @@ function render(soloEstructura){
   const {pos,fx,MEP,CCL,realARS,realUSD,hora}=ESTADO;
   const V=p=>VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
   const C=p=>VISTA==="ARS"?p.costARS:p.costUSD;
-  const PL=p=>VISTA==="ARS"?p.plARS:VISTA==="MEP"?p.plUSD:p.plCCL;
+  // En CCL apunta a plUSD a propósito: el costo promedio está en dólares MEP
+  // (es la plata que realmente entró), así que restarle una valuación a CCL
+  // metería la brecha MEP/CCL adentro del resultado. Ver "base de comparación".
+  const PL=p=>VISTA==="ARS"?p.plARS:p.plUSD;
   const FXV=VISTA==="CCL"?CCL:MEP; // tipo de cambio para convertir liquidez entre ARS y USD en la vista activa
 
   pintarFX(); estadoBackup(); pintarSync();
   document.getElementById("ts").textContent="Actualizado "+hora.toLocaleString("es-AR",{dateStyle:"short",timeStyle:"medium"});
 
   const totalPos=pos.reduce((s,p)=>s+(V(p)||0),0);
+  /* ── Base de comparación para porcentajes ──────────────────────────────
+     El costo promedio y el capital aportado se llevan en pesos o en dólares
+     MEP: no existe una serie CCL histórica por movimiento (ver la nota de
+     VISTA arriba de todo). Si en la vista CCL se valúa hoy a CCL y se divide
+     por esa base MEP, la brecha MEP/CCL se cuela adentro del rendimiento como
+     si fuera resultado de la cartera — con una brecha del 2% toda la cartera
+     "rinde" 2% menos solo por cambiar el selector de moneda.
+     Por eso: los MONTOS de valuación, liquidez, NAV y asignación se muestran
+     en la moneda elegida, pero todo lo que se DIVIDE por un costo o por un
+     aporte (retornos, P&L, contribución) se mide siempre en base ARS/MEP.
+     Consecuencia buscada: los % de MEP y CCL son idénticos, como dice la nota
+     de VISTA — antes no lo eran. */
+  const VB=p=>VISTA==="ARS"?p.valARS:p.valUSD;
+  const totalPosB=pos.reduce((s,p)=>s+(VB(p)||0),0);
   const costo=pos.reduce((s,p)=>s+(V(p)!=null?C(p):0),0);
-  const pl=totalPos-costo;
+  const pl=totalPosB-costo;
   const varDia=pos.reduce((s,p)=>s+(p.varDiaARS||0),0)/(VISTA==="ARS"?1:FXV);
   const realizado=VISTA==="ARS"?realARS:realUSD;
   const saldos=DATOS.saldos||{};
@@ -2334,6 +2390,10 @@ function render(soloEstructura){
   const cashUsd=cuentas.reduce((s,c)=>s+cashUsdCta(c),0);
   const cash=cashArs+cashUsd;
   const total=totalPos+cash;
+  // Mismo total, pero en la base de comparación (idéntico a `total` en ARS y MEP)
+  const cashBase=VISTA==="ARS"?cash
+    :cuentas.reduce((s,c)=>{const x=saldos[c]||{}; return s+(x.ars||0)/MEP+(x.usd||0);},0);
+  const totalBase=totalPosB+cashBase;
   const hayCash=Object.keys(saldos).length>0;
   const navPrev=window.__navPrev; if(TAB==="inicio") window.__navPrev=total;
 
@@ -2398,7 +2458,12 @@ function render(soloEstructura){
   // combina con el bloque de período + rendimiento de hoy al final)
   const sr=serieRendimiento();
   const sinPx=pos.filter(p=>p.valARS==null);
-  const tituloMoneda=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
+  // La sección Rendimientos se rotula con la BASE de cálculo, no con la vista:
+  // en CCL los porcentajes se miden igual en dólares MEP (no hay CCL histórico).
+  const tituloMoneda=VISTA==="ARS"?"ARS":"USD MEP";
+  const notaBaseCCL=VISTA==="CCL"
+    ? ` Estás mirando la cartera en <b>USD CCL</b>, pero los porcentajes y los resultados de esta sección se miden en <b>USD MEP</b>: el capital aportado y el costo promedio están en dólares MEP (es el tipo de cambio al que entró cada peso) y no hay una serie CCL histórica por movimiento. Dividir un valor a CCL por una base MEP metería la brecha entre los dos dólares adentro del rendimiento. El NAV, la liquidez y las valuaciones de Inicio sí se muestran a CCL.`
+    : "";
   let chartHtml="";
   let chartTipData=null; // datos livianos para el tooltip hover del gráfico (ver initChartTooltip)
   if(TAB==="rendimientos"&&sinPx.length){
@@ -2407,7 +2472,7 @@ function render(soloEstructura){
       <b>${sinPx.map(p=>p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker).join(", ")}</b>.
       Revisá que el tipo de instrumento sea el correcto (editando el movimiento) o cargá un precio manual.</div></div>`;
   } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&PERIODO==="todo"){
-    const retHoy=(total+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
+    const retHoy=(totalBase+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
     const pts=sr.puntos.filter(p=>p.fecha!==hoy());
     pts.push({fecha:hoy(),ret:retHoy});
     // Benchmark S&P 500: se encadena día a día con la resolución diaria real
@@ -2491,7 +2556,7 @@ function render(soloEstructura){
       <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
       <div class="chart-meta"><span>Desde ${sr.desde} · ${diasEntre(sr.desde,hoy())} días</span>
         <span>Aportado ${money(sr.aporte)}${sr.retirado>1?" · retirado "+money(sr.retirado):""}${sr.caja>1?" · caja "+money(sr.caja):""}</span>
-        <span class="${cls(retHoy)}">${signoMoney(total+sr.retirado-sr.aporte)}</span></div>
+        <span class="${cls(retHoy)}">${signoMoney(totalBase+sr.retirado-sr.aporte)}</span></div>
       ${pts.length<4?`<div class="chart-note">La curva se dibuja sobre hitos ciertos: el inicio, cada operación y los cierres que registra el dashboard. Gana resolución a medida que lo abrís en días sucesivos.</div>`:""}
     </div>`;
     chartTipData={pts:pts.map(p=>({x:X(p.fecha),ret:p.ret})),bpts:dBench?bPts.map(p=>({x:X(p.fecha),ret:p.ret})):[],
@@ -2618,7 +2683,7 @@ function render(soloEstructura){
         const invTot=met.reduce((s,p)=>s+p.costoM,0);
         const srT=serieRendimiento();
         const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
-        const retTot=baseCap>0?(total+(srT?.retirado||0))/baseCap-1:0;
+        const retTot=baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0;
         const benchTot=srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null;
         const benchNdx=srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null;
         const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
@@ -2627,12 +2692,12 @@ function render(soloEstructura){
         met.forEach(p=>{ p.contrib=baseCap>0?(p.valM-p.costoM)/baseCap:0; });
         const mejor=met[0], peor=met[met.length-1];
         const realTot=VISTA==="ARS"?realARS:realUSD;
-        const monedaLblTot=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
+        const monedaLblTot=tituloMoneda;
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno total</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
-            <div class="d">${signoMoney(total+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
+            <div class="d">${signoMoney(totalBase+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
             <div class="d">anualizado · ${diasTot}d</div></div>`,
@@ -2675,7 +2740,7 @@ function render(soloEstructura){
         notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
-          <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.</div>`;
+          <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
       }
     } else {
       // Cualquier otro período: retorno time-weighted sobre la serie diaria
@@ -2694,7 +2759,7 @@ function render(soloEstructura){
         const mejor=metP[0], peor=metP[metP.length-1];
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(rango.desde,rango.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
-        const monedaLbl=VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL";
+        const monedaLbl=tituloMoneda;
         // Si el período nominal (rango.desde) no coincide con donde arranca
         // de verdad la serie (r.desde), es porque hay un hueco de cierres en
         // el medio — se avisa en vez de dejar que parezca el mismo período.
@@ -2731,7 +2796,7 @@ function render(soloEstructura){
           // Contribución relativa al valor total de las posiciones con precio
           // en esta ventana (no al capital aportado, que no aplica igual acá:
           // una posición puede venir de antes del período).
-          const baseCapP=metP.reduce((s,p)=>s+(p.valHoy||0),0)||total;
+          const baseCapP=metP.reduce((s,p)=>s+(p.valHoy||0),0)||totalBase;
           metP.forEach(p=>{ p.contrib=(baseCapP>0&&p.gan!=null)?p.gan/baseCapP:null; });
           const maxC=Math.max(...metP.map(x=>Math.abs(x.contrib||0)))||1;
           tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
@@ -2760,7 +2825,7 @@ function render(soloEstructura){
           con precio manual, que no tienen historial diario. La columna "Desde" conserva siempre la fecha de compra,
           aunque el cálculo respete el período elegido. Los días con menos de
           US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
-          % sin sentido.</div>`;
+          % sin sentido.${notaBaseCCL?"<br><br>"+notaBaseCCL:""}</div>`;
       }
     }
 
