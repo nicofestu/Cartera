@@ -1414,6 +1414,21 @@ function mepHistorial(fecha){
   if(!HIST_REMOTO||!HIST_REMOTO.mepFechas.length) return null;
   return nivelEn(HIST_REMOTO.mepHist,HIST_REMOTO.mepFechas,fecha);
 }
+/* MEP de una fecha con respaldo en los snapshots propios. El benchmark en
+   vista ARS necesita un MEP para CADA día en que se mueve el índice; si
+   HIST_REMOTO todavía no cargó (o no cubre esa fecha) el encadenamiento se
+   cortaba y la comparación contra el S&P desaparecía. Los snapshots guardan
+   su propio `mep`, que alcanza como piso. */
+let _MEPFB=null;
+function mepEnFecha(f){
+  const m=mepHistorial(f); if(m) return m;
+  if(!_MEPFB){
+    const h={},fs=[];
+    for(const s of (DATOS.snapshots||[])) if(s&&s.mep>0&&!(s.fecha in h)){ h[s.fecha]=s.mep; fs.push(s.fecha); }
+    fs.sort(); _MEPFB={h,fs};
+  }
+  return _MEPFB.fs.length?nivelEn(_MEPFB.h,_MEPFB.fs,f):null;
+}
 // Reconstruye DATOS.snapshots para el pasado. Nunca pisa un snapshot que ya
 // exista (esos vienen de haber abierto la app ese día, con precios reales al
 // momento — más confiables que reconstruir contra un cierre de fin de día).
@@ -1540,7 +1555,7 @@ try{ localStorage.setItem("__t","1"); localStorage.removeItem("__t"); }catch(e){
    garantiza que nunca se sirve un resultado viejo; la clave incluye VISTA
    porque la moneda cambia el resultado. */
 let _MEMO={};
-function invalidarMemo(){ _MEMO={}; }
+function invalidarMemo(){ _MEMO={}; _MEPFB=null; }
 function persistir(){
   invalidarMemo();
   if(!hayStorage) return;
@@ -2054,6 +2069,62 @@ function capitalVigenteUSD(hitos,f){
   for(const h of hitos){ if(h.fecha<=f) r=h; else break; }
   return r?r.aporU-r.retU:0;
 }
+
+/* ══════════════ Benchmark: FUENTE ÚNICA ══════════════
+   Antes convivían DOS maneras de medir el mismo índice sobre el mismo
+   período y daban resultados distintos (llegaron a dar signos opuestos):
+
+     a) el gráfico encadenaba los cierres oficiales de SP500_HIST y cerraba
+        con el nivel EN VIVO derivado del CEDEAR (sp500Hoy());
+     b) las cards "vs. S&P 500" / "vs. Nasdaq 100" encadenaban el campo
+        `sp`/`ndx` guardado dentro de cada snapshot — y ese campo se captura
+        con sp500Hoy() EN EL MOMENTO INTRADÍA en que se abre la app ese día,
+        no al cierre. O sea que (b) comparaba "el índice ahora" contra "el
+        índice a la hora random en que abriste la app la última vez".
+
+   Ahora hay una sola función y la usan el gráfico, las cards y el beta de
+   Riesgo. Criterio: cierres oficiales del historial para todos los días
+   pasados + nivel en vivo únicamente para hoy. Se conserva la conversión a
+   pesos por MEP en vista ARS y la "pausa" de los días con capital neto
+   ≤US$NAV_MIN_USD (no se simula estar invertido en el índice mientras la
+   plata estaba afuera).
+
+   Devuelve {ret, pts} — el mismo objeto alimenta la línea punteada y el
+   número de la card, así que ya no pueden discrepar por construcción. */
+function benchPts(hist,fechas,nivelHoyFn,desde,hasta,hitos){
+  if(!desde||!hasta||!fechas||!fechas.length) return null;
+  const n0=nivelEn(hist,fechas,desde);
+  if(!n0) return null;
+  const hoyF=hoy(), ars=VISTA==="ARS";
+  let mepPrev=ars?mepEnFecha(desde):null;
+  if(ars&&!mepPrev) return null;
+  const pts=[{fecha:desde,ret:0}];
+  let c=1, prev=n0;
+  for(const f of fechas){
+    if(f<=desde) continue;
+    if(f>hasta||f===hoyF) break;
+    const n=nivelEn(hist,fechas,f);
+    if(n==null) continue;
+    const mepF=ars?mepEnFecha(f):null;
+    if(ars&&!mepF){ prev=n; continue; }
+    if(!hitos||capitalVigenteUSD(hitos,f)>NAV_MIN_USD)
+      c*=ars?(n*mepF)/(prev*mepPrev):n/prev;
+    prev=n; if(ars) mepPrev=mepF;
+    pts.push({fecha:f,ret:c-1});
+  }
+  if(hasta>=hoyF){
+    const nH=nivelHoyFn(), mepH=ars?(ESTADO&&ESTADO.MEP):null;
+    if(nH!=null&&(!ars||(mepH&&mepPrev))){
+      if(!hitos||capitalVigenteUSD(hitos,hoyF)>NAV_MIN_USD)
+        c*=ars?(nH*mepH)/(prev*mepPrev):nH/prev;
+      pts.push({fecha:hoyF,ret:c-1});
+    }
+  }
+  return pts.length>1?{ret:c-1,pts}:null;
+}
+function benchSP(desde,hasta,hitos){ return benchPts(SP500_HIST,SP500_FECHAS,sp500Hoy,desde,hasta,hitos); }
+function benchNDX(desde,hasta,hitos){ return benchPts(NDX_HIST,NDX_FECHAS,ndxHoy,desde,hasta,hitos); }
+
 function serieDiaria(){
   const _k="sd:"+VISTA;
   if(_k in _MEMO) return _MEMO[_k];
@@ -2087,13 +2158,15 @@ function serieDiaria(){
     if(!(base>0)) continue;
     const r=(v1-v0-flujo)/base;
     if(!isFinite(r)) continue;
-    // Nivel del índice en la misma moneda que la cartera, para poder comparar
-    const spN=(cur.sp??sp500En(cur.fecha)), spP=(prev.sp??sp500En(prev.fecha));
-    const ndxN=(cur.ndx??ndxEn(cur.fecha)), ndxP=(prev.ndx??ndxEn(prev.fecha));
-    const fx=K==="ars"?(cur.mep&&prev.mep?cur.mep/prev.mep:1):1;
+    // Índice sobre EXACTAMENTE el mismo tramo, con la fuente única (ver
+    // benchPts). Antes acá se leía cur.sp/prev.sp — los niveles intradía
+    // congelados en cada snapshot — y por eso el beta de Riesgo y las cards
+    // no coincidían con el gráfico.
+    const bs=benchSP(prev.fecha,cur.fecha,sr.hitos);
+    const bn=benchNDX(prev.fecha,cur.fecha,sr.hitos);
     out.push({fecha:cur.fecha,desde:prev.fecha,dias:T,v0,v:v1,flujo,base,r,
-      rsp:(spN&&spP)?(spN/spP)*fx-1:null,
-      rndx:(ndxN&&ndxP)?(ndxN/ndxP)*fx-1:null});
+      rsp:bs?bs.ret:null,
+      rndx:bn?bn.ret:null});
   }
   return _MEMO[_k]=out;
 }
@@ -2109,7 +2182,15 @@ function retornoEntre(serie,desde,hasta,diasNominal){
     if(d.rsp!=null){ csp*=(1+d.rsp); haySp=true; }
     if(d.rndx!=null) cndx*=(1+d.rndx);
   }
-  const desdeR=tramo[0].fecha, hastaR=tramo[tramo.length-1].fecha;
+  // ARRANQUE REAL de la medición. Cada punto de serieDiaria es un TRAMO
+  // {desde: cierre anterior, fecha: cierre de ese punto}: el retorno del
+  // primero ya incluye todo lo que pasó desde `tramo[0].desde`. Antes acá se
+  // usaba tramo[0].fecha —el FIN del primer tramo— y eso rompía dos cosas:
+  //   · el aviso de hueco no podía dispararse nunca (comparaba contra la
+  //     fecha equivocada), así que un "Hoy" que en realidad medía 4 días
+  //     porque el cierre anterior era del viernes se mostraba como 1 día;
+  //   · mejor/peor posición se medía sobre una ventana de largo cero.
+  const desdeR=tramo[0].desde||tramo[0].fecha, hastaR=tramo[tramo.length-1].fecha;
   // "dias" para anualizar usa el calendario nominal del período pedido
   // (diasNominal, ver rangoPeriodo) y no el tramo cubierto por snapshots con
   // datos (desdeR/hastaR): si hay huecos, o el último cierre no es el de hoy,
@@ -2117,7 +2198,44 @@ function retornoEntre(serie,desde,hasta,diasNominal){
   // desdeR/hastaR se conservan solo para mostrar dónde arranca/termina la
   // data real (aviso de hueco, "período efectivo").
   return {ret:c-1,sp:haySp?csp-1:null,ndx:haySp?cndx-1:null,
-    dias:diasNominal!=null?diasNominal:diasEntre(desde,hasta),desde:desdeR,hasta:hastaR,gan};
+    dias:diasNominal!=null?diasNominal:diasEntre(desde,hasta),desde:desdeR,hasta:hastaR,
+    diasReales:Math.max(1,diasEntre(desdeR,hastaR)),gan};
+}
+
+/* ══════════════ Variación del día: FUENTE ÚNICA ══════════════
+   La card "Rendimiento · Hoy" (Inicio y Rendimientos) calculaba su propio
+   número con `varDia` = Σ (valARS − valARS/(1+pct/100)) / MEP de hoy, donde
+   `pct` es la variación diaria EN PESOS que devuelve la API de precios. Tres
+   problemas, que juntos explicaban por qué esa card y "Retorno del período"
+   nunca coincidían aunque dijeran las dos "Hoy" y "USD MEP":
+     1. numerador y denominador se convertían con el MISMO MEP, así que el
+        movimiento del dólar se cancelaba: el número decía USD pero era un
+        retorno en pesos;
+     2. la base era solo las posiciones (excluía la liquidez), mientras el
+        time-weighted mide sobre el NAV;
+     3. las especies sin `pct` (FCI, precio manual) aportaban 0 al numerador
+        pero pesaban completo en el denominador, diluyendo el % hacia cero.
+   Ahora las dos cards salen del mismo motor time-weighted que el resto de la
+   sección. `varDia` queda solo como respaldo para cuando todavía no hay
+   cierre de hoy en la serie, y en ese caso se rotula como lo que es. */
+function rendimientoDelDia(varDiaFallback,totalPosV){
+  const rh=rangoPeriodo("hoy");
+  const r=retornoEntre(serieDiaria(),rh.desde,rh.hasta,rh.dias);
+  if(r) return {gan:r.gan,ret:r.ret,desde:r.desde,hasta:r.hasta,dias:r.diasReales,exacto:true};
+  const base=totalPosV-varDiaFallback;
+  return {gan:varDiaFallback,ret:base>0?varDiaFallback/base:null,dias:1,exacto:false};
+}
+// Rótulo + subtítulo de esa card, para que Inicio y Rendimientos digan lo
+// mismo sin duplicar la lógica (y para no llamar "Hoy" a un tramo de 4 días
+// solo porque el último cierre registrado es del viernes).
+function cardRendDia(rd){
+  const k=!rd.exacto||rd.dias<=1?"Rendimiento · Hoy":`Rendimiento · ${rd.dias} días`;
+  const pct=rd.ret!=null?sgn(rd.ret*100):"";
+  const d=!rd.exacto
+    ? (pct?pct+" · ":"")+"variación en pesos · todavía sin cierre de hoy"
+    : rd.dias<=1?pct
+    : `${pct} · desde el ${rd.desde}, sin cierre intermedio`;
+  return {k,d};
 }
 
 /* ══════════════ Diagnóstico de la serie ══════════════
@@ -2415,6 +2533,8 @@ function render(soloEstructura){
   const costo=pos.reduce((s,p)=>s+(V(p)!=null?C(p):0),0);
   const pl=totalPosB-costo;
   const varDia=pos.reduce((s,p)=>s+(p.varDiaARS||0),0)/(VISTA==="ARS"?1:FXV);
+  // Único lugar donde se calcula "lo que me moví hoy" (ver rendimientoDelDia).
+  const rendDia=rendimientoDelDia(varDia,totalPos), rendDiaLbl=cardRendDia(rendDia);
   const realizado=VISTA==="ARS"?realARS:realUSD;
   const saldos=DATOS.saldos||{};
   const cuentas=[...new Set([...pos.map(p=>p.cuenta),...Object.keys(saldos)])];
@@ -2443,8 +2563,8 @@ function render(soloEstructura){
     <div class="card hero" id="nav-card"><div class="hero-row">
       <div class="hero-main"><div class="k">NAV · Total</div><div class="v">${money(total)}</div>
         <div class="d">${otro}${hayCash?" · incl. liquidez":""}</div></div>
-      <div class="hero-side"><div class="k">Rendimiento · Hoy</div><div class="v ${cls(varDia)}">${signoMoney(varDia)}</div>
-        <div class="d ${cls(varDia)}">${totalPos-varDia>0?sgn(varDia/(totalPos-varDia)*100):""}</div></div>
+      <div class="hero-side"><div class="k">${rendDiaLbl.k}</div><div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
+        <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
     </div></div>
     ${hayCash?`<div class="card"><div class="k">Liquidez · Pesos</div><div class="v ${cashArs<0?"down":""}">${(cashArs<0?"−":"")+money(Math.abs(cashArs))}</div>
       <div class="d">${fmt(cashArs/total*100,1)}% del total</div></div>
@@ -2520,32 +2640,9 @@ function render(soloEstructura){
     // ≤US$${NAV_MIN_USD} queda "pausado": ese día no suma el movimiento del
     // índice, para no simular una inversión en SPY que en los hechos no
     // existía mientras la plata estaba afuera de la cartera.
-    const spDesde0=sp500En(sr.desde);
-    const bPts=[{fecha:sr.desde,ret:0}];
-    let benchHoy=null;
-    if(spDesde0){
-      const diasBench=SP500_FECHAS.filter(f=>f>sr.desde&&f<hoy());
-      let cIdx=1, spPrev=spDesde0, mepPrev=VISTA==="ARS"?mepHistorial(sr.desde):null;
-      for(const f of diasBench){
-        const spF=sp500En(f);
-        if(spF==null) continue;
-        const mepF=VISTA==="ARS"?mepHistorial(f):null;
-        if(VISTA==="ARS"&&(!mepF||!mepPrev)){ spPrev=spF; if(mepF) mepPrev=mepF; continue; }
-        if(capitalVigenteUSD(sr.hitos,f)>NAV_MIN_USD){
-          cIdx*=VISTA==="ARS"?(spF*mepF)/(spPrev*mepPrev):spF/spPrev;
-        }
-        spPrev=spF; if(VISTA==="ARS") mepPrev=mepF;
-        bPts.push({fecha:f,ret:cIdx-1});
-      }
-      const spHoyV=sp500Hoy(), mepHoyV=VISTA==="ARS"?ESTADO.MEP:null;
-      if(VISTA!=="ARS"||(mepHoyV&&mepPrev)){
-        if(capitalVigenteUSD(sr.hitos,hoy())>NAV_MIN_USD){
-          cIdx*=VISTA==="ARS"?(spHoyV*mepHoyV)/(spPrev*mepPrev):spHoyV/spPrev;
-        }
-        bPts.push({fecha:hoy(),ret:cIdx-1});
-      }
-      benchHoy=cIdx-1;
-    }
+    const bench0=benchSP(sr.desde,hoy(),sr.hitos);
+    const bPts=bench0?bench0.pts:[{fecha:sr.desde,ret:0}];
+    const benchHoy=bench0?bench0.ret:null;
     const t0=new Date(sr.desde+"T12:00").getTime(), t1=new Date(hoy()+"T12:00").getTime();
     const span=Math.max(1,t1-t0);
     const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
@@ -2607,43 +2704,28 @@ function render(soloEstructura){
       chartHtml+=`<div class="chart-card"><div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda} · ${rango.etiqueta}</div></div>
         <div class="chart-warn">Todavía no hay suficientes cierres diarios en ${rango.etiqueta.toLowerCase()} para dibujar la curva. Probá "Histórico completo" o esperá a que se acumulen más días.</div></div>`;
     } else {
+      // La curva arranca donde arranca la MEDICIÓN, no donde arranca el
+      // período nominal. El primer tramo de serieDiaria compara contra
+      // `tramo[0].desde` (el último cierre anterior), así que su retorno ya
+      // incluye lo que pasó desde esa fecha. Anclar el gráfico en
+      // rango.desde dibujaba ese movimiento como si hubiera ocurrido dentro
+      // del período pedido, y dejaba la línea de la cartera y la del índice
+      // midiendo ventanas distintas desde el mismo x=0.
+      const desdeCh=tramo[0].desde||rango.desde, hastaCh=tramo[tramo.length-1].fecha;
       let c=1;
-      const pts=[{fecha:rango.desde,ret:0}];
+      const pts=[{fecha:desdeCh,ret:0}];
       for(const d of tramo){ c*=(1+d.r); pts.push({fecha:d.fecha,ret:c-1}); }
       const retHoy=c-1;
-      // Benchmark S&P 500: se encadena día a día con resolución diaria real
-      // (SP500_HIST) en vez de solo los días en que hay cierre de cartera —
-      // mismo criterio que en el gráfico de histórico completo. Los días con
-      // capital neto ≤US$${NAV_MIN_USD} quedan "pausados" (no suman el
-      // movimiento del índice ese día), igual que en la rama de arriba.
-      let haySp=false, benchHoy=null;
-      const bPts=[{fecha:rango.desde,ret:0}];
-      const spDesde=sp500En(rango.desde);
-      if(spDesde){
-        const diasBenchP=SP500_FECHAS.filter(f=>f>rango.desde&&f<=rango.hasta&&f!==hoy());
-        let cIdx=1, spPrev=spDesde, mepPrev=VISTA==="ARS"?mepHistorial(rango.desde):null;
-        for(const f of diasBenchP){
-          const spF=sp500En(f);
-          if(spF==null) continue;
-          const mepF=VISTA==="ARS"?mepHistorial(f):null;
-          if(VISTA==="ARS"&&(!mepF||!mepPrev)){ spPrev=spF; if(mepF) mepPrev=mepF; continue; }
-          if(capitalVigenteUSD(sr.hitos,f)>NAV_MIN_USD){
-            cIdx*=VISTA==="ARS"?(spF*mepF)/(spPrev*mepPrev):spF/spPrev;
-          }
-          spPrev=spF; if(VISTA==="ARS") mepPrev=mepF;
-          bPts.push({fecha:f,ret:cIdx-1});
-        }
-        const spHoyV=sp500Hoy(), mepHoyV=VISTA==="ARS"?ESTADO.MEP:null;
-        if(rango.hasta===hoy()&&(VISTA!=="ARS"||(mepHoyV&&mepPrev))){
-          if(capitalVigenteUSD(sr.hitos,hoy())>NAV_MIN_USD){
-            cIdx*=VISTA==="ARS"?(spHoyV*mepHoyV)/(spPrev*mepPrev):spHoyV/spPrev;
-          }
-          bPts.push({fecha:hoy(),ret:cIdx-1});
-        }
-        haySp=bPts.length>1; benchHoy=haySp?bPts[bPts.length-1].ret:null;
-      }
-      const desdeCh=rango.desde, hastaCh=tramo[tramo.length-1].fecha;
-      const diasCh=rango.dias!=null?rango.dias:diasEntre(desdeCh,hastaCh);
+      // Benchmark: misma ventana exacta que la cartera y misma fuente única
+      // que usan las cards (ver benchPts). Antes esta rama tenía su propia
+      // copia del encadenado y las cards otra distinta.
+      const benchP=benchSP(desdeCh,hastaCh,sr.hitos);
+      const haySp=!!benchP;
+      const benchHoy=benchP?benchP.ret:null;
+      const bPts=benchP?benchP.pts:[{fecha:desdeCh,ret:0}];
+      // Días REALES cubiertos por la curva (no los nominales del selector):
+      // el pie del gráfico tiene que describir lo que efectivamente se dibujó.
+      const diasCh=Math.max(1,diasEntre(desdeCh,hastaCh));
       const t0=new Date(desdeCh+"T12:00").getTime(), t1=new Date(hastaCh+"T12:00").getTime();
       const span=Math.max(1,t1-t0);
       const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
@@ -2699,9 +2781,9 @@ function render(soloEstructura){
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
     html+=`<div class="rend-top">
       <div class="rend-left">${periodoBarHtml}
-        <div class="card rend-hoy"><div class="k">Rendimiento · Hoy</div>
-          <div class="v ${cls(varDia)}">${signoMoney(varDia)}</div>
-          <div class="d ${cls(varDia)}">${totalPos-varDia>0?sgn(varDia/(totalPos-varDia)*100):""}</div></div>
+        <div class="card rend-hoy"><div class="k">${rendDiaLbl.k}</div>
+          <div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
+          <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
       </div>
       <div class="rend-right">${chartHtml}</div>
     </div>`;
@@ -2792,29 +2874,38 @@ function render(soloEstructura){
         // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
         // serie diaria arranca más tarde que el período nominal por un hueco
         // de cierres, los dos números tienen que hablar de lo mismo.
-        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,rango.hasta).sort((a,b)=>b.ret-a.ret);
+        const metP=metricasPorPosicionEnPeriodo(pos,r.desde,r.hasta).sort((a,b)=>b.ret-a.ret);
         const mejor=metP[0], peor=metP[metP.length-1];
-        const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(rango.desde,rango.hasta);
+        const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(r.desde,r.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
         const monedaLbl=tituloMoneda;
-        // Si el período nominal (rango.desde) no coincide con donde arranca
-        // de verdad la serie (r.desde), es porque hay un hueco de cierres en
-        // el medio — se avisa en vez de dejar que parezca el mismo período.
-        const huecoInicio=rango.desde&&r.desde>rango.desde&&diasEntre(rango.desde,r.desde)>5;
+        // La ventana EFECTIVA de la medición (r.desde → r.hasta) casi nunca
+        // coincide con la nominal del selector: la serie diaria solo tiene
+        // cierres los días en que se abrió la app o el historial público
+        // cubre todas las posiciones. Se avisa siempre que difiera, en vez de
+        // rotular "Hoy · 1 día" un tramo que en realidad arranca el viernes.
+        const desalineado=(r.desde!==(rango.desdeNominal||rango.desde))||(r.hasta!==rango.hasta);
+        // Índices sobre EXACTAMENTE la ventana efectiva y con la misma fuente
+        // única que dibuja la línea punteada del gráfico (ver benchPts): antes
+        // estas cards leían los niveles intradía guardados en los snapshots y
+        // podían mostrar el índice subiendo mientras el gráfico lo mostraba
+        // bajando, sobre el mismo período.
+        const bSP=benchSP(r.desde,r.hasta,srT?srT.hitos:null);
+        const bNDX=benchNDX(r.desde,r.hasta,srT?srT.hitos:null);
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
-            <div class="d">${signoMoney(r.gan)} · time-weighted · ${r.dias} día${r.dias>1?"s":""} · ${monedaLbl}</div></div>`,
+            <div class="d">${signoMoney(r.gan)} · time-weighted · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
-            <div class="d">anualizado · ${r.dias}d</div></div>`,
-          r.sp!=null?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
-            <div class="v ${cls(r.ret-r.sp)}">${sgn((r.ret-r.sp)*100)}</div>
-            <div class="d">índice ${sgn(r.sp*100)} en el período</div></div>`:null,
-          r.ndx!=null?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
-            <div class="v ${cls(r.ret-r.ndx)}">${sgn((r.ret-r.ndx)*100)}</div>
-            <div class="d">índice ${sgn(r.ndx*100)} en el período</div></div>`:null,
+            <div class="d">anualizado · ${r.dias}d nominales</div></div>`,
+          bSP?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
+            <div class="v ${cls(r.ret-bSP.ret)}">${sgn((r.ret-bSP.ret)*100)}</div>
+            <div class="d">índice ${sgn(bSP.ret*100)} en el período</div></div>`:null,
+          bNDX?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
+            <div class="v ${cls(r.ret-bNDX.ret)}">${sgn((r.ret-bNDX.ret)*100)}</div>
+            <div class="d">índice ${sgn(bNDX.ret*100)} en el período</div></div>`:null,
           aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(aportePer)}</div>
             <div class="d">entró durante el período</div></div>`:null,
@@ -2828,7 +2919,12 @@ function render(soloEstructura){
             <div class="v ${cls(realPer)}">${signoMoney(realPer)}</div>
             <div class="d">ventas cerradas en el período</div></div>`:null,
         ];
-        metaHtml=`<span>${r.dias} días · ${rango.desdeNominal||r.desde} → ${rango.hasta}</span>`;
+        // El meta muestra la ventana EFECTIVA (donde hay cierres de verdad),
+        // no la nominal: antes decía "1 días · 2026-07-28 → 2026-07-28"
+        // aunque el cálculo viniera comparando contra el cierre del viernes.
+        metaHtml=`<span>${r.diasReales} día${r.diasReales>1?"s":""} · ${r.desde} → ${r.hasta}`
+          +(desalineado?` <span style="color:var(--grey)">(pedido: ${rango.desdeNominal||rango.desde} → ${rango.hasta})</span>`:"")
+          +`</span>`;
         if(metP.length){
           // Contribución relativa al valor total de las posiciones con precio
           // en esta ventana (no al capital aportado, que no aplica igual acá:
@@ -2852,10 +2948,13 @@ function render(soloEstructura){
                 <span>${p.contrib==null?"—":sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
             </tbody></table></div>`;
         }
-        notaHtml=`<div class="perf-note">${huecoInicio?`<b>Ojo:</b> pediste desde ${rango.desde}, pero no hay cierres
-          registrados entre esa fecha y ${r.desde} — todo lo que se muestra acá (retorno del período, mejor/peor
-          posición, comparación vs. índices) arranca en ${r.desde}, no en ${rango.desde}. Se cierra solo a medida
-          que el historial público cubra esos días.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
+        notaHtml=`<div class="perf-note">${desalineado?`<b>Ojo:</b> pediste ${rango.desdeNominal||rango.desde} → ${rango.hasta},
+          pero los cierres diarios disponibles arrancan en <b>${r.desde}</b> y terminan en <b>${r.hasta}</b>.
+          TODO lo que se muestra acá (retorno del período, TNA, mejor/peor posición, comparación vs. índices y el
+          gráfico) mide esa ventana efectiva de ${r.diasReales} día${r.diasReales>1?"s":""}, no la nominal — la única
+          excepción es la TNA, que anualiza sobre los ${r.dias} días de calendario del período pedido. La serie solo
+          registra los días en que abriste la app o en que el historial público cubre todas tus posiciones; se cierra
+          solo a medida que ese historial avance.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
           salió, así un depósito no se confunde con una ganancia. El cuadro por activo y mejor/peor posición se
           miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
           tarde), también en ${monedaLbl} y no contra tu costo de compra original — no incluyen FCI ni posiciones
