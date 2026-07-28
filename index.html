@@ -1735,6 +1735,7 @@ function rangoPeriodo(periodo){
   // días). Es la base que usa TNA para anualizar; si se calculara a partir de
   // los datos disponibles, un período con pocos cierres cargados anualizaría
   // sobre menos días de los que en realidad pasaron y dispararía el número.
+  if(periodo==="hoy") return {desde:restarDias(hoyF,1),hasta:hoyF,etiqueta:"Hoy",dias:1,desdeNominal:hoyF};
   if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD",dias:diasEntre(anioAct+"-01-01",hoyF),desdeNominal:anioAct+"-01-01"};
   if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(hoyF.slice(0,8)+"01",hoyF),desdeNominal:hoyF.slice(0,8)+"01"};
   if(periodo==="semanal") return {desde:restarDias(hoyF,7),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(restarDias(hoyF,7),hoyF),desdeNominal:restarDias(hoyF,7)};
@@ -1802,7 +1803,7 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
     const valHoy=VISTA==="ARS"?p.valARS:VISTA==="MEP"?p.valUSD:p.valCCL;
     const valDesde=valHoy!=null?valHoy/(1+ret):null;
     const dias=diasEntre(desdeEf,hasta);
-    return {...p,ret,desdeEf,dias,tna:anualizar(ret,dias),valHoy,valDesde,
+    return {...p,ret,desdeEf,desdeCompra:entrada,dias,tna:anualizar(ret,dias),valHoy,valDesde,
       gan:(valHoy!=null&&valDesde!=null)?valHoy-valDesde:null};
   }).filter(Boolean);
 }
@@ -2342,12 +2343,15 @@ function render(soloEstructura){
   // queda más chico, a la derecha (ver ensamblado de .rend-top más abajo).
   let rango=null, serieT=null, periodoBarHtml="";
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))].sort().reverse();
+    const anioActual=hoy().slice(0,4);
+    const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))]
+      .filter(a=>a!==anioActual).sort().reverse();
     rango=rangoPeriodo(PERIODO);
     serieT=serieDiaria(); // ya descarta días con menos de US$100 de NAV
     periodoBarHtml=`<div class="periodo-bar"><span class="periodo-lbl">Período</span>
       <select id="sel-periodo" onchange="setPeriodo(this.value)">
       <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
+      <option value="hoy" ${PERIODO==="hoy"?"selected":""}>Hoy</option>
       <option value="ytd" ${PERIODO==="ytd"?"selected":""}>YTD</option>
       <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
       <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
@@ -2619,7 +2623,7 @@ function render(soloEstructura){
         metaHtml=`<span>${diasTot} días · desde ${fPrim}</span>`;
         tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
-            <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th>TNA</th><th class="l" style="width:130px">Contribución</th>
+            <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
           </tr></thead><tbody>
           ${met.map(p=>{
             const maxC=Math.max(...met.map(x=>Math.abs(x.contrib)))||1;
@@ -2630,13 +2634,11 @@ function render(soloEstructura){
             <td>${money(p.costoM)}</td><td>${money(p.valM)}</td>
             <td class="${cls(p.valM-p.costoM)}">${signoMoney(p.valM-p.costoM)}</td>
             <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
-            <td class="${cls(p.tna)}" ${p.dias<90&&p.tna!=null?'title="Extrapolado desde '+p.dias+' días — tomar con cautela"':""}>${p.tna==null?"—":sgn(p.tna*100)+(p.dias<90?"*":"")}</td>
             <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
               <span>${sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
           </tbody></table></div>`;
         notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
-          TNA anualiza con base 365 y requiere más de 30 días de tenencia; los valores marcados con * extrapolan menos de 90 días y conviene leerlos con reservas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.</div>`;
       }
@@ -2699,17 +2701,16 @@ function render(soloEstructura){
           const maxC=Math.max(...metP.map(x=>Math.abs(x.contrib||0)))||1;
           tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
               <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
-              <th>Valor</th><th>Resultado</th><th>Retorno</th><th>TNA</th><th class="l" style="width:130px">Contribución</th>
+              <th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
             </tr></thead><tbody>
             ${metP.map(p=>{
               const w=p.contrib!=null?Math.abs(p.contrib)/maxC*100:0;
               return `<tr><td class="tk">${p.ticker}</td>
               <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
-              <td>${p.desdeEf||"—"}</td><td>${p.dias||"—"}</td>
+              <td>${p.desdeCompra||"—"}</td><td>${p.dias||"—"}</td>
               <td>${p.valHoy==null?"—":money(p.valHoy)}</td>
               <td class="${cls(p.gan||0)}">${p.gan==null?"—":signoMoney(p.gan)}</td>
               <td class="${cls(p.ret)}">${sgn(p.ret*100)}</td>
-              <td class="${cls(p.tna)}" ${p.dias<90&&p.tna!=null?'title="Extrapolado desde '+p.dias+' días — tomar con cautela"':""}>${p.tna==null?"—":sgn(p.tna*100)+(p.dias<90?"*":"")}</td>
               <td class="l"><div class="contrib-wrap"><div class="contrib-bar ${(p.contrib||0)>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
                 <span>${p.contrib==null?"—":sgn(p.contrib*100)}</span></div></td></tr>`;}).join("")}
             </tbody></table></div>`;
@@ -2721,8 +2722,8 @@ function render(soloEstructura){
           salió, así un depósito no se confunde con una ganancia. El cuadro por activo y mejor/peor posición se
           miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
           tarde), también en ${monedaLbl} y no contra tu costo de compra original — no incluyen FCI ni posiciones
-          con precio manual, que no tienen historial diario. TNA anualiza con base 365 y requiere más de 30 días;
-          los valores marcados con * extrapolan menos de 90 días. Los días con menos de
+          con precio manual, que no tienen historial diario. La columna "Desde" conserva siempre la fecha de compra,
+          aunque el cálculo respete el período elegido. Los días con menos de
           US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
           % sin sentido.</div>`;
       }
@@ -2751,9 +2752,12 @@ function render(soloEstructura){
       <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>% Cartera</th></tr></thead><tbody>
       ${rows.map(p=>{
         const nombre=p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker;
+        const precioVista=p.px==null?null:
+          VISTA==="ARS"?(p.pxMoneda==="USD"?p.px*FXV:p.px):
+          (p.pxMoneda==="ARS"?p.px/FXV:p.px);
         const precioCell=p.px==null
           ?(p.tipo==="manual"?`<button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">fijar precio</button>`:"—")
-          :`${p.pxMoneda==="USD"?"US$ ":"$ "}${fmt(p.px,p.px<1000?2:0)}${p.tipo==="manual"?` <button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">✎</button>`:""}${p.fuente?` <span style="color:var(--muted);font-size:10px">${p.fuente}</span>`:""}`;
+          :`${VISTA==="ARS"?"$ ":"US$ "}${fmt(precioVista,precioVista<1000?2:0)}${p.tipo==="manual"?` <button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">✎</button>`:""}${p.fuente?` <span style="color:var(--muted);font-size:10px">${p.fuente}</span>`:""}`;
         const pctCartera=V(p)!=null&&total>0?V(p)/total*100:null;
         return `<tr><td class="tk">${nombre}</td>
         <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
