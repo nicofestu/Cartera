@@ -4555,55 +4555,43 @@ function importar(ev){
 }
 
 /* ══════════════ Fondo NASA ══════════════
-   Foto de fondo real de la NASA, oscurecida, elegida en vivo contra la API
-   pública images-api.nasa.gov (sin API key, habilita CORS — ver documentación
-   del endpoint /search). Temática fija: cohetes, Tierra, Luna o espacio
-   profundo — nada de gente.
+   Foto real de la Tierra o la Luna vista desde el espacio, elegida en vivo
+   contra la API pública images-api.nasa.gov. Se excluyen personas, renders,
+   diagramas y cualquier temática de espacio profundo.
 
-   El filtro "sin personas" es por METADATA (título/descripción/palabras
-   clave), no reconocimiento de imagen — no hay forma de analizar píxeles
-   desde una app 100% cliente sin sumar un servicio aparte. Es un filtro
-   best-effort: descarta cualquier resultado cuyo texto sugiera un
-   astronauta, retrato, conferencia de prensa, etc. No es infalible, pero
-   cubre bien los casos típicos (fotos de tripulación, EVA, ceremonias).
-
-   Se elige una sola vez por sesión de navegador (sessionStorage) para no
-   repetir las búsquedas cada vez que se abre una pestaña nueva del mismo
-   dashboard; si falla (sin red, CORS, etc.) la app sigue funcionando igual,
-   simplemente sin foto de fondo. */
-const NASA_TEMAS = [
-
-  [
-    "nebula",
-    "emission nebula",
-    "reflection nebula",
-    "planetary nebula"
+   La detección se basa en metadatos, no en reconocimiento de píxeles.
+   Se elige una sola vez por sesión y la app sigue funcionando normalmente
+   si NASA no responde. */
+const NASA_TEMAS = {
+  tierra: [
+    "earth from space",
+    "blue marble earth",
+    "whole earth nasa",
+    "earth limb from orbit",
+    "earth observation iss",
+    "apollo earth"
   ],
-
-  [
-    "galaxy",
-    "spiral galaxy",
-    "deep field",
-    "milky way"
+  luna: [
+    "moon from space",
+    "lunar surface nasa",
+    "far side of the moon",
+    "full moon nasa",
+    "apollo moon"
   ],
-
-  [
-    "rocket launch",
-    "saturn v",
-    "artemis launch",
-    "space launch system"
-  ],
-
-  [
-    "james webb telescope",
-    "hubble telescope",
-    "jwst deep field",
-    "hubble deep space"
+  tierraLuna: [
+    "earth and moon",
+    "earthrise moon",
+    "earth moon together",
+    "earth above lunar horizon"
   ]
+};
 
-];
 const NASA_BLACKLIST=["astronaut","cosmonaut","crew member","crew members"," crew ","portrait","spacewalk","extravehicular","eva ","press conference","group photo","photograph beside","poses beside","poses with","poses for","smiling","waves to","walks to","stands beside","stands in front","sits in","sits at","administrator","director of","engineer ","technician","flight controllers","mission control room","selfie","training exercise","suits up","suiting up","students","visit to","tour of","award ceremony","meeting with","spacesuit fitting","handshake","interview with","poses in front","speaks","speaking","addresses","audience","classroom","volunteers","staff photo","team photo"];
-const NASA_BG_KEY="cartera_nasa_bg_v1";
+const NASA_NO_FOTO=/\b(diagram|illustration|drawing|render|rendering|artist|artistic|concept|animation|infographic|logo|patch|model|simulation|visualization|map|chart|graphic|mosaic diagram)\b/;
+const NASA_NO_TEMA=/\b(nebula|galaxy|galaxies|deep field|telescope|rocket|launch|spacecraft assembly|mars|jupiter|saturn|venus|mercury|uranus|neptune|pluto|asteroid|comet)\b/;
+const NASA_TIERRA=/\b(earth|blue marble|terrestrial|orbital sunrise|orbital sunset|earthrise|earth limb|home planet)\b/;
+const NASA_LUNA=/\b(moon|lunar|earthrise|lunar horizon)\b/;
+const NASA_BG_KEY="cartera_nasa_bg_v2";
 
 function nasaTextoDe(item){
   const d=item.data?.[0]||{};
@@ -4612,25 +4600,55 @@ function nasaTextoDe(item){
 }
 function nasaTienePersonas(txt){ return NASA_BLACKLIST.some(w=>txt.includes(w)); }
 
-// El link "preview" de /search es un thumbnail chiquito (pensado para grillas
-// de resultados, no para fondo de pantalla). Para tener buena resolución hay
-// que resolver el manifest de /asset/{nasa_id} y elegir el archivo más grande
-// que no sea excesivo (medium/large si existen, si no small/orig/lo que haya).
+function nasaCategoria(txt){
+  const tierra=NASA_TIERRA.test(txt);
+  const luna=NASA_LUNA.test(txt);
+  if(tierra&&luna) return "tierraLuna";
+  if(luna) return "luna";
+  if(tierra) return "tierra";
+  return null;
+}
+
+function nasaPesoCategoria(categoria){
+  if(categoria==="tierra") return 80;
+  if(categoria==="luna") return 15;
+  if(categoria==="tierraLuna") return 5;
+  return 0;
+}
+
+function elegirCategoriaNasa(candidatos){
+  const disponibles=["tierra","luna","tierraLuna"]
+    .filter(cat=>candidatos.some(c=>c.categoria===cat));
+
+  if(!disponibles.length) return null;
+
+  const total=disponibles.reduce((s,cat)=>s+nasaPesoCategoria(cat),0);
+  let r=Math.random()*total;
+
+  for(const cat of disponibles){
+    r-=nasaPesoCategoria(cat);
+    if(r<=0) return cat;
+  }
+
+  return disponibles[0];
+}
+
+// El preview de /search es un thumbnail. Se resuelve el manifest y se prioriza
+// orig, luego large, medium y small, conservando el comportamiento actual.
 async function resolverUrlsImagen(nasaId){
   try{
-    const r = await fetch(
-      "https://images-api.nasa.gov/asset/" + encodeURIComponent(nasaId)
+    const r=await fetch(
+      "https://images-api.nasa.gov/asset/"+encodeURIComponent(nasaId)
     );
 
     if(!r.ok) return [];
 
-    const j = await r.json();
+    const j=await r.json();
+    const hrefs=(j?.collection?.items||[])
+      .map(x=>x.href)
+      .filter(h=>/\.(jpg|jpeg|png)$/i.test(h));
 
-    const hrefs = (j?.collection?.items || [])
-      .map(x => x.href)
-      .filter(h => /\.(jpg|jpeg|png)$/i.test(h));
-
-    const prioridad = href => {
+    const prioridad=href=>{
       if(/~orig\.(jpg|jpeg|png)$/i.test(href)) return 0;
       if(/~large\.(jpg|jpeg|png)$/i.test(href)) return 1;
       if(/~medium\.(jpg|jpeg|png)$/i.test(href)) return 2;
@@ -4639,97 +4657,112 @@ async function resolverUrlsImagen(nasaId){
     };
 
     return hrefs
-      .sort((a, b) => prioridad(a) - prioridad(b))
-      .map(href => href.replace(/^http:/, "https:"));
-
+      .sort((a,b)=>prioridad(a)-prioridad(b))
+      .map(href=>href.replace(/^http:/,"https:"));
   }catch(e){
-    console.warn("No se pudo resolver el asset NASA:", nasaId, e);
+    console.warn("No se pudo resolver el asset NASA:",nasaId,e);
     return [];
   }
 }
+
 async function buscarFondoNasa(){
   try{
     const cache=sessionStorage.getItem(NASA_BG_KEY);
-    if(cache){ pintarFondoNasa(JSON.parse(cache)); return; }
-    // Una consulta al azar por temática, para cubrir los 4 rubros sin pegarle
-    // a la API con las ~16 variantes cada vez que alguien abre la app.
-    const queries=NASA_TEMAS.map(t=>t[Math.floor(Math.random()*t.length)]);
-    const resultados=await Promise.all(queries.map(q=>
-      fetch("https://images-api.nasa.gov/search?media_type=image&page_size=40&q="+encodeURIComponent(q))
-        .then(r=>r.ok?r.json():null).catch(()=>null)
-    ));
-    let candidatos=[];
-    for(const res of resultados){
-      for(const it of (res?.collection?.items||[])){
-  const d=it.data?.[0];
-  if(!d || d.media_type!=="image" || !d.nasa_id) continue;
-
-  const texto = nasaTextoDe(it).toLowerCase();
-
-  // Nunca mostrar personas
-  if(nasaTienePersonas(texto)) continue;
-
-  // Descartar planetas, luna, tierra, etc.
-  if(
-      /\b(earth|planet|mars|jupiter|saturn|venus|mercury|uranus|neptune|pluto|moon|lunar|asteroid|comet|eclipse)\b/.test(texto)
-  ) continue;
-
-  // Descartar diagramas e ilustraciones
-  if(
-      /\b(diagram|illustration|drawing|render|artist|concept|animation|infographic|logo|patch)\b/.test(texto)
-  ) continue;
-
-  candidatos.push({
-      id:d.nasa_id,
-      titulo:d.title
-  });
-}
+    if(cache){
+      pintarFondoNasa(JSON.parse(cache));
+      return;
     }
-    if(!candidatos.length) return; // sin candidatos válidos: se queda sin foto de fondo
-    // Se barajan y se prueban unos pocos hasta que uno resuelva a una imagen
-    // que realmente cargue (algún nasa_id puntual puede no tener manifest).
-    candidatos=candidatos.sort(()=>Math.random()-0.5).slice(0,8);
+
+    // Se ejecuta una búsqueda por cada familia. La categoría final respeta
+    // aproximadamente la proporción: Tierra 80%, Luna 15%, ambas 5%.
+    const queries=Object.entries(NASA_TEMAS).map(([categoria,variantes])=>({
+      categoria,
+      query:variantes[Math.floor(Math.random()*variantes.length)]
+    }));
+
+    const resultados=await Promise.all(queries.map(({categoria,query})=>
+      fetch("https://images-api.nasa.gov/search?media_type=image&page_size=60&q="+encodeURIComponent(query))
+        .then(r=>r.ok?r.json():null)
+        .then(data=>({categoria,data}))
+        .catch(()=>({categoria,data:null}))
+    ));
+
+    let candidatos=[];
+
+    for(const resultado of resultados){
+      for(const it of (resultado.data?.collection?.items||[])){
+        const d=it.data?.[0];
+        if(!d||d.media_type!=="image"||!d.nasa_id) continue;
+
+        const texto=nasaTextoDe(it);
+        if(nasaTienePersonas(texto)) continue;
+        if(NASA_NO_FOTO.test(texto)) continue;
+        if(NASA_NO_TEMA.test(texto)) continue;
+
+        const categoria=nasaCategoria(texto);
+        if(!categoria) continue;
+
+        candidatos.push({
+          id:d.nasa_id,
+          titulo:d.title,
+          categoria
+        });
+      }
+    }
+
+    if(!candidatos.length) return;
+
+    const categoriaElegida=elegirCategoriaNasa(candidatos);
+    candidatos=candidatos
+      .filter(c=>c.categoria===categoriaElegida)
+      .sort(()=>Math.random()-0.5)
+      .slice(0,12);
+
     for(const c of candidatos){
-      const urls = await resolverUrlsImagen(c.id);
+      const urls=await resolverUrlsImagen(c.id);
+      if(!urls.length) continue;
 
-if(!urls.length) continue;
+      let urlValida=null;
 
-let urlValida = null;
+      for(const url of urls.slice(0,5)){
+        const img=await new Promise(res=>{
+          const i=new Image();
+          i.onload=()=>res(i);
+          i.onerror=()=>res(null);
+          i.referrerPolicy="no-referrer";
+          i.src=url;
+        });
 
-for(const url of urls.slice(0, 5)){
-  const img = await new Promise(res => {
-    const i = new Image();
+        if(!img) continue;
 
-    i.onload = () => res(i);
-    i.onerror = () => res(null);
+        if(img.naturalWidth>=1600&&img.naturalHeight>=900){
+          urlValida=url;
+          break;
+        }
+      }
 
-    i.referrerPolicy = "no-referrer";
-    i.src = url;
-  });
+      if(!urlValida) continue;
 
-  if(!img) continue;
+      const elegido={
+        id:c.id,
+        titulo:c.titulo,
+        url:urlValida,
+        categoria:c.categoria
+      };
 
-  if(img.naturalWidth >= 1600 && img.naturalHeight >= 900){
-    urlValida = url;
-    break;
-  }
-}
-
-if(!urlValida) continue;
-
-const url = urlValida;
-      const elegido={id:c.id,titulo:c.titulo,url};
       sessionStorage.setItem(NASA_BG_KEY,JSON.stringify(elegido));
       pintarFondoNasa(elegido);
       return;
     }
-  }catch(e){ /* sin foto de fondo si algo falla — no debe romper la app */ }
+  }catch(e){
+    // Sin foto de fondo si algo falla; nunca debe romper la aplicación.
+  }
 }
+
 function pintarFondoNasa(img){
   document.documentElement.style.setProperty("--nasa-bg",`url("${img.url}")`);
   document.body.classList.add("has-nasa-bg");
 }
-
 /* ══════════════ Init ══════════════ */
 restaurar();
 purgarSnapshots();
