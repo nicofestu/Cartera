@@ -1079,7 +1079,7 @@ footer b{color:var(--grey);font-weight:500}
       <div class="sync-row"><span class="lbl">Último sync</span><span id="sy-fecha">—</span></div>
       <div class="sync-row"><span class="lbl">ID del gist</span>
         <span style="display:flex;gap:8px;align-items:center"><code id="sy-id" style="font-size:11.5px;color:var(--grey)"></code>
-        <button class="btn mini" onclick="copiarGist()">Copiar</button></span></div>
+        <button class="btn mini" onclick="copiarGist(this)">Copiar</button></span></div>
       <div class="hint" style="margin-top:16px;line-height:1.9">
         Para usar el mismo dashboard en otro dispositivo: abrí la URL allá, entrá a Sync, pegá el mismo token y este ID.
       </div>
@@ -1352,6 +1352,35 @@ function precioManualHistorial(ticker,fecha,tolerancia=5){
   if(!mep) return null;
   return {precio:usd.precio*mep,fecha:usd.fecha};
 }
+/* Clave con la que un FCI figura en historial/*.json (p.ej. "MEGAQM").
+   Los movimientos guardan el nombre largo de CAFCI ("MEGA QM Pesos - Clase A")
+   y, según cómo se hayan cargado, un `ticker` que puede faltar (el importador
+   no lo copiaba) o ser el literal "FCI" (alta manual). Con eso la búsqueda de
+   precio fallaba SIEMPRE para cualquier FCI y el día entero quedaba marcado
+   como "sin cobertura", con lo que reconstruirHistorialSnapshots() no
+   generaba ningún cierre — justo lo que el parche de MEGAQM en
+   historial/2026.json venía a destrabar. Se prueba primero el ticker y, si no
+   da, la clave del archivo que sea prefijo del nombre normalizado del fondo. */
+const FCI_CLAVE_HIST=new Map();
+function clavesHistFci(p){
+  const ck=(p.fondo||"")+"|"+(p.ticker||"");
+  if(FCI_CLAVE_HIST.has(ck)) return FCI_CLAVE_HIST.get(ck);
+  const norm=s=>String(s||"").toUpperCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g,"").replace(/[^A-Z0-9]/g,"");
+  const cands=[];
+  if(p.ticker&&p.ticker!=="FCI") cands.push(p.ticker);
+  const nf=norm(p.fondo);
+  if(nf&&HIST_REMOTO){
+    const claves=new Set();
+    for(const f of Object.keys(HIST_REMOTO.precios))
+      for(const k of Object.keys(HIST_REMOTO.precios[f]?.fci||{})) claves.add(k);
+    // La clave más larga que encaje gana (evita que "QM" tape a "MEGAQM").
+    const hit=[...claves].sort((a,b)=>b.length-a.length).find(k=>nf.startsWith(norm(k)));
+    if(hit&&!cands.includes(hit)) cands.push(hit);
+  }
+  FCI_CLAVE_HIST.set(ck,cands);
+  return cands;
+}
 function mepHistorial(fecha){
   if(!HIST_REMOTO||!HIST_REMOTO.mepFechas.length) return null;
   return nivelEn(HIST_REMOTO.mepHist,HIST_REMOTO.mepFechas,fecha);
@@ -1412,8 +1441,10 @@ async function reconstruirHistorialSnapshots(){
         valARS+=h.precio*p.qty; // precioManualHistorial ya devuelve ARS
         continue;
       }
-      const h=precioHistorial(p.tipo,p.ticker,f);
-      if(!h){ faltan.push(p.tipo+":"+p.ticker); continue; }
+      let h=null;
+      if(p.tipo==="fci"){ for(const k of clavesHistFci(p)){ h=precioHistorial("fci",k,f); if(h) break; } }
+      else h=precioHistorial(p.tipo,p.ticker,f);
+      if(!h){ faltan.push(p.tipo+":"+(p.tipo==="fci"?((p.fondo||p.ticker||"?").split(" - ")[0]):p.ticker)); continue; }
       valARS+=h.precio/divisorDe(p.tipo)*p.qty;
     }
     const mep=mepHistorial(f);
@@ -1523,7 +1554,11 @@ function purgarSnapshots(){
   if(!DATOS.movimientos.length||!DATOS.snapshots?.length) return;
   const hitos=construirHitosCaja();
   DATOS.snapshots=DATOS.snapshots.filter(s=>{
-    let hh=hitos[0]; for(const x of hitos) if(x.fecha<=s.fecha) hh=x;
+    // Si el snapshot es ANTERIOR al primer movimiento no hay hito que aplique:
+    // antes se caía en hitos[0] (capital ya aportado) y un cierre legítimo de
+    // NAV ~0 quedaba a −100% contra ese capital, así que se borraba.
+    let hh=null; for(const x of hitos) if(x.fecha<=s.fecha) hh=x;
+    if(!hh) return true; // todavía no había entrado plata: nada que juzgar
     const vigente=hh.apor-hh.ret;
     if(!(vigente>1)) return true; // sin plata adentro: un NAV ~0 es legítimo
     return s.ars/vigente-1 > -0.5; // −50% de un día para otro es casi seguro dato roto
@@ -3636,10 +3671,14 @@ function abrirSync(){
   }
   document.getElementById("modal-sync").classList.add("open");
 }
-function copiarGist(){
+function copiarGist(btn){
   navigator.clipboard?.writeText(SYNC.gist);
-  event.target.textContent="Copiado";
-  setTimeout(()=>{event.target.textContent="Copiar";},1500);
+  // Antes usaba el global `event`: dentro del setTimeout ya vale undefined
+  // (y en algunos navegadores ni siquiera existe), así que tiraba TypeError
+  // y el botón quedaba clavado en "Copiado". Ahora recibe el botón por `this`.
+  if(!btn) return;
+  btn.textContent="Copiado";
+  setTimeout(()=>{ btn.textContent="Copiar"; },1500);
 }
 function desconectarSync(){
   if(!confirm("Desconectar la sincronización?\n\nLos datos quedan en este dispositivo y el gist no se borra. Podés reconectar con el mismo ID cuando quieras.")) return;
@@ -4530,6 +4569,10 @@ async function confirmarImportBroker(){
         const r=await resolverCategoriaFci(m.fondo);
         if(r){ mv.categoria=r.categoria; mv.fondo=r.fondo; }
         else { mv.categoria="mercadoDinero"; mv.fondo=m.fondo; sinCategoria++; }
+        // Se conserva el ticker del bróker (p.ej. "MEGAQM"): es la clave con
+        // la que el fondo figura en historial/*.json. Antes se descartaba y
+        // el backfill de cierres históricos no encontraba nunca su precio.
+        if(m.ticker) mv.ticker=m.ticker;
       } else mv.ticker=m.ticker;
       DATOS.movimientos.push(mv);
     }
