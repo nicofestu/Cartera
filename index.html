@@ -1266,6 +1266,9 @@ function expandirSerie(c){
    solo escribe historial/AAAA.json, así que no hay riesgo de que lo pise. */
 let SP500_HIST={}, NDX_HIST={};
 let SP500_FECHAS=[], NDX_FECHAS=[];
+// Cierres OFICIALES tal como vienen de indices.json, sin los días que agrega
+// después extenderIndicesConCedears(). Ver el bloque de la extensión.
+let SP500_OFI={}, NDX_OFI={};
 /* Factores de calibración: precio del CEDEAR × factor = nivel del índice.
    Los valores de acá son el respaldo — si indices.json se puede leer, los
    sobreescribe con los suyos, así recalibrar no obliga a tocar este archivo. */
@@ -1282,8 +1285,12 @@ function cargarBenchmarks(){
     const pTasas=getJSON(HIST_REPO_BASE+"tasas.json").catch(()=>null);
     try{
       const d=await getJSON(HIST_REPO_BASE+"indices.json");
-      if(d?.sp500?.v?.length){ SP500_HIST=expandirSerie(d.sp500); SP500_FECHAS=Object.keys(SP500_HIST).sort(); }
-      if(d?.ndx?.v?.length){   NDX_HIST=expandirSerie(d.ndx);     NDX_FECHAS=Object.keys(NDX_HIST).sort(); }
+      // Los cierres OFICIALES se guardan aparte (SP500_OFI/NDX_OFI) porque
+      // SP500_HIST/NDX_HIST pueden llevar días agregados por
+      // extenderIndicesConCedears(); si no se conservara el original, cada
+      // recarga encadenaría derivados sobre derivados.
+      if(d?.sp500?.v?.length){ SP500_OFI=expandirSerie(d.sp500); SP500_HIST={...SP500_OFI}; SP500_FECHAS=Object.keys(SP500_HIST).sort(); }
+      if(d?.ndx?.v?.length){   NDX_OFI=expandirSerie(d.ndx);     NDX_HIST={...NDX_OFI};     NDX_FECHAS=Object.keys(NDX_HIST).sort(); }
       const k=d?.calibracion;
       if(k){
         if(k.SPY_K>0) SPY_K=k.SPY_K;
@@ -1292,6 +1299,10 @@ function cargarBenchmarks(){
       }
       BENCH_LISTO=SP500_FECHAS.length>0;
       invalidarMemo(); // las series memoizadas se calcularon sin benchmark
+      // Si el historial público ya está en memoria, se completan acá mismo las
+      // ruedas que le falten a indices.json. Si todavía no llegó, lo hace
+      // cargarHistorialRemoto() al terminar: gana el que cierra último.
+      extenderIndicesConCedears();
     }catch(e){ /* sin benchmark la app anda igual, solo sin la línea del índice */ }
     try{
       const t=await pTasas;
@@ -1321,16 +1332,126 @@ function nivelEn(hist,fechas,f){
 }
 const sp500En=f=>nivelEn(SP500_HIST,SP500_FECHAS,f);
 const ndxEn=f=>nivelEn(NDX_HIST,NDX_FECHAS,f);
-function sp500Hoy(){
-  const spy=ESTADO?.preciosCedears?.SPY;
-  if(spy&&ESTADO?.MEP) return spy.c/ESTADO.MEP*SPY_K;
-  return SP500_FECHAS.length?SP500_HIST[SP500_FECHAS[SP500_FECHAS.length-1]]:null;
+// Fecha del cierre que nivelEn() termina usando para `f` (o null si no hay
+// ninguno anterior). Misma búsqueda binaria; la necesita benchPts para saber
+// CUÁN VIEJO es el dato con el que estaría comparando.
+function fechaNivelEn(fechas,f){
+  let lo=0,hi=fechas.length-1,r=null;
+  while(lo<=hi){
+    const mid=(lo+hi)>>1;
+    if(fechas[mid]<=f){ r=fechas[mid]; lo=mid+1; } else hi=mid-1;
+  }
+  return r;
 }
-function ndxHoy(){
-  const qqq=ESTADO?.preciosCedears?.QQQ;
-  if(qqq&&ESTADO?.MEP) return qqq.c/ESTADO.MEP*QQQ_K;
-  return NDX_FECHAS.length?NDX_HIST[NDX_FECHAS[NDX_FECHAS.length-1]]:null;
+
+/* ══════════════ La serie oficial se atrasa; el CEDEAR no ══════════════
+   historial/indices.json se edita A MANO (el Action solo escribe
+   historial/AAAA.json), así que normalmente le faltan las últimas ruedas.
+   Y nivelEn() no puede distinguir "ese día el mercado estuvo cerrado" de
+   "ese día todavía no lo cargué": en los dos casos devuelve el último cierre
+   que tenga. Con la serie atrasada, la card "vs. S&P 500" del período "Hoy"
+   terminaba comparando el nivel EN VIVO contra el cierre de varias ruedas
+   antes — y así podía mostrar el índice bajando un día en que subió.
+
+   Los días que faltan sí están, todos los días hábiles y en automático, en
+   historial/AAAA.json: el CEDEAR SPY y su variante en dólares SPYD (ídem
+   QQQ/QQQD). No son el índice, pero su VARIACIÓN diaria en dólares lo sigue
+   de cerca. Se encadena esa variación sobre el último cierre oficial y se
+   completan los días faltantes.
+
+   Es una aproximación y conviene decirlo: el CEDEAR es un mercado chico, con
+   su propio horario de cierre, así que cada día encadenado suma unas décimas
+   de error de seguimiento. Pero es un error CHICO Y ACOTADO frente al que
+   reemplaza (comparar contra un cierre de varios días antes, que llega a dar
+   el signo cambiado), y desaparece solo apenas se actualiza indices.json,
+   porque los cierres oficiales siempre pisan a los derivados.
+
+   Importante: acá NO interviene SPY_K/QQQ_K. Todo son cocientes entre dos
+   precios del mismo CEDEAR, así que el factor de calibración se cancela. Eso
+   saca del cálculo del retorno un error que además crece con el tiempo: el
+   ETF reparte dividendos y el índice no, así que la relación precio→índice
+   se corre sola unos puntos por año y cualquier calibración vieja se
+   traducía en un retorno inventado sobre ventanas cortas. */
+// Precio del CEDEAR en dólares en una fecha del historial público, por el
+// camino pedido: "D" = el ticker en dólares (SPYD), "A" = el ticker en pesos
+// dividido el MEP de ese día. Nunca se mezclan los dos caminos dentro de un
+// mismo cociente: cada uno tiene su propio sesgo y el salto entre ambos se
+// leería como movimiento del índice.
+function cedearUsdHist(f,base,dolar,via){
+  const c=HIST_REMOTO&&HIST_REMOTO.precios[f]&&HIST_REMOTO.precios[f].cedear;
+  if(!c) return null;
+  const k=factorRatio(base,f); // por si hubo cambio de ratio en el medio
+  if(via==="D") return c[dolar]>0?c[dolar]*k:null;
+  const mep=mepHistorial(f);
+  return (c[base]>0&&mep>0)?c[base]*k/mep:null;
 }
+function cedearUsdHoy(base,dolar,via){
+  const p=ESTADO&&ESTADO.preciosCedears; if(!p) return null;
+  const k=factorRatio(base,hoy());
+  const r=p[via==="D"?dolar:base];
+  const px=r&&(r.c||r.px_bid);
+  if(!(px>0)) return null;
+  if(via==="D") return px*k;
+  return ESTADO.MEP>0?px*k/ESTADO.MEP:null;
+}
+// Cociente creíble entre dos ruedas consecutivas. Fuera de esta banda no es
+// mercado: es un dato roto o un cambio de ratio no declarado, y se saltea.
+const RATIO_OK=r=>r>0.8&&r<1.25;
+function extenderSerie(ofi,base,dolar){
+  const out={...ofi};
+  const fo=Object.keys(ofi).sort();
+  if(!fo.length||!HIST_REMOTO) return out;
+  const hoyF=hoy();
+  // Solo días ANTERIORES a hoy: el de hoy lo aporta nivelHoyEncadenado() con
+  // precios en vivo, y el historial público todavía no lo tiene cerrado.
+  const pend=Object.keys(HIST_REMOTO.precios).filter(f=>f>fo[fo.length-1]&&f<hoyF).sort();
+  let ref=fo[fo.length-1], nivel=ofi[ref];
+  if(!(nivel>0)) return out;
+  for(const f of pend){
+    let r=null;
+    for(const via of ["D","A"]){
+      const a=cedearUsdHist(ref,base,dolar,via), b=cedearUsdHist(f,base,dolar,via);
+      if(a>0&&b>0){ r=b/a; break; }
+    }
+    if(!RATIO_OK(r)) continue; // se sigue desde el mismo `ref`, sin perder el hilo
+    nivel*=r; out[f]=nivel; ref=f;
+  }
+  return out;
+}
+// Se rehace cada vez que cambia alguna de las dos fuentes (el sello lo
+// detecta) y nunca encadena sobre lo ya derivado: siempre parte de *_OFI.
+let _SELLO_EXT=null;
+function extenderIndicesConCedears(){
+  if(!HIST_REMOTO||!SP500_FECHAS.length) return false;
+  const fh=Object.keys(HIST_REMOTO.precios).sort();
+  const sello=(fh[fh.length-1]||"")+"|"+Object.keys(SP500_OFI).length+"|"+Object.keys(NDX_OFI).length;
+  if(_SELLO_EXT===sello) return false;
+  _SELLO_EXT=sello;
+  SP500_HIST=extenderSerie(SP500_OFI,"SPY","SPYD"); SP500_FECHAS=Object.keys(SP500_HIST).sort();
+  NDX_HIST=extenderSerie(NDX_OFI,"QQQ","QQQD");     NDX_FECHAS=Object.keys(NDX_HIST).sort();
+  invalidarMemo(); // las series memoizadas se calcularon con el benchmark corto
+  if(ESTADO) render(); // ya se dibujó una vez con la serie corta: hay que repintar
+  return true;
+}
+// Nivel de HOY: el último cierre conocido movido por la variación en vivo del
+// CEDEAR desde ESE mismo día. Sin calibración de por medio.
+function nivelHoyEncadenado(hist,fechas,base,dolar,K){
+  if(!fechas.length) return null;
+  const fU=fechas[fechas.length-1], nU=hist[fU];
+  if(nU>0&&ESTADO&&ESTADO.preciosCedears){
+    for(const via of ["D","A"]){
+      const a=cedearUsdHist(fU,base,dolar,via), b=cedearUsdHoy(base,dolar,via);
+      if(a>0&&b>0){ const r=b/a; if(RATIO_OK(r)) return nU*r; }
+    }
+  }
+  // Respaldo: el nivel absoluto vía factor de calibración — lo que hacía
+  // antes esta función. Se usa cuando historial/AAAA.json todavía no cargó.
+  const c=ESTADO&&ESTADO.preciosCedears&&ESTADO.preciosCedears[base];
+  if(c&&c.c>0&&ESTADO.MEP>0) return c.c/ESTADO.MEP*K;
+  return nU>0?nU:null;
+}
+function sp500Hoy(){ return nivelHoyEncadenado(SP500_HIST,SP500_FECHAS,"SPY","SPYD",SPY_K); }
+function ndxHoy(){   return nivelHoyEncadenado(NDX_HIST,NDX_FECHAS,"QQQ","QQQD",QQQ_K); }
 
 /* ── Tasa libre de riesgo, una por moneda ──────────────────────────────
    Sharpe y Sortino comparaban contra tasa 0. En dólares eso no es neutro
@@ -1427,6 +1548,10 @@ async function cargarHistorialRemoto(){
     mepFechas=Object.keys(mepHist).sort();
   }catch(e){ /* sin MEP histórico no se puede pasar a USD; se sigue sin él */ }
   HIST_REMOTO=Object.keys(precios).length?{precios,mepHist,mepFechas}:null;
+  // Contraparte del disparo que hay en cargarBenchmarks(): recién con las dos
+  // fuentes en memoria se pueden completar las ruedas que le falten a
+  // indices.json (ver extenderIndicesConCedears).
+  extenderIndicesConCedears();
   return HIST_REMOTO;
 }
 /* ══════════════ Cambios de ratio de CEDEARs (y splits) ══════════════
@@ -2382,6 +2507,16 @@ function capitalVigenteUSD(hitos,f){
    número de la card, así que ya no pueden discrepar por construcción. */
 function benchPts(hist,fechas,nivelHoyFn,desde,hasta,hitos){
   if(!desde||!hasta||!fechas||!fechas.length) return null;
+  // Antes de nada: ¿de qué día es realmente el cierre que se va a usar como
+  // base? nivelEn() devuelve el último disponible y no distingue "el mercado
+  // estuvo cerrado" de "todavía no tengo ese día". Si la base quedó a más de
+  // una semana del arranque del período, la serie sencillamente no cubre la
+  // ventana pedida y cualquier número sería inventado: antes se mostraba
+  // igual (así apareció el índice cayendo un día en que había subido, con la
+  // base tomada de cuatro ruedas antes). Sin card y sin línea punteada es
+  // peor UI pero es el dato honesto.
+  const fBase=fechaNivelEn(fechas,desde);
+  if(!fBase||diasCal(fBase,desde)>7) return null;
   const n0=nivelEn(hist,fechas,desde);
   if(!n0) return null;
   const hoyF=hoy(), ars=VISTA==="ARS";
