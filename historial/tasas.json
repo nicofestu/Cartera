@@ -1,0 +1,36 @@
+{
+"_": "Tasas libres de riesgo para Sharpe y Sortino. Formato de ESCALONES: cada par es [fecha efectiva, tasa nominal anual en %], y esa tasa rige desde esa fecha hasta el escalon siguiente. Es la forma natural del dato (el FOMC la mueve un punado de veces por ano), asi que el archivo pesa menos de 1 KB en vez de las ~1.700 filas diarias que serian equivalentes. Lo lee cargarBenchmarks() en index.html; si el archivo no se puede leer, index.html usa los mismos escalones que trae embebidos de respaldo. El GitHub Action de snapshot NO toca este archivo: solo escribe historial/AAAA.json.",
+"actualizado": "2026-07-30",
+"usd": {
+  "_": "Fed Funds target range, LIMITE INFERIOR. Equivale a la serie DFEDTARL de FRED. Las fechas son las de entrada en vigencia (el dia siguiente al cierre de la reunion del FOMC), que es como las publica la Reserva Federal y como las fecha DFEDTARL.",
+  "nombre": "Fed Funds (limite inferior)",
+  "fuente": "https://www.federalreserve.gov/monetarypolicy/openmarket.htm",
+  "desde": "2022-01-01",
+  "pasos": [
+    ["2022-01-01", 0],
+    ["2022-03-17", 0.25],
+    ["2022-05-05", 0.75],
+    ["2022-06-16", 1.50],
+    ["2022-07-28", 2.25],
+    ["2022-09-22", 3.00],
+    ["2022-11-03", 3.75],
+    ["2022-12-15", 4.25],
+    ["2023-02-02", 4.50],
+    ["2023-03-23", 4.75],
+    ["2023-05-04", 5.00],
+    ["2023-07-27", 5.25],
+    ["2024-09-19", 4.75],
+    ["2024-11-08", 4.50],
+    ["2024-12-19", 4.25],
+    ["2025-09-18", 4.00],
+    ["2025-10-30", 3.75],
+    ["2025-12-11", 3.50]
+  ]
+},
+"ars": {
+  "_": "Reservado para una tasa libre de riesgo en pesos (TAMAR / Badlar / plazo fijo minorista). Mientras 'pasos' este vacio, la vista ARS sigue calculando Sharpe y Sortino con tasa 0 y la nota de la seccion Riesgo lo aclara.",
+  "nombre": "",
+  "fuente": "",
+  "pasos": []
+}
+}
