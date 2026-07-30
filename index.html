@@ -1221,10 +1221,9 @@ let BENCH_LISTO=false, _benchP=null;
 function cargarBenchmarks(){
   if(_benchP) return _benchP;
   _benchP=(async()=>{
-    // Las dos descargas salen juntas: tasas.json es un puñado de escalones y
-    // no tiene por qué esperar a indices.json, que pesa veinte veces más.
-    // cargar() espera a esta función antes de guardar el cierre del día, así
-    // que encadenarlas le sumaría una vuelta de red a ese camino.
+    // Las dos descargas salen juntas: tasas.json no tiene por qué esperar a
+    // indices.json. cargar() espera a esta función antes de guardar el cierre
+    // del día, así que encadenarlas le sumaría una vuelta de red a ese camino.
     const pTasas=getJSON(HIST_REPO_BASE+"tasas.json").catch(()=>null);
     try{
       const d=await getJSON(HIST_REPO_BASE+"indices.json");
@@ -1241,14 +1240,14 @@ function cargarBenchmarks(){
     }catch(e){ /* sin benchmark la app anda igual, solo sin la línea del índice */ }
     try{
       const t=await pTasas;
-      const pasos=t?.usd?.pasos;
-      if(Array.isArray(pasos)&&pasos.length){
-        TASA_USD=pasos.filter(p=>Array.isArray(p)&&typeof p[0]==="string"&&isFinite(p[1]))
-                      .sort((a,b)=>a[0].localeCompare(b[0]));
-        if(t.usd.nombre) TASA_NOMBRE=t.usd.nombre;
-        invalidarMemo();
+      for(const k of ["usd","ars"]){
+        const p=t?.[k]?.pasos;
+        if(!Array.isArray(p)||!p.length) continue;
+        TASAS[k]={nombre:t[k].nombre||TASAS[k].nombre,
+          pasos:p.filter(x=>Array.isArray(x)&&typeof x[0]==="string"&&isFinite(x[1]))
+                 .sort((a,b)=>a[0].localeCompare(b[0]))};
       }
-    }catch(e){ /* sin el archivo se usan los escalones embebidos de respaldo */ }
+    }catch(e){ /* sin el archivo: dólares con los escalones de respaldo, pesos con tasa 0 */ }
     return BENCH_LISTO;
   })();
   return _benchP;
@@ -1278,61 +1277,73 @@ function ndxHoy(){
   return NDX_FECHAS.length?NDX_HIST[NDX_FECHAS[NDX_FECHAS.length-1]]:null;
 }
 
-/* ── Tasa libre de riesgo: Fed Funds, límite inferior del rango objetivo ──
-   Sharpe y Sortino comparaban contra tasa 0, y en dólares eso no es neutro:
-   entre 2023 y 2024 la tasa estuvo arriba del 5% anual, así que una cartera
-   que rindió 6% en dólares no rindió "6% por encima de lo libre de riesgo",
-   rindió 1%. Ahora se descuenta la tasa que estaba efectivamente vigente en
-   cada tramo.
+/* ── Tasa libre de riesgo, una por moneda ──────────────────────────────
+   Sharpe y Sortino comparaban contra tasa 0. En dólares eso no es neutro
+   —entre 2023 y 2024 la Fed Funds estuvo arriba del 5% anual, así que rendir
+   6% en dólares no es rendir 6% por encima de lo libre de riesgo, es 1%— y en
+   pesos directamente no significaba nada: con la tasa a un día entre 20% y
+   100% anual, cualquier cartera en pesos "ganaba" contra un piso de cero.
 
-   La serie vive en historial/tasas.json con formato de ESCALONES: la tasa
-   rige desde su fecha efectiva hasta el escalón siguiente, que es la forma
-   real del dato (el FOMC la mueve un puñado de veces por año). Fuente:
-   federalreserve.gov/monetarypolicy/openmarket.htm, que es el mismo dato que
-   la serie DFEDTARL de FRED. Los escalones de acá son el respaldo: si el
-   archivo no se puede leer, la app sigue calculando igual con estos.
+   Las dos series viven en historial/tasas.json con el MISMO formato: una
+   lista ordenada de pares [fecha, TNA en %], donde cada tasa rige desde su
+   fecha hasta el par siguiente. En dólares eso son 18 escalones (el FOMC la
+   mueve un puñado de veces por año); en pesos es un valor por rueda. Un solo
+   formato = una sola función de lookup para las dos.
 
-   SOLO se aplica en las vistas en dólares (MEP/CCL). En la vista ARS el
-   retorno está medido en pesos nominales y restarle una tasa en dólares no
-   significaría nada: ahí se sigue usando 0 y la nota de la sección lo aclara.
-   Cuando se cargue una serie de tasa en pesos va en la clave "ars" del mismo
-   archivo, sin tocar este código. */
-let TASA_USD=[["2022-01-01",0],["2022-03-17",0.25],["2022-05-05",0.75],["2022-06-16",1.5],
-  ["2022-07-28",2.25],["2022-09-22",3],["2022-11-03",3.75],["2022-12-15",4.25],
-  ["2023-02-02",4.5],["2023-03-23",4.75],["2023-05-04",5],["2023-07-27",5.25],
-  ["2024-09-19",4.75],["2024-11-08",4.5],["2024-12-19",4.25],
-  ["2025-09-18",4],["2025-10-30",3.75],["2025-12-11",3.5]];
-let TASA_NOMBRE="Fed Funds (límite inferior)";
-// Tasa anual vigente en una fecha, en %. Búsqueda binaria sobre los escalones:
-// se consulta una vez por tramo dentro de los bucles de métricas.
-function tasaAnualEn(f){
-  const p=TASA_USD;
-  if(!p.length) return 0;
-  if(f<=p[0][0]) return p[0][1];
-  let lo=0,hi=p.length-1,r=p[0][1];
-  while(lo<=hi){ const m=(lo+hi)>>1; if(p[m][0]<=f){ r=p[m][1]; lo=m+1; } else hi=m-1; }
+   USD (vistas MEP y CCL): Fed Funds, límite inferior del rango objetivo
+   (= DFEDTARL de FRED). Los escalones están embebidos acá abajo como respaldo
+   por si el archivo no se puede leer.
+   ARS: tasa de pesos a un día. Primaria la RIX del BCRA (variable 150, rueda
+   REPO del MAE), que está completa desde 2022 y es un promedio ponderado por
+   monto; las ruedas que le faltan se completan con el cierre de CAUCION 1D de
+   BYMA. Arranca vacía a propósito: hasta que baje el archivo, la vista ARS
+   calcula con tasa 0 igual que antes, sin pantalla en blanco ni error. */
+let TASAS={
+  usd:{nombre:"Fed Funds (límite inferior)",
+       pasos:[["2022-01-01",0],["2022-03-17",0.25],["2022-05-05",0.75],["2022-06-16",1.5],
+              ["2022-07-28",2.25],["2022-09-22",3],["2022-11-03",3.75],["2022-12-15",4.25],
+              ["2023-02-02",4.5],["2023-03-23",4.75],["2023-05-04",5],["2023-07-27",5.25],
+              ["2024-09-19",4.75],["2024-11-08",4.5],["2024-12-19",4.25],
+              ["2025-09-18",4],["2025-10-30",3.75],["2025-12-11",3.5]]},
+  ars:{nombre:"tasa en pesos a 1 día",pasos:[]}
+};
+// MEP y CCL son las dos vistas en dólares; ARS es la única en pesos.
+const serieTasa=()=>VISTA==="ARS"?TASAS.ars:TASAS.usd;
+// Índice del último paso con fecha <= f, o -1 si f es anterior a toda la serie.
+function idxTasa(pasos,f){
+  let lo=0,hi=pasos.length-1,r=-1;
+  while(lo<=hi){ const m=(lo+hi)>>1; if(pasos[m][0]<=f){ r=m; lo=m+1; } else hi=m-1; }
   return r;
 }
-/* Cuánto capitaliza la tasa libre de riesgo entre dos fechas. Va escalón por
-   escalón porque un tramo de la serie puede abarcar varias semanas y cruzar
-   una reunión del FOMC en el medio; tomar una sola tasa para todo el tramo
-   erraría justo en los tramos largos, que son los que más pesan. Devuelve un
-   factor: 1.004 = +0,4% en el tramo. */
-function factorLibreRiesgo(desde,hasta){
-  if(!TASA_USD.length||!desde||!hasta||hasta<=desde) return 1;
-  const dif=(a,b)=>Math.round((Date.parse(b+"T00:00:00Z")-Date.parse(a+"T00:00:00Z"))/86400000);
-  let f=1,cur=desde,guarda=0;
-  while(cur<hasta&&guarda++<600){
-    let sig=hasta;
-    for(const paso of TASA_USD){ if(paso[0]>cur&&paso[0]<hasta){ sig=paso[0]; break; } }
-    const n=dif(cur,sig);
-    if(n>0) f*=Math.pow(1+tasaAnualEn(cur)/100,n/365);
-    cur=sig;
+const DIA_MS=86400000;
+const difDias=(a,b)=>Math.round((Date.parse(b+"T00:00:00Z")-Date.parse(a+"T00:00:00Z"))/DIA_MS);
+/* Cuánto capitaliza la tasa libre de riesgo entre dos fechas. Recorre los
+   pasos que caen adentro en vez de tomar una sola tasa para todo el tramo: un
+   tramo de la serie puede abarcar varias semanas, y en pesos la tasa cambia
+   todas las ruedas. Arranca con una búsqueda binaria y después avanza por
+   índice, así el costo es proporcional a los pasos del tramo y no al largo de
+   la serie entera (que en pesos son más de mil).
+
+   Convención: TNA con capitalización diaria, factor de n días a tasa t =
+   (1 + t/100/365)^n. Es lo que efectivamente rinde renovar la colocación
+   todos los días, que es contra lo que se quiere comparar la cartera. Tomar
+   la tasa como efectiva anual daría lo mismo en dólares (5,25% vs 5,39%) pero
+   en pesos cambia todo: 80% TNA renovada a diario es 122% efectivo.
+
+   Devuelve {f, cubiertos}: el factor, y cuántos días del tramo tenían tasa
+   cargada. Los días sin tasa se descuentan a 0 y quedan contados aparte, para
+   poder avisar en pantalla cuando la cobertura es parcial. */
+function factorTasa(pasos,desde,hasta){
+  if(!pasos.length||!desde||!hasta||!(difDias(desde,hasta)>0)) return {f:1,cubiertos:0};
+  let f=1,cub=0,i=idxTasa(pasos,desde),cur=desde;
+  while(cur<hasta){
+    const sig=(i+1<pasos.length&&pasos[i+1][0]<hasta)?pasos[i+1][0]:hasta;
+    const n=difDias(cur,sig);
+    if(n>0&&i>=0){ f*=Math.pow(1+pasos[i][1]/100/365,n); cub+=n; }
+    cur=sig; i++;   // i siempre avanza: aunque haya fechas repetidas, termina
   }
-  return f;
+  return {f,cubiertos:cub};
 }
-// La tasa solo se puede restar de un retorno medido en la misma moneda.
-const rfAplica=()=>VISTA!=="ARS"&&TASA_USD.length>0;
 
 /* ══════════════ Historial público (backfill de snapshots) ══════════════
    El repo guarda un cierre diario de precios por especie desde 2022
@@ -2551,17 +2562,18 @@ function restarDias(f,n){ const d=new Date(f+"T00:00:00Z"); d.setUTCDate(d.getUT
    acumulado y no depende de cuántos días abarque cada tramo. */
 function metricasRiesgo(serie){
   const RUEDAS=252, CAL=365;
-  const conRF=rfAplica();
+  const tasa=serieTasa();
+  const conRF=tasa.pasos.length>0;
   const obs=(serie||[]).filter(d=>isFinite(d.r)&&d.r>-1).map(d=>{
     const dCal=Math.max(1,d.dias||1);
     const ruedas=Math.max(1,dCal*RUEDAS/CAL); // días de calendario -> ruedas equivalentes
     const x=Math.log(1+d.r);                  // log-retorno del tramo completo
-    // Lo que habría rendido la tasa libre de riesgo en ESE mismo tramo, con
-    // los escalones del FOMC que caigan adentro.
-    const fRF=conRF?factorLibreRiesgo(d.desde||restarDias(d.fecha,dCal),d.fecha):1;
-    return {r:d.r,rsp:d.rsp,dCal,ruedas,fRF,
-      u:x/Math.sqrt(ruedas),                        // retorno por rueda estandarizado
-      ue:(x-Math.log(fRF))/Math.sqrt(ruedas)};      // idem, ya neto de la tasa libre
+    // Lo que habría rendido la tasa libre de riesgo en ESE mismo tramo.
+    const rf=conRF?factorTasa(tasa.pasos,d.desde||restarDias(d.fecha,dCal),d.fecha)
+                  :{f:1,cubiertos:0};
+    return {r:d.r,rsp:d.rsp,dCal,ruedas,fRF:rf.f,cubRF:rf.cubiertos,
+      u:x/Math.sqrt(ruedas),                       // retorno por rueda estandarizado
+      ue:(x-Math.log(rf.f))/Math.sqrt(ruedas)};    // idem, ya neto de la tasa libre
   });
   const n=obs.length;
   if(n<2) return null;
@@ -2577,6 +2589,12 @@ function metricasRiesgo(serie){
   const acumRF=obs.reduce((a,o)=>a*o.fRF,1);
   const rfAnual=(conRF&&diasTot>0)?Math.pow(acumRF,CAL/diasTot)-1:0;
   const excAnual=(retAnual==null)?null:retAnual-rfAnual;
+  // Qué porción del período tenía tasa cargada. Los días que no, se descuentan
+  // a 0 y eso infla el resultado, así que si falta algo hay que decirlo. El
+  // tope en 1 es por las dudas: los días cubiertos se cuentan sobre desde→fecha
+  // y diasTot sobre d.dias, que hoy son lo mismo, pero si alguna vez dejaran de
+  // serlo es preferible un 100% a una nota diciendo "104% de cobertura".
+  const cobRF=(conRF&&diasTot>0)?Math.min(1,obs.reduce((s,o)=>s+o.cubRF,0)/diasTot):0;
   // Sortino: el desvío de la baja se mide sobre el retorno EN EXCESO, o sea
   // que el mínimo aceptable pasa a ser la tasa libre de riesgo y no cero.
   const neg=obs.map(o=>o.ue).filter(u=>u<0);
@@ -2597,7 +2615,8 @@ function metricasRiesgo(serie){
     if(varb>0&&varp>0) correl=cov/Math.sqrt(varb*varp);
   }
   const huecos=obs.filter(o=>o.dCal>=5).length;
-  return {n,dias:diasTot,huecos,vol,retAnual,conRF,rfAnual,excAnual,
+  return {n,dias:diasTot,huecos,vol,retAnual,conRF,rfAnual,excAnual,cobRF,
+    tasaNombre:tasa.nombre,
     sharpe:(vol>0&&excAnual!=null)?excAnual/vol:null,
     sortino:(dd>0&&excAnual!=null)?excAnual/dd:null,
     mdd,beta,correl,paresBench:pares.length};
@@ -2625,7 +2644,7 @@ function seccionRiesgo(secIdxRef,rango){
       card("Retorno anualizado",m.retAnual==null?"—":sgn(m.retAnual*100),
         `sobre ${m.dias} días de calendario`,m.retAnual==null?"":cls(m.retAnual)),
       card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
-        m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,2)}% anual) por unidad de riesgo`
+        m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,1)}% anual) por unidad de riesgo`
                :"retorno por unidad de riesgo · tasa libre 0",
         m.sharpe==null?"":cls(m.sharpe)),
       card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),
@@ -2646,14 +2665,15 @@ function seccionRiesgo(secIdxRef,rango){
       pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
       si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada.
       ${m.conRF
-        ? `Sharpe y Sortino descuentan la <b>${TASA_NOMBRE}</b>, que en este período equivale a
-           <b>${fmt(m.rfAnual*100,2)}%</b> anual: es lo que habría rendido la plata sin correr ningún riesgo, así que
-           lo que puntúa es el excedente por encima de eso y no el retorno a secas (${sgn(m.retAnual*100)} anualizado
-           → ${sgn(m.excAnual*100)} de exceso). Sortino usa esa misma tasa como piso en vez de cero.`
-        : `Sharpe y Sortino usan tasa libre de riesgo <b>0</b>: acá el retorno está medido en pesos nominales, y la
-           Fed Funds —que sí se descuenta en las vistas MEP y CCL— es una tasa en dólares, restarla de un retorno en
-           pesos no significaría nada. Hasta que haya cargada una serie de tasa en pesos conviene leerlos como
-           comparación relativa entre períodos más que como un valor absoluto.`}</div>`;
+        ? `Sharpe y Sortino descuentan la <b>${m.tasaNombre}</b>, que sobre este período equivale a
+           <b>${fmt(m.rfAnual*100,1)}%</b> anual: es lo que habría rendido la plata sin correr riesgo, así que lo que
+           puntúa es el excedente por encima de eso y no el retorno a secas (${sgn(m.retAnual*100)} anualizado
+           → ${sgn(m.excAnual*100)} de exceso). Sortino usa esa misma tasa como piso en lugar de cero.
+           ${m.cobRF<0.999?`<b>Ojo:</b> solo el ${fmt(m.cobRF*100,0)}% de los días del período tiene tasa cargada;
+             el resto se descuenta a 0, así que los dos ratios salen algo más altos de lo que corresponde.`:""}`
+        : `Sharpe y Sortino usan tasa libre de riesgo <b>0</b>, porque todavía no se pudo leer la serie de tasas
+           (historial/tasas.json). Mientras tanto conviene leerlos como comparación relativa entre períodos más que
+           como un valor absoluto.`}</div>`;
   }
   return html;
 }
