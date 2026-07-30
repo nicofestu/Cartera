@@ -81,7 +81,7 @@ body::after{
   background-image:var(--nasa-bg,none);
   background-size:cover;
   background-position:center;
-  filter:brightness(.38) saturate(.82) contrast(1.04);
+  filter:brightness(.48) saturate(.82) contrast(1.04);
   opacity:0;
   transition:opacity 1.8s var(--ease);
 }
@@ -302,6 +302,47 @@ input:focus,select:focus,textarea:focus,.btn:focus-visible,.tab:focus-visible,.t
 input:disabled{color:var(--grey-dim);background:#08090A}
 select{cursor:pointer}
 select option{background:#0A0C0E;color:var(--white)}
+
+/* Combo estricto: se escribe para buscar, se elige de la lista (ver comboCrear) */
+.combo{position:relative}
+.combo-list{
+  display:none;
+  position:absolute;
+  top:calc(100% + 6px);left:0;right:0;
+  z-index:60;
+  max-height:232px;
+  overflow-y:auto;
+  padding:6px;
+  border:1px solid var(--hair-hot);
+  border-radius:14px;
+  background:rgba(10,11,13,.985);
+  box-shadow:0 22px 60px rgba(0,0,0,.6);
+}
+.combo-list.open{display:block}
+.combo-opt{
+  padding:8px 10px;
+  border-radius:9px;
+  color:var(--grey);
+  font-family:var(--mono);
+  font-size:12.5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  cursor:pointer;
+}
+.combo-opt:hover,.combo-opt.sel{color:var(--white);background:rgba(255,255,255,.06)}
+.combo-opt.activa{color:var(--cool)}
+.combo-nota{padding:9px 10px;color:var(--grey-dim);font-size:11px;line-height:1.65;white-space:normal}
+.combo.pend input{border-color:rgba(255,196,107,.5)}
+.combo.ok input{border-color:rgba(39,229,154,.38)}
+/* Fila "máximo disponible" del retiro */
+.maxrow{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:11px 13px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-sm);
+  background:rgba(255,255,255,.02);
+}
+.maxrow .txt{color:var(--grey);font-size:11.5px;line-height:1.6}
+.maxrow .btn.mini[disabled]{opacity:.45;cursor:not-allowed}
 .more-wrap{position:relative}
 .more-menu{
   display:none;
@@ -1005,24 +1046,38 @@ footer b{color:var(--grey);font-weight:500}
         <select id="m-cuenta-sel" onchange="cuentaChanged()"></select>
         <input id="m-cuenta-nueva" placeholder="Nombre de la cuenta nueva" style="display:none;margin-top:8px" autocomplete="off">
       </div>
-      <div class="full" id="f-ticker"><label>Ticker / especie</label><input id="m-ticker" list="dl-tickers" placeholder="AL30D, GD35, MELI…" style="text-transform:uppercase" autocomplete="off"><datalist id="dl-tickers"></datalist>
-        <div class="hint">Sugiere especies del panel BYMA según el tipo elegido. Sufijo D = especie en dólares (AL30D).</div></div>
+      <div class="full" id="f-ticker"><label>Ticker / especie</label>
+        <div class="combo" id="cb-ticker">
+          <input id="m-ticker" placeholder="Escribí para buscar…" style="text-transform:uppercase" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cb-ticker-list">
+          <div class="combo-list" id="cb-ticker-list" role="listbox"></div>
+        </div>
+        <div class="hint" id="h-ticker">Escribí para filtrar y elegí del panel BYMA. Sufijo D = especie en dólares (AL30D).</div></div>
       <div class="full" id="f-fci" style="display:none">
         <label>Categoría del fondo</label>
-        <select id="m-cat" onchange="cargarFondos()">
+        <select id="m-cat" onchange="catChanged()">
           <option value="mercadoDinero">Mercado de dinero</option>
           <option value="rentaFija">Renta fija</option>
           <option value="rentaVariable">Renta variable</option>
           <option value="rentaMixta">Renta mixta</option>
         </select>
-        <label style="margin-top:12px">Fondo (nombre exacto)</label>
-        <input id="m-fondo" list="dl-fondos" placeholder="Fima Premium - Clase A"><datalist id="dl-fondos"></datalist>
+        <label style="margin-top:12px">Fondo</label>
+        <div class="combo" id="cb-fondo">
+          <input id="m-fondo" placeholder="Escribí para buscar…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cb-fondo-list">
+          <div class="combo-list" id="cb-fondo-list" role="listbox"></div>
+        </div>
+        <div class="hint" id="h-fondo">Se elige de la lista CAFCI de la categoría.</div>
       </div>
       <div id="f-cant"><label>Cantidad</label><input type="number" id="m-cant" step="any" min="0" placeholder="Nominales / cuotapartes">
         <div class="hint" id="h-cant"></div></div>
       <div><label id="lbl-precio">Precio unitario</label><input type="number" id="m-precio" step="any" min="0">
         <div class="hint" id="h-precio">Bonos/letras/ONs: c/100 VN · FCI: VCP por 1.000 cp</div></div>
-      <div><label>Moneda del precio</label><select id="m-moneda"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+      <div><label>Moneda del precio</label><select id="m-moneda" onchange="monedaChanged()"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+      <div class="full" id="f-maxret" style="display:none">
+        <div class="maxrow">
+          <span class="txt" id="maxret-lbl">—</span>
+          <button type="button" class="btn mini" id="maxret-btn" onclick="usarMaxRetiro()">Usar máximo</button>
+        </div>
+      </div>
       <div><label>Total operación</label><input id="m-total" disabled></div>
       <div><label>Liquidación</label><select id="m-liq">
           <option value="">Plazo habitual del instrumento</option>
@@ -3411,14 +3466,144 @@ async function panelDe(t,force){
   for(const r of d) m[r.symbol]=r;
   PANEL_CACHE[t]=m; return m;
 }
+
+/* ══════════════ Combo estricto (buscar y elegir de la lista) ══════════════
+   La especie era un <input list="dl-tickers">: el datalist SUGIERE pero no
+   obliga — el navegador acepta cualquier texto, así que se podían inventar
+   instrumentos (o dejar un typo) y la única red era la validación contra el
+   panel al guardar, que no corre sin conexión ni existe para FCI.
+   Acá el input es SOLO un buscador: filtra las opciones y el valor válido es
+   el que se eligió (clic, Enter o flechas). Si lo tipeado no corresponde a
+   ninguna opción el combo queda sin valor y guardarMov no deja seguir.
+   `libre` (solo tipo Manual, que por definición no tiene panel) permite texto
+   nuevo, pero igual sugiere lo ya cargado. */
+const COMBO={};
+let TIPO_COMBO=null;
+const escHTML=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function comboCrear(n,inputId,listId){
+  const inp=document.getElementById(inputId), list=document.getElementById(listId);
+  if(!inp||!list) return null;
+  const st={inp,list,wrap:inp.parentElement,opciones:[],visibles:[],valor:"",idx:-1,libre:false,vacio:""};
+  COMBO[n]=st;
+  inp.addEventListener("input",()=>{ st.valor=st.libre?inp.value.trim():""; st.idx=-1; comboRender(n,true); });
+  inp.addEventListener("focus",()=>comboRender(n,true));
+  // El clic sobre una opción dispara blur antes que el mousedown del listado en
+  // algunos navegadores: se cierra con delay y el listado usa mousedown.
+  inp.addEventListener("blur",()=>setTimeout(()=>comboCerrar(n),170));
+  inp.addEventListener("keydown",e=>{
+    if(e.key==="ArrowDown"||e.key==="ArrowUp"){
+      e.preventDefault();
+      if(!st.list.classList.contains("open")){ comboRender(n,true); return; }
+      const v=st.visibles; if(!v.length) return;
+      const paso=e.key==="ArrowDown"?1:-1;
+      const base=st.idx<0?(paso>0?-1:0):st.idx;
+      st.idx=Math.max(0,Math.min(v.length-1,base+paso));
+      comboRender(n,true);
+      const el=st.list.querySelector(".combo-opt.sel"); if(el) el.scrollIntoView({block:"nearest"});
+    }
+    else if(e.key==="Enter"){ if(st.visibles.length){ e.preventDefault(); comboElegir(n,st.visibles[st.idx<0?0:st.idx]); } }
+    else if(e.key==="Escape"){ comboCerrar(n); }
+  });
+  list.addEventListener("mousedown",e=>{
+    const o=e.target.closest(".combo-opt"); if(!o) return;
+    e.preventDefault(); comboElegir(n,o.dataset.v);
+  });
+  return st;
+}
+function comboRender(n,abrir){
+  const st=COMBO[n]; if(!st) return;
+  const txt=st.inp.value.trim(), q=txt.toLowerCase();
+  let vis=st.opciones;
+  if(q&&q!==st.valor.toLowerCase()){
+    vis=st.opciones.filter(o=>o.toLowerCase().includes(q));
+    vis=vis.slice().sort((a,b)=>(b.toLowerCase().startsWith(q)?1:0)-(a.toLowerCase().startsWith(q)?1:0));
+  }
+  st.visibles=vis.slice(0,90);
+  if(st.idx>=st.visibles.length) st.idx=-1;
+  st.list.innerHTML=st.visibles.length
+    ?st.visibles.map((o,i)=>`<div class="combo-opt${i===st.idx?" sel":""}${o===st.valor?" activa":""}" role="option" data-v="${escHTML(o)}">${escHTML(o)}</div>`).join("")
+    :`<div class="combo-nota">${escHTML(st.opciones.length?"Nada de la lista coincide con «"+txt+"». Solo se puede elegir de la lista.":(st.vacio||"Cargando…"))}</div>`;
+  if(abrir!=null) st.list.classList.toggle("open",!!abrir);
+  st.inp.setAttribute("aria-expanded",st.list.classList.contains("open")?"true":"false");
+  comboMarcar(n);
+}
+function comboMarcar(n){
+  const st=COMBO[n]; if(!st||!st.wrap) return;
+  const txt=st.inp.value.trim();
+  st.wrap.classList.toggle("ok",!!st.valor);
+  st.wrap.classList.toggle("pend",!st.valor&&!!txt);
+}
+function comboCerrar(n){
+  const st=COMBO[n]; if(!st) return;
+  // Tipear el nombre completo y salir del campo cuenta como elegirlo.
+  if(!st.libre&&!st.valor){
+    const txt=st.inp.value.trim().toLowerCase();
+    const ex=txt?st.opciones.find(o=>o.toLowerCase()===txt):null;
+    if(ex){ st.valor=ex; st.inp.value=ex; }
+  }
+  st.list.classList.remove("open");
+  st.inp.setAttribute("aria-expanded","false");
+  comboMarcar(n);
+}
+function comboElegir(n,v){
+  const st=COMBO[n]; if(!st) return;
+  st.valor=v; st.inp.value=v; st.idx=-1;
+  comboCerrar(n);
+}
+// Fija el valor desde código (edición de un movimiento ya guardado). Si la
+// especie ya no está en el panel igual queda elegible: no se puede romper algo
+// que ya estaba cargado.
+function comboSet(n,v){
+  const st=COMBO[n]; if(!st) return;
+  v=(v||"").trim();
+  st.valor=v; st.inp.value=v; st.idx=-1;
+  if(v&&!st.opciones.includes(v)) st.opciones=[v,...st.opciones];
+  comboMarcar(n);
+}
+function comboLimpiar(n){
+  const st=COMBO[n]; if(!st) return;
+  st.valor=""; st.inp.value=""; st.idx=-1; st.list.innerHTML="";
+  st.list.classList.remove("open"); comboMarcar(n);
+}
+function comboOpciones(n,arr,vacio){
+  const st=COMBO[n]; if(!st) return;
+  st.opciones=[...new Set((arr||[]).filter(Boolean))];
+  if(st.valor&&!st.opciones.includes(st.valor)) st.opciones=[st.valor,...st.opciones];
+  st.vacio=vacio||"";
+  comboRender(n,document.activeElement===st.inp?true:null);
+}
+function comboLibre(n,libre){ const st=COMBO[n]; if(st) st.libre=!!libre; }
+function comboValor(n){ const st=COMBO[n]; if(!st) return ""; return st.libre?(st.inp.value.trim()||st.valor):st.valor; }
+
+// Especies ya usadas en la cartera para un tipo. Sirven de red cuando data912
+// no responde (sin ellas no se podría elegir NADA y no se podría cargar un
+// movimiento offline) y mantienen elegible lo que salió del panel (deslistado,
+// vencido) pero sigue en el historial.
+function tickersUsados(tipo){
+  return [...new Set(DATOS.movimientos.filter(m=>m.tipo===tipo&&m.ticker).map(m=>m.ticker))].sort();
+}
 async function llenarTickers(){
   const t=document.getElementById("m-tipo").value;
-  const dl=document.getElementById("dl-tickers");
-  if(!EP[t]){ dl.innerHTML=""; return; }
+  if(!COMBO.ticker) return;
+  const usados=tickersUsados(t);
+  const hint=document.getElementById("h-ticker");
+  comboLibre("ticker",t==="manual");
+  if(t==="manual"){
+    comboOpciones("ticker",usados,"Todavía no cargaste ninguna especie manual.");
+    hint.textContent="Tipo Manual: no hay panel contra el cual validar, así que acá sí se puede escribir un nombre nuevo (o elegir uno ya usado).";
+    return;
+  }
+  hint.textContent="Escribí para filtrar y elegí del panel de "+(NOMBRE_PANEL[t]||"BYMA")+". Sufijo D = especie en dólares (AL30D).";
+  if(!EP[t]){ comboOpciones("ticker",usados,"No hay panel para este tipo."); return; }
+  comboOpciones("ticker",usados,"Cargando el panel de "+(NOMBRE_PANEL[t]||"BYMA")+"…");
   try{
     const p=await panelDe(t);
-    dl.innerHTML=Object.keys(p).sort().map(s=>`<option value="${s}">`).join("");
-  }catch(e){ dl.innerHTML=""; }
+    if(document.getElementById("m-tipo").value!==t) return;  // cambió el tipo mientras cargaba
+    comboOpciones("ticker",[...new Set([...Object.keys(p),...usados])].sort());
+  }catch(e){
+    if(document.getElementById("m-tipo").value!==t) return;
+    comboOpciones("ticker",usados,"Sin conexión al panel BYMA: por ahora solo se pueden elegir especies ya cargadas en la cartera.");
+  }
 }
 
 /* ══════════════ Saldos por cuenta ══════════════ */
@@ -3838,16 +4023,18 @@ function abrirMov(id){
   document.getElementById("m-tipo").value=ed&&ed.tipo!=="cash"?ed.tipo:"bono";
   opChanged();
   if(ed){
-    document.getElementById("m-ticker").value=ed.tipo==="fci"?"":ed.ticker;
+    comboSet("ticker",ed.tipo==="fci"?"":ed.ticker);
     document.getElementById("m-cant").value=ed.cantidad;
     document.getElementById("m-precio").value=ed.precio;
     document.getElementById("m-moneda").value=ed.moneda;
-    if(ed.tipo==="fci"){ document.getElementById("m-cat").value=ed.categoria; cargarFondos().then(()=>{document.getElementById("m-fondo").value=ed.fondo;}); }
+    if(ed.tipo==="fci"){ document.getElementById("m-cat").value=ed.categoria; cargarFondos().then(()=>comboSet("fondo",ed.fondo)); }
     calcTotal();
   } else {
-    ["m-ticker","m-cant","m-precio"].forEach(i=>document.getElementById(i).value="");
+    comboLimpiar("ticker"); comboLimpiar("fondo");
+    ["m-cant","m-precio"].forEach(i=>document.getElementById(i).value="");
     document.getElementById("m-moneda").value="ARS";
   }
+  refrescarMaxRetiro();
   document.getElementById("modal-mov").classList.add("open");
 }
 function abrirPrecio(t){
@@ -3865,7 +4052,10 @@ function cuentaChanged(){
   const inp=document.getElementById("m-cuenta-nueva");
   inp.style.display=esNueva?"block":"none";
   if(esNueva) inp.focus(); else inp.value="";
+  refrescarMaxRetiro();
 }
+function monedaChanged(){ refrescarMaxRetiro(); }
+function catChanged(){ comboLimpiar("fondo"); cargarFondos(); }
 const OPS_CASH=["deposito","retiro","dividendo","gasto"];
 const ETIQ_CASH={deposito:"DEPÓSITO",retiro:"RETIRO",dividendo:"RENTA",gasto:"GASTO"};
 function esCash(){ return OPS_CASH.includes(document.getElementById("m-op").value); }
@@ -3877,9 +4067,12 @@ function opChanged(){
   document.getElementById("lbl-precio").textContent=cash?"Monto":"Precio unitario";
   document.getElementById("h-precio").textContent=cash?"Dinero que entra o sale de la cuenta":"";
   if(!cash) tipoChanged();
+  refrescarMaxRetiro();
 }
 function tipoChanged(){
   const t=document.getElementById("m-tipo").value;
+  // Cambiar de tipo cambia el panel: lo elegido antes ya no es válido acá.
+  if(t!==TIPO_COMBO){ comboLimpiar("ticker"); TIPO_COMBO=t; }
   document.getElementById("f-fci").style.display=t==="fci"?"block":"none";
   document.getElementById("f-ticker").style.display=t==="fci"?"none":"block";
   document.getElementById("h-cant").textContent=
@@ -3893,13 +4086,22 @@ function tipoChanged(){
 }
 async function cargarFondos(){
   const cat=document.getElementById("m-cat").value;
+  const usados=[...new Set(DATOS.movimientos.filter(m=>m.tipo==="fci"&&m.fondo).map(m=>m.fondo))].sort();
+  comboOpciones("fondo",usados,"Cargando los fondos de la categoría…");
   try{
     const d=await getJSON("https://api.argentinadatos.com/v1/finanzas/fci/"+cat+"/ultimo");
-    document.getElementById("dl-fondos").innerHTML=d.map(f=>`<option value="${f.fondo.replace(/"/g,'&quot;')}">`).join("");
-  }catch(e){}
+    if(document.getElementById("m-cat").value!==cat) return true;  // cambió la categoría mientras cargaba
+    comboOpciones("fondo",[...new Set([...d.map(f=>f.fondo),...usados])].sort((a,b)=>a.localeCompare(b,"es")));
+  }catch(e){
+    if(document.getElementById("m-cat").value===cat)
+      comboOpciones("fondo",usados,"Sin conexión a la lista de fondos: por ahora solo los ya cargados en la cartera.");
+  }
   return true;
 }
 ["m-cant","m-precio","m-tipo"].forEach(id=>document.getElementById(id).addEventListener("input",calcTotal));
+comboCrear("ticker","m-ticker","cb-ticker-list");
+comboCrear("fondo","m-fondo","cb-fondo-list");
+document.getElementById("m-cuenta-nueva").addEventListener("input",refrescarMaxRetiro);
 function calcTotal(){
   const t=document.getElementById("m-tipo").value;
   const c=parseFloat(document.getElementById("m-cant").value), p=parseFloat(document.getElementById("m-precio").value);
@@ -3940,16 +4142,29 @@ async function guardarMov(){
     fecha:document.getElementById("m-fecha").value,
     op:document.getElementById("m-op").value,
     tipo,
-    ticker:tipo==="fci"?"FCI":document.getElementById("m-ticker").value.trim().toUpperCase(),
+    ticker:tipo==="fci"?"FCI":comboValor("ticker").trim().toUpperCase(),
     cuenta,
     cantidad:parseFloat(document.getElementById("m-cant").value),
     precio:parseFloat(document.getElementById("m-precio").value),
     moneda:document.getElementById("m-moneda").value,
   };
-  if(tipo==="fci"){ m.categoria=document.getElementById("m-cat").value; m.fondo=document.getElementById("m-fondo").value.trim(); }
+  if(tipo==="fci"){ m.categoria=document.getElementById("m-cat").value; m.fondo=comboValor("fondo").trim(); }
   // Plazo de liquidación explícito. Vacío = el default del tipo (ver plazoLiq).
   const liqSel=document.getElementById("m-liq").value;
   if(liqSel!=="") m.liq=parseInt(liqSel,10);
+  // La especie tiene que SALIR DE LA LISTA. Escribir algo que no se eligió no
+  // vale: es la puerta por la que entraban instrumentos inventados y typos.
+  // El único tipo libre es Manual, que no tiene panel contra el cual validar.
+  const cbId=tipo==="fci"?"fondo":"ticker", cb=COMBO[cbId];
+  if(cb&&!cb.libre&&!cb.valor){
+    const tipeado=cb.inp.value.trim();
+    err.style.color="var(--down)";
+    err.textContent=tipeado
+      ?"«"+tipeado+"» no está elegido de la lista. Escribí para buscar y tocá la opción (o Enter). No se pueden cargar especies que no estén en el panel."
+      :(tipo==="fci"?"Elegí el fondo de la lista.":"Elegí la especie de la lista.");
+    err.style.display="block";
+    cb.inp.focus(); return;
+  }
   // Validaciones
   const falta=!m.fecha||!m.cuenta||!(m.cantidad>0)||!(m.precio>0)||(tipo==="fci"?!m.fondo:!m.ticker);
   if(falta){ err.textContent="Completá fecha, cuenta, especie, cantidad y precio."; err.style.display="block"; return; }
@@ -4185,6 +4400,80 @@ function desconectarSync(){
   SYNC=null;
   try{ localStorage.removeItem(LS_SYNC); }catch(e){}
   pintarSync(); cerrarModales(); render();
+}
+
+/* ══════════════ Retiro: máximo disponible ══════════════
+   "Disponible" es exactamente la columna Disponible del panel de Liquidez:
+   caja derivada de los movimientos (por cuenta) + ajuste manual del modal
+   Saldos − lo que todavía está en T + 1. Lo operado hoy que liquida mañana NO
+   se puede retirar hoy, así que no entra en el máximo.
+   Es la foto de HOY: si el retiro se carga con fecha vieja, el número no
+   necesariamente aplica a esa fecha.
+   Ojo con la edición: si el movimiento que se está editando ya es un retiro,
+   su propio importe ya está descontado de la caja, así que hay que devolverlo
+   o el máximo aparecería restado dos veces.
+   La caja se lleva en las dos bases a la vez (ARS y USD al MEP de cada
+   operación), no como dos saldos separados: por eso el máximo depende de la
+   moneda elegida en el formulario. */
+let MAX_RETIRO=null;
+function cuentaDelForm(){
+  const sel=document.getElementById("m-cuenta-sel"); if(!sel) return "";
+  return canonizarCta(sel.value==="__nueva__"?document.getElementById("m-cuenta-nueva").value:sel.value);
+}
+function dispRetiroDe(cuenta,moneda,excluirId){
+  if(!cuenta) return null;
+  const mep=(ESTADO&&ESTADO.MEP>0)?ESTADO.MEP:null;
+  if(moneda==="USD"&&!mep) return null;   // sin MEP no se puede expresar en USD
+  const hitos=hitosCaja();
+  const ult=hitos[hitos.length-1]||{};
+  const pend=cajaALiquidar(hitos,hoy());
+  const sal=(DATOS.saldos||{})[cuenta]||{};
+  const caja=moneda==="USD"?((ult.ctaU||{})[cuenta]||0):((ult.cta||{})[cuenta]||0);
+  const t1  =moneda==="USD"?((pend.ctaU||{})[cuenta]||0):((pend.cta||{})[cuenta]||0);
+  const aj  =moneda==="USD"?(sal.usd||0)+(mep?(sal.ars||0)/mep:0)
+                           :(sal.ars||0)+(mep?(sal.usd||0)*mep:0);
+  let disp=caja+aj-t1;
+  const prev=excluirId?DATOS.movimientos.find(x=>x.id===excluirId):null;
+  if(prev&&prev.tipo==="cash"&&claveCta(prev.cuenta)===claveCta(cuenta)&&prev.mep>0){
+    const bruto=prev.precio*prev.cantidad;
+    const val=moneda==="USD"?(prev.moneda==="USD"?bruto:bruto/prev.mep)
+                            :(prev.moneda==="USD"?bruto*prev.mep:bruto);
+    disp+=(prev.op==="deposito"||prev.op==="dividendo")?-val:val;
+  }
+  return disp;
+}
+function refrescarMaxRetiro(){
+  const box=document.getElementById("f-maxret"); if(!box) return;
+  const esRetiro=document.getElementById("m-op").value==="retiro";
+  box.style.display=esRetiro?"block":"none";
+  if(!esRetiro){ MAX_RETIRO=null; return; }
+  const lbl=document.getElementById("maxret-lbl"), btn=document.getElementById("maxret-btn");
+  const cuenta=cuentaDelForm(), mon=document.getElementById("m-moneda").value;
+  const sim=mon==="USD"?"US$ ":"$ ";
+  const bruto=dispRetiroDe(cuenta,mon,EDIT_ID);
+  // Se trunca a centavos (no se redondea) para no ofrecer un centavo más de lo
+  // que hay; el .toFixed intermedio evita que el binario deje 1.234.567,89 en
+  // 1.234.567,88. Se guarda ya truncado para que el cartel, el botón y lo que
+  // se carga en el campo digan exactamente lo mismo.
+  MAX_RETIRO=bruto==null?null:Math.floor(Number((bruto*100).toFixed(6)))/100;
+  if(MAX_RETIRO==null){
+    btn.disabled=true; btn.textContent="Usar máximo";
+    lbl.textContent=cuenta
+      ?"Todavía no hay cotización MEP: no se puede calcular el disponible en USD."
+      :"Elegí una cuenta para ver el disponible.";
+    return;
+  }
+  const hay=MAX_RETIRO>=0.01;
+  btn.disabled=!hay;
+  btn.textContent=hay?"Usar máximo · "+sim+fmt(MAX_RETIRO,2):"Sin disponible";
+  lbl.innerHTML=hay
+    ?"Disponible hoy en <b style=\"color:var(--white)\">"+escHTML(cuenta)+"</b>: <b style=\"color:var(--white)\">"+sim+fmt(MAX_RETIRO,2)+"</b> · ya liquidado, sin contar T + 1"
+    :"No hay efectivo liquidado en <b style=\"color:var(--white)\">"+escHTML(cuenta)+"</b> ("+sim+fmt(MAX_RETIRO,2)+"). Revisá la moneda o si falta cargar algún movimiento.";
+}
+function usarMaxRetiro(){
+  if(!(MAX_RETIRO>=0.01)) return;
+  document.getElementById("m-precio").value=MAX_RETIRO;
+  calcTotal();
 }
 
 async function guardarCash(){
