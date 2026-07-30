@@ -1024,6 +1024,13 @@ footer b{color:var(--grey);font-weight:500}
         <div class="hint" id="h-precio">Bonos/letras/ONs: c/100 VN · FCI: VCP por 1.000 cp</div></div>
       <div><label>Moneda del precio</label><select id="m-moneda"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
       <div><label>Total operación</label><input id="m-total" disabled></div>
+      <div><label>Liquidación</label><select id="m-liq">
+          <option value="">Plazo habitual del instrumento</option>
+          <option value="0">Contado inmediato (T+0)</option>
+          <option value="1">T+1 (24 hs)</option>
+          <option value="2">T+2 (48 hs)</option>
+        </select>
+        <div class="hint">Cuándo queda disponible la plata. No cambia el NAV ni el rendimiento: solo separa la liquidez entre disponible y a liquidar.</div></div>
     </div>
     <div class="f-err" id="m-err"></div>
     <div class="modal-actions">
@@ -1126,8 +1133,8 @@ footer b{color:var(--grey);font-weight:500}
 <!-- Modal saldos -->
 <div class="modal-bg" id="modal-saldos">
   <div class="modal">
-    <h3>Saldos en cuenta</h3>
-    <div class="hint" style="margin-bottom:16px">Efectivo disponible por cuenta. Los valores negativos (descubierto, caución tomadora) se restan del total de la cartera.</div>
+    <h3>Ajuste de saldo por cuenta</h3>
+    <div class="hint" style="margin-bottom:16px">El efectivo ya se calcula solo a partir de los movimientos (ventas y rentas acreditan; compras, gastos y retiros debitan). Usá esto <b>solo para la diferencia</b> contra el extracto del bróker: saldo inicial anterior al primer movimiento cargado, o algo que quedó sin registrar. Los valores negativos (descubierto, caución tomadora) se restan del total de la cartera.</div>
     <div id="saldos-rows"></div>
     <div style="display:flex;gap:10px;margin-top:14px;align-items:flex-end">
       <div style="flex:1"><label>Agregar cuenta</label><input id="s-nueva" placeholder="Nombre de la cuenta"></div>
@@ -1440,7 +1447,7 @@ async function reconstruirHistorialSnapshots(){
 
   const primeraFecha=DATOS.movimientos.reduce((m,x)=>x.fecha<m?x.fecha:m,DATOS.movimientos[0].fecha);
   const ayer=restarDias(hoy(),1);
-  const hitos=construirHitosCaja();
+  const hitos=hitosCaja();
 
   // Antes se salteaba directamente el día completo apenas UNA posición no
   // tenía cobertura de precio (manual/on), y también se salteaba cualquier
@@ -1494,7 +1501,7 @@ async function reconstruirHistorialSnapshots(){
     }
     const mep=mepHistorial(f);
     if(!mep) continue;
-    const caja=cajaEnFecha(hitos,f);
+    const caja=cajaTotalEnFecha(hitos,f,mep);
     const completo=faltan.length===0;
     const ars=valARS+caja;
     const viejo=guardado.get(f);
@@ -1561,30 +1568,163 @@ function persistir(){
   if(!hayStorage) return;
   try{ localStorage.setItem(LS_KEY, JSON.stringify(DATOS)); }catch(e){}
 }
-// Evolución día a día de caja, aporte y retiros acumulados en ARS. Se usa
-// tanto para purgar snapshots rotos como para reconstruir el NAV de fechas
-// pasadas. OJO: antes los depósitos NO sumaban al aportado (solo lo hacían
-// las compras sin caja previa), con lo que `apor` quedaba en cero para
-// cualquiera que depositara primero y comprara después — el mismo criterio
-// que serieRendimiento() usa desde siempre es el correcto: depósito = aporte.
+/* ══════════════ Liquidación (T+n) ══════════════
+   Una venta acredita el efectivo en la cuenta el día que se opera, pero esa
+   plata recién queda LIBRE cuando liquida (BYMA: T+1 hábil para acciones,
+   CEDEARs y bonos). Las dos cosas importan y son distintas:
+     · para el NAV y el rendimiento la plata cuenta desde el día de la
+       OPERACIÓN — si no, el papel sale de la cartera y el efectivo todavía no
+       entró, y el cierre de ese día muestra una pérdida que nunca existió;
+     · para saber con cuánto se puede operar o retirar cuenta desde que
+       LIQUIDA.
+   Por eso la caja se contabiliza siempre en la fecha de la operación, y
+   aparte se lleva cuánto de esa caja está todavía "a liquidar" a una fecha
+   dada. Disponible + a liquidar = efectivo de la cuenta, y el NAV suma las
+   dos partes.
+   `m.liq` (entero, días hábiles) pisa el default cuando una operación se hizo
+   en otro plazo (contado inmediato, T+2). */
+const LIQ_DEF={bono:1,letra:1,on:1,accion:1,cedear:1,manual:1};
+function plazoLiq(m){
+  if(m&&typeof m.liq==="number"&&isFinite(m.liq)) return Math.max(0,Math.round(m.liq));
+  if(!m||m.tipo==="cash") return 0;   // depósito, retiro, gasto y renta ya están acreditados
+  if(m.tipo==="fci") return m.categoria==="mercadoDinero"?0:1; // money market rescata en el día
+  return LIQ_DEF[m.tipo]??1;
+}
+// Suma días HÁBILES (saltea sábados y domingos). No conoce los feriados de
+// BYMA: un feriado solo puede pasar un movimiento de "a liquidar" a
+// "disponible" un día antes de tiempo — nunca cambia el NAV, porque el NAV
+// suma las dos partes.
+function sumarHabiles(fecha,n){
+  if(!(n>0)) return fecha;
+  const d=new Date(fecha+"T12:00");
+  for(let i=0;i<n;){ d.setDate(d.getDate()+1); const w=d.getDay(); if(w!==0&&w!==6) i++; }
+  return d.toLocaleDateString("sv-SE");
+}
+function fechaLiqDe(m){ return sumarHabiles(m.fecha,plazoLiq(m)); }
+
+/* ══════════════ Caja: fuente única ══════════════
+   Evolución día a día de caja, aporte y retiros, POR CUENTA. Dos cambios de
+   fondo respecto de la versión anterior:
+
+   1) La caja es POR CUENTA. Antes era una sola bolsa para toda la cartera y
+      eso mezclaba brókers: una compra en una cuenta se "financiaba" con el
+      producto de una venta en otra, la caja quedaba negativa (imposible en
+      una comitente) y el capital aportado se subvaluaba en el mismo monto.
+      Ahora cada cuenta consume su propio efectivo y lo que no alcanza es
+      aporte nuevo.
+
+   2) Es la ÚNICA definición de liquidez de la app. Antes el NAV en vivo
+      sumaba solo el saldo manual del modal "Saldos en cuenta" —que ningún
+      movimiento tocaba—, así que una venta sacaba el papel de la cartera y
+      no acreditaba nada: el NAV caía por el valor íntegro de lo vendido. El
+      modal quedó como AJUSTE (la diferencia contra el extracto del bróker).
+
+   Se lleva la misma cuenta en las dos bases (ARS y USD al MEP de cada
+   operación), igual que el resto del motor de rendimiento. Devuelve un hito
+   por FECHA: el último estado de cada día. */
 function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
-  let caja=0,apor=0,ret=0; const hitos=[];
+  const cA={}, cU={};
+  let apor=0,aporU=0,ret=0,retU=0;
+  const hitos=[], eventosAporte=[], liquidaciones=[];
   for(const m of movs){
+    const k=m.cuenta||"—";
+    if(cA[k]==null){ cA[k]=0; cU[k]=0; }
     const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
     const a=m.moneda==="USD"?bruto*m.mep:bruto;
-    if(m.op==="compra"){ const d=Math.min(caja,a); caja-=d; apor+=a-d; }
-    else if(m.op==="deposito"){ caja+=a; apor+=a; }
-    else if(m.op==="retiro"){ caja-=a; ret+=a; }
-    else if(m.op==="gasto") caja-=a;
-    else caja+=a; // venta y dividendo acreditan caja pero no son aporte externo
-    hitos.push({fecha:m.fecha,apor,ret,caja});
+    const u=m.moneda==="USD"?bruto:bruto/m.mep;
+    let dA=0,dU=0; // efecto NETO de este movimiento sobre la caja de esa cuenta
+    if(m.op==="compra"){
+      // Math.max(0,…) sobre el mínimo: con caja negativa, Math.min devolvía un
+      // número negativo y la compra terminaba SUMANDO efectivo e inflando el
+      // aportado en la misma cantidad. No se puede pagar con plata que no hay.
+      dA=-Math.max(0,Math.min(cA[k],a)); dU=-Math.max(0,Math.min(cU[k],u));
+      apor+=a+dA; aporU+=u+dU;
+      if(u+dU>1e-9) eventosAporte.push({fecha:m.fecha,usd:u+dU});
+    }
+    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); }
+    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; }
+    // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
+    // retenciones, impuestos): mueven la caja pero NO son capital que entró o
+    // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
+    // el denominador del retorno; contarlos como retiro lo infla al revés.
+    else if(m.op==="gasto"){ dA=-a; dU=-u; }
+    else { dA=a; dU=u; } // venta y dividendo acreditan caja y no son aporte externo
+    cA[k]+=dA; cU[k]+=dU;
+    const fl=fechaLiqDe(m);
+    if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,u:dU});
+    const caja=Object.values(cA).reduce((s,x)=>s+x,0);
+    const cajaU=Object.values(cU).reduce((s,x)=>s+x,0);
+    const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU}};
+    const prev=hitos[hitos.length-1];
+    if(prev&&prev.fecha===m.fecha) hitos[hitos.length-1]=snap; else hitos.push(snap);
   }
+  hitos.eventosAporte=eventosAporte;
+  hitos.liquidaciones=liquidaciones;
   return hitos;
 }
-function cajaEnFecha(hitos,fecha){
+// Los hitos se recalculan una sola vez por tanda de renders: los recorren el
+// snapshot diario, la vista Cartera, la serie de rendimiento, la purga y la
+// reconstrucción histórica. persistir() invalida el memo en cada mutación.
+function hitosCaja(){ return ("hc" in _MEMO)?_MEMO.hc:(_MEMO.hc=construirHitosCaja()); }
+function hitoEn(hitos,fecha){
   let hh=null; for(const x of hitos){ if(x.fecha<=fecha) hh=x; else break; }
-  return hh?hh.caja:0;
+  return hh;
+}
+function cajaEnFecha(hitos,fecha){ const hh=hitoEn(hitos,fecha); return hh?hh.caja:0; }
+// Ajuste manual del modal, en ARS al MEP que corresponda. Es un saldo que no
+// sale de ningún movimiento (saldo inicial previo al primer registro, o algo
+// que quedó sin cargar), así que no tiene fecha: vale para toda la serie.
+function ajusteManualARS(mep){
+  return Object.values(DATOS.saldos||{}).reduce((s,x)=>s+(x.ars||0)+(x.usd||0)*(mep||0),0);
+}
+// LA definición de liquidez de la app: caja derivada de los movimientos +
+// ajuste manual. La usan el cierre en vivo, la reconstrucción histórica y la
+// normalización, para que los tres tipos de snapshot digan lo mismo. Si se
+// separan otra vez, vuelve el escalón en la curva.
+function cajaTotalEnFecha(hitos,fecha,mep){ return cajaEnFecha(hitos,fecha)+ajusteManualARS(mep); }
+// Cuánto de la caja de cada cuenta todavía no liquidó a la fecha `f`. Con
+// signo: una venta de hoy suma, una compra de hoy que se paga mañana resta.
+function cajaALiquidar(hitos,f){
+  const cta={},ctaU={}; let tot=0,totU=0;
+  for(const L of (hitos.liquidaciones||[])){
+    if(L.fecha>f||L.hasta<=f) continue;
+    cta[L.cuenta]=(cta[L.cuenta]||0)+L.a; ctaU[L.cuenta]=(ctaU[L.cuenta]||0)+L.u;
+    tot+=L.a; totU+=L.u;
+  }
+  return {cta,ctaU,tot,totU};
+}
+
+/* Normaliza los cierres ya guardados a la definición única de caja.
+   Los snapshots viejos mezclan dos criterios: los reconstruidos (hist:true)
+   suman la caja de operaciones y los capturados en vivo sumaban únicamente el
+   saldo manual del modal. Eso deja un escalón artificial en la curva justo
+   donde cambia el tipo de snapshot (en la cartera de prueba, ~10,8 puntos
+   entre el 23/07 y el 24/07). Como cada snapshot guarda `inv` (el valor de
+   las posiciones), se puede reexpresar cualquiera con la definición nueva sin
+   perder información. Los pocos que no tienen `inv` se despejan al revés,
+   restándole el ajuste manual que era lo único que sumaban.
+   Es idempotente y se corre en cada carga: mantiene el invariante
+   ars = inv + caja para toda la serie. */
+function normalizarCajaSnapshots(sync){
+  if(!DATOS.movimientos?.length||!DATOS.snapshots?.length) return false;
+  const hitos=hitosCaja(); let n=0;
+  for(const s of DATOS.snapshots){
+    const mep=s.mep||(s.usd>0?s.ars/s.usd:null);
+    if(!mep||!(s.ars!=null)) continue;
+    const inv=s.inv!=null?s.inv:Math.round(s.ars-ajusteManualARS(mep));
+    const caja=Math.round(cajaTotalEnFecha(hitos,s.fecha,mep));
+    const ars=Math.round(inv+caja);
+    if(s.inv===inv&&s.caja===caja&&Math.abs((s.ars||0)-ars)<1) continue;
+    s.inv=inv; s.caja=caja; s.ars=ars; s.usd=Math.round(ars/mep*100)/100;
+    if(s.mep==null) s.mep=Math.round(mep*100)/100;
+    n++;
+  }
+  // sync=false en el arranque: todavía no bajó el gist y subir acá pisaría la
+  // nube con lo que este dispositivo tenía guardado de antes. La corrección se
+  // sube cuando bajarNube() vuelve a llamar a esta función con los datos buenos.
+  if(n){ if(sync) persistirYSync(); else persistir(); }
+  return n>0;
 }
 function purgarSnapshots(){
   // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
@@ -1597,7 +1737,7 @@ function purgarSnapshots(){
   //     cierres legítimos de NAV ~0 parecieran un −100% y se borraran del
   //     gist en cada carga. Con capital vigente ~0 no hay nada que juzgar.
   if(!DATOS.movimientos.length||!DATOS.snapshots?.length) return;
-  const hitos=construirHitosCaja();
+  const hitos=hitosCaja();
   DATOS.snapshots=DATOS.snapshots.filter(s=>{
     // Si el snapshot es ANTERIOR al primer movimiento no hay hito que aplique:
     // antes se caía en hitos[0] (capital ya aportado) y un cierre legítimo de
@@ -1704,48 +1844,31 @@ function serieRendimiento(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
   if(!movs.length) return _MEMO[_k]=null;
   const K=VISTA==="ARS"?"ars":"usd"; // MEP y CCL comparten la misma base dólar bimonetaria
-  let cajaA=0, cajaU=0, aporA=0, aporU=0, retA=0, retU=0;
-  const hitos=[], eventosAporte=[];
-  for(const m of movs){
-    const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
-    const a=m.moneda==="USD"?bruto*m.mep:bruto;
-    const u=m.moneda==="USD"?bruto:bruto/m.mep;
-    if(m.op==="compra"){
-      const dA=Math.min(cajaA,a), dU=Math.min(cajaU,u);
-      cajaA-=dA; cajaU-=dU; aporA+=a-dA; aporU+=u-dU;
-      if(u-dU>1e-9) eventosAporte.push({fecha:m.fecha,usd:u-dU});
-    } else if(m.op==="venta"){ cajaA+=a; cajaU+=u; }
-    else if(m.op==="deposito"){ cajaA+=a; cajaU+=u; aporA+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); }
-    else if(m.op==="retiro"){ cajaA-=a; cajaU-=u; retA+=a; retU+=u; }
-    // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
-    // retenciones, impuestos): mueven la caja pero NO son capital que entró o
-    // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
-    // el denominador del retorno; contarlos como retiro lo infla al revés.
-    else if(m.op==="dividendo"){ cajaA+=a; cajaU+=u; }
-    else if(m.op==="gasto"){ cajaA-=a; cajaU-=u; }
-    const prev=hitos[hitos.length-1];
-    const snap={fecha:m.fecha,aporA,aporU,cajaA,cajaU,retA,retU};
-    if(prev&&prev.fecha===m.fecha) hitos[hitos.length-1]=snap; else hitos.push(snap);
-  }
-  const aporte=K==="ars"?aporA:aporU;
-  const caja=K==="ars"?cajaA:cajaU;
-  const retirado=K==="ars"?retA:retU;
+  // El recorrido de caja/aporte/retiro vive UNA sola vez, en
+  // construirHitosCaja(): antes estaba duplicado acá y en aquella función, con
+  // criterios que se fueron separando (una es por cuenta y la otra no era, una
+  // sumaba el depósito al aporte y la otra tardó en hacerlo).
+  const hitos=hitosCaja();
+  const eventosAporte=hitos.eventosAporte||[];
+  const ult=hitos[hitos.length-1];
+  const aporte=K==="ars"?ult.apor:ult.aporU;
+  const caja=K==="ars"?ult.caja:ult.cajaU;
+  const retirado=K==="ars"?ult.ret:ult.retU;
   // Aporte vigente en cada fecha (para normalizar los snapshots de NAV)
   const aporteEn=f=>{
     // Antes del primer movimiento no hay nada aportado todavía: devolver
     // hitos[0] ahí adelantaba el primer aporte a fechas en las que la cartera
     // ni existía y ensuciaba el flujo del primer tramo.
     if(f<hitos[0].fecha) return {ap:0,cj:0,rt:0};
-    let r=hitos[0];
-    for(const hh of hitos) if(hh.fecha<=f) r=hh;
-    return K==="ars"?{ap:r.aporA,cj:r.cajaA,rt:r.retA}:{ap:r.aporU,cj:r.cajaU,rt:r.retU};
+    const r=hitoEn(hitos,f)||hitos[0];
+    return K==="ars"?{ap:r.apor,cj:r.caja,rt:r.ret}:{ap:r.aporU,cj:r.cajaU,rt:r.retU};
   };
   // Flujos netos de capital externo (aporte − retiro) CON SU FECHA, dentro de
   // (desde, hasta]. Hace falta la fecha de cada uno para poder ponderarlos por
   // el tiempo que estuvieron efectivamente invertidos dentro del tramo — ver
   // Modified Dietz en serieDiaria().
   const flujosEntre=(desde,hasta)=>{
-    const val=hh=>K==="ars"?{ap:hh.aporA,rt:hh.retA}:{ap:hh.aporU,rt:hh.retU};
+    const val=hh=>K==="ars"?{ap:hh.apor,rt:hh.ret}:{ap:hh.aporU,rt:hh.retU};
     let apPrev=0, rtPrev=0;
     for(const hh of hitos){ if(hh.fecha<=desde){ const v=val(hh); apPrev=v.ap; rtPrev=v.rt; } }
     const out=[];
@@ -1762,8 +1885,13 @@ function serieRendimiento(){
   puntos.push({fecha:movs[0].fecha,ret:0});
   for(const s of (DATOS.snapshots||[])){
     if(s.fecha<=movs[0].fecha) continue;
-    const {ap,cj,rt}=aporteEn(s.fecha);
-    if(ap>0) puntos.push({fecha:s.fecha,ret:(s[K]+cj+rt)/ap-1,mep:s.mep,sp:s.sp,ndx:s.ndx});
+    // Sin `+cj`: el NAV del snapshot YA incluye la caja (lo dice purgarSnapshots
+    // desde hace rato y ahora vale para los dos tipos de cierre, porque
+    // normalizarCajaSnapshots() los deja a todos con ars = inv + caja).
+    // Sumarla otra vez acá la contaba doble en los cierres reconstruidos y no
+    // en los capturados en vivo — de ahí el escalón de la curva.
+    const {ap,rt}=aporteEn(s.fecha);
+    if(ap>0) puntos.push({fecha:s.fecha,ret:(s[K]+rt)/ap-1,mep:s.mep,sp:s.sp,ndx:s.ndx});
   }
   // ── Benchmark: los mismos aportes (fechas y montos) comprando el índice ──
   // Se construye igual para cualquier índice: se compran "unidades" del índice
@@ -1789,6 +1917,7 @@ function serieRendimiento(){
   };
   const bSP=mkBench(sp500En), bNDX=mkBench(ndxEn);
   return _MEMO[_k]={puntos,aporte,caja,retirado,desde:movs[0].fecha,hitos,aporteEn,flujosEntre,
+    cajaCta:(K==="ars"?ult.cta:ult.ctaU)||{},
     benchEn:bSP.en, benchNdxEn:bNDX.en, uniEn:bSP.uniEn, unidades:bSP.unidades};
 }
 
@@ -2023,8 +2152,13 @@ async function cargar(){
     // arranque con la red lenta guardaría sp:null / ndx:null en el gist y ese
     // dato malo quedaría fosilizado (el snapshot en vivo no se recalcula).
     await cargarBenchmarks();
-    // Snapshot diario (uno por fecha, se pisa si ya existe) — incluye liquidez
-    const cashARS=Object.values(DATOS.saldos||{}).reduce((s,x)=>s+(x.ars||0)+(x.usd||0)*MEP,0);
+    // Snapshot diario (uno por fecha, se pisa si ya existe) — incluye liquidez.
+    // La liquidez sale de los MOVIMIENTOS (caja derivada por cuenta) más el
+    // ajuste manual del modal. Antes salía solo del ajuste manual, que ningún
+    // movimiento tocaba: una venta sacaba el papel de las posiciones y no
+    // acreditaba nada, así que el cierre de ese día registraba una caída por
+    // el valor íntegro de lo vendido.
+    const cashARS=cajaTotalEnFecha(hitosCaja(),hoy(),MEP);
     const invARS=pos.reduce((s,p)=>s+(p.valARS||0),0);
     const tARS=invARS+cashARS;
     const sinPrecio=pos.filter(p=>p.valARS==null).length;
@@ -2555,21 +2689,33 @@ function render(soloEstructura){
   const rendDia=rendimientoDelDia(varDia,totalPos), rendDiaLbl=cardRendDia(rendDia);
   const realizado=VISTA==="ARS"?realARS:realUSD;
   const saldos=DATOS.saldos||{};
-  const cuentas=[...new Set([...pos.map(p=>p.cuenta),...Object.keys(saldos)])];
-  // Liquidez separada por moneda de origen: pesos y dólares, cada una
-  // convertible a la otra unidad con el MEP o el CCL según la vista activa.
-  const cashArsCta=c=>{const s=saldos[c]||{}; const a=s.ars||0; return VISTA==="ARS"?a:a/FXV;};
-  const cashUsdCta=c=>{const s=saldos[c]||{}; const u=s.usd||0; return VISTA==="ARS"?u*FXV:u;};
-  const cashCta=c=>cashArsCta(c)+cashUsdCta(c);
-  const cashArs=cuentas.reduce((s,c)=>s+cashArsCta(c),0);
-  const cashUsd=cuentas.reduce((s,c)=>s+cashUsdCta(c),0);
-  const cash=cashArs+cashUsd;
+  /* ── Liquidez ──────────────────────────────────────────────────────────
+     Sale de los movimientos (caja derivada por cuenta, misma base bimonetaria
+     que los snapshots y el motor de rendimiento, así el NAV cierra exacto) y
+     se muestra partida en DISPONIBLE y A LIQUIDAR. Las dos suman al NAV: la
+     plata de una venta de hoy que liquida mañana ya no es el papel, así que
+     tiene que estar del lado del efectivo o el cierre del día miente.
+     El modal "Saldos en cuenta" quedó como AJUSTE contra el extracto del
+     bróker y se suma arriba de lo derivado. */
+  const hitosC=hitosCaja();
+  const ultC=hitosC[hitosC.length-1]||{cta:{},ctaU:{}};
+  const cjCta=(VISTA==="ARS"?ultC.cta:ultC.ctaU)||{};
+  const pend=cajaALiquidar(hitosC,hoy());
+  const pendCta=(VISTA==="ARS"?pend.cta:pend.ctaU)||{};
+  const cuentas=[...new Set([...pos.map(p=>p.cuenta),...Object.keys(cjCta),...Object.keys(saldos)])];
+  const ajusteCta=c=>{const s=saldos[c]||{}; return VISTA==="ARS"?(s.ars||0)+(s.usd||0)*MEP:(s.ars||0)/FXV+(s.usd||0)*(MEP/FXV);};
+  const cashCta=c=>(cjCta[c]||0)+ajusteCta(c);
+  const cashPendCta=c=>(pendCta[c]||0);
+  const cash=cuentas.reduce((s,c)=>s+cashCta(c),0);
+  const cashPend=cuentas.reduce((s,c)=>s+cashPendCta(c),0);
+  const cashDisp=cash-cashPend;
   const total=totalPos+cash;
   // Mismo total, pero en la base de comparación (idéntico a `total` en ARS y MEP)
   const cashBase=VISTA==="ARS"?cash
-    :cuentas.reduce((s,c)=>{const x=saldos[c]||{}; return s+(x.ars||0)/MEP+(x.usd||0);},0);
+    :Object.values(ultC.ctaU||{}).reduce((s,x)=>s+x,0)
+      +cuentas.reduce((s,c)=>{const x=saldos[c]||{}; return s+(x.ars||0)/MEP+(x.usd||0);},0);
   const totalBase=totalPosB+cashBase;
-  const hayCash=Object.keys(saldos).length>0;
+  const hayCash=Math.abs(cash)>0.5||Object.keys(saldos).length>0;
   const navPrev=window.__navPrev; if(TAB==="inicio") window.__navPrev=total;
 
   let html="";
@@ -2584,10 +2730,10 @@ function render(soloEstructura){
       <div class="hero-side"><div class="k">${rendDiaLbl.k}</div><div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
         <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
     </div></div>
-    ${hayCash?`<div class="card"><div class="k">Liquidez · Pesos</div><div class="v ${cashArs<0?"down":""}">${(cashArs<0?"−":"")+money(Math.abs(cashArs))}</div>
-      <div class="d">${fmt(cashArs/total*100,1)}% del total</div></div>
-    <div class="card"><div class="k">Liquidez · Dólares</div><div class="v ${cashUsd<0?"down":""}">${(cashUsd<0?"−":"")+money(Math.abs(cashUsd))}</div>
-      <div class="d">${fmt(cashUsd/total*100,1)}% del total</div></div>`:""}
+    ${hayCash?`<div class="card"><div class="k">Liquidez · Disponible</div><div class="v ${cashDisp<0?"down":""}">${(cashDisp<0?"−":"")+money(Math.abs(cashDisp))}</div>
+      <div class="d">${fmt(cashDisp/total*100,1)}% del total · ya liquidado</div></div>
+    ${Math.abs(cashPend)>0.5?`<div class="card"><div class="k">Liquidez · A liquidar</div><div class="v ${cashPend<0?"down":""}">${(cashPend<0?"−":"")+money(Math.abs(cashPend))}</div>
+      <div class="d">operado, acredita en 24 hs · ya cuenta en el NAV</div></div>`:""}`:""}
     <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
       <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
     ${Math.abs(realizado)>0.01?`<div class="card"><div class="k">P&amp;L · Realizado</div>
@@ -3042,15 +3188,18 @@ function render(soloEstructura){
   if(TAB==="inicio"&&hayCash){
     html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
       <span class="tot"><b>${(cash<0?"−":"")+money(Math.abs(cash))}</b> · ${fmt(cash/total*100,1)}%</span>
-      <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ editar</button></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Saldo ARS</th><th>Saldo USD</th><th>Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr></thead><tbody>
-      ${Object.entries(saldos).map(([c,s])=>{
-        const t=cashCta(c);
+      <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ ajuste</button></div>
+      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Disponible</th><th>A liquidar</th><th>Ajuste manual</th><th>Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr></thead><tbody>
+      ${cuentas.map(c=>{
+        const t=cashCta(c), pd=cashPendCta(c), aj=ajusteCta(c), disp=t-pd;
+        if(Math.abs(t)<0.5&&Math.abs(pd)<0.5) return "";
         return `<tr><td class="tk">${c}</td>
-        <td class="${(s.ars||0)<0?"down":""}">${s.ars?"$ "+fmt(s.ars,0):"—"}</td>
-        <td class="${(s.usd||0)<0?"down":""}">${s.usd?"US$ "+fmt(s.usd,2):"—"}</td>
+        <td class="${disp<0?"down":""}">${(disp<0?"−":"")+money(Math.abs(disp))}</td>
+        <td class="${pd<0?"down":""}">${Math.abs(pd)<0.5?"—":(pd<0?"−":"+")+money(Math.abs(pd))}</td>
+        <td class="${aj<0?"down":""}">${Math.abs(aj)<0.5?"—":(aj<0?"−":"")+money(Math.abs(aj))}</td>
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
-      </tbody></table></div></div>`;
+      </tbody></table>
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>A liquidar</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div></div>`;
   }
 
   // Historial de movimientos
@@ -3565,6 +3714,7 @@ function abrirMov(id){
   document.getElementById("m-fecha").value=ed?ed.fecha:hoy();
   document.getElementById("m-err").style.display="none";
   document.getElementById("m-total").value="";
+  document.getElementById("m-liq").value=(ed&&typeof ed.liq==="number")?String(ed.liq):"";
   const sel=document.getElementById("m-cuenta-sel");
   const cts=cuentasConocidas();
   sel.innerHTML=cts.map(c=>`<option value="${c}">${c}</option>`).join("")+`<option value="__nueva__">+ Nueva cuenta…</option>`;
@@ -3684,6 +3834,9 @@ async function guardarMov(){
     moneda:document.getElementById("m-moneda").value,
   };
   if(tipo==="fci"){ m.categoria=document.getElementById("m-cat").value; m.fondo=document.getElementById("m-fondo").value.trim(); }
+  // Plazo de liquidación explícito. Vacío = el default del tipo (ver plazoLiq).
+  const liqSel=document.getElementById("m-liq").value;
+  if(liqSel!=="") m.liq=parseInt(liqSel,10);
   // Validaciones
   const falta=!m.fecha||!m.cuenta||!(m.cantidad>0)||!(m.precio>0)||(tipo==="fci"?!m.fondo:!m.ticker);
   if(falta){ err.textContent="Completá fecha, cuenta, especie, cantidad y precio."; err.style.display="block"; return; }
@@ -3866,7 +4019,7 @@ async function bajarNube(manual){
     if(manual&&nL>0&&!confirm(`Traer ${nR} movimientos de la nube y reemplazar los ${nL} de este dispositivo?`)) return;
     DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...remoto};
     SYNC.rev=remoto.rev||0; SYNC.ultimo=new Date().toISOString(); SYNC.error=false;
-    guardarSync(); persistir(); purgarSnapshots();
+    guardarSync(); persistir(); normalizarCajaSnapshots(true); purgarSnapshots();
     pintarSync(); cargar();
     if(manual) cerrarModales();
   }catch(e){
@@ -5046,6 +5199,9 @@ function pintarFondoNasa(img){
 }
 /* ══════════════ Init ══════════════ */
 restaurar();
+// Antes de purgar: la purga juzga cada cierre contra el capital vigente y con
+// la definición vieja de caja algunos quedaban artificialmente bajos.
+normalizarCajaSnapshots(false);
 purgarSnapshots();
 cargarBenchmarks(); // en paralelo con todo lo demás; nadie se bloquea esperándolo
 // No se espera bajarNube para no demorar el primer render; pero el backfill
