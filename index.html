@@ -1030,7 +1030,7 @@ footer b{color:var(--grey);font-weight:500}
           <option value="1">T+1 (24 hs)</option>
           <option value="2">T+2 (48 hs)</option>
         </select>
-        <div class="hint">Cuándo queda disponible la plata. No cambia el NAV ni el rendimiento: solo separa la liquidez entre disponible y a liquidar.</div></div>
+        <div class="hint">Cuándo queda disponible la plata. No cambia el NAV ni el rendimiento: solo separa la liquidez entre disponible y T + 1.</div></div>
     </div>
     <div class="f-err" id="m-err"></div>
     <div class="modal-actions">
@@ -1578,8 +1578,8 @@ function persistir(){
      · para saber con cuánto se puede operar o retirar cuenta desde que
        LIQUIDA.
    Por eso la caja se contabiliza siempre en la fecha de la operación, y
-   aparte se lleva cuánto de esa caja está todavía "a liquidar" a una fecha
-   dada. Disponible + a liquidar = efectivo de la cuenta, y el NAV suma las
+   aparte se lleva cuánto de esa caja está todavía "T + 1" a una fecha
+   dada. Disponible + T + 1 = efectivo de la cuenta, y el NAV suma las
    dos partes.
    `m.liq` (entero, días hábiles) pisa el default cuando una operación se hizo
    en otro plazo (contado inmediato, T+2). */
@@ -1591,7 +1591,7 @@ function plazoLiq(m){
   return LIQ_DEF[m.tipo]??1;
 }
 // Suma días HÁBILES (saltea sábados y domingos). No conoce los feriados de
-// BYMA: un feriado solo puede pasar un movimiento de "a liquidar" a
+// BYMA: un feriado solo puede pasar un movimiento de "T + 1" a
 // "disponible" un día antes de tiempo — nunca cambia el NAV, porque el NAV
 // suma las dos partes.
 function sumarHabiles(fecha,n){
@@ -2692,7 +2692,7 @@ function render(soloEstructura){
   /* ── Liquidez ──────────────────────────────────────────────────────────
      Sale de los movimientos (caja derivada por cuenta, misma base bimonetaria
      que los snapshots y el motor de rendimiento, así el NAV cierra exacto) y
-     se muestra partida en DISPONIBLE y A LIQUIDAR. Las dos suman al NAV: la
+     se muestra partida en DISPONIBLE y T + 1. Las dos suman al NAV: la
      plata de una venta de hoy que liquida mañana ya no es el papel, así que
      tiene que estar del lado del efectivo o el cierre del día miente.
      El modal "Saldos en cuenta" quedó como AJUSTE contra el extracto del
@@ -2732,7 +2732,7 @@ function render(soloEstructura){
     </div></div>
     ${hayCash?`<div class="card"><div class="k">Liquidez · Disponible</div><div class="v ${cashDisp<0?"down":""}">${(cashDisp<0?"−":"")+money(Math.abs(cashDisp))}</div>
       <div class="d">${fmt(cashDisp/total*100,1)}% del total · ya liquidado</div></div>
-    ${Math.abs(cashPend)>0.5?`<div class="card"><div class="k">Liquidez · A liquidar</div><div class="v ${cashPend<0?"down":""}">${(cashPend<0?"−":"")+money(Math.abs(cashPend))}</div>
+    ${Math.abs(cashPend)>0.5?`<div class="card"><div class="k">Liquidez · T + 1</div><div class="v ${cashPend<0?"down":""}">${(cashPend<0?"−":"")+money(Math.abs(cashPend))}</div>
       <div class="d">operado, acredita en 24 hs · ya cuenta en el NAV</div></div>`:""}`:""}
     <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
       <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
@@ -3189,7 +3189,7 @@ function render(soloEstructura){
     html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
       <span class="tot"><b>${(cash<0?"−":"")+money(Math.abs(cash))}</b> · ${fmt(cash/total*100,1)}%</span>
       <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ ajuste</button></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Disponible</th><th>A liquidar</th><th>Ajuste manual</th><th>Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr></thead><tbody>
+      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Disponible</th><th>T + 1</th><th>Ajuste manual</th><th>Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr></thead><tbody>
       ${cuentas.map(c=>{
         const t=cashCta(c), pd=cashPendCta(c), aj=ajusteCta(c), disp=t-pd;
         if(Math.abs(t)<0.5&&Math.abs(pd)<0.5) return "";
@@ -3199,7 +3199,7 @@ function render(soloEstructura){
         <td class="${aj<0?"down":""}">${Math.abs(aj)<0.5?"—":(aj<0?"−":"")+money(Math.abs(aj))}</td>
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
       </tbody></table>
-      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>A liquidar</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div></div>`;
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div></div>`;
   }
 
   // Historial de movimientos
