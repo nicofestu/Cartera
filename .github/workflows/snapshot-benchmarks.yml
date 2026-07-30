@@ -22,6 +22,14 @@ jobs:
       - name: Tomar snapshot de precios (bonos, letras, acciones, cedears)
         run: python scripts/snapshot_historial.py
 
+      # Tasas libres de riesgo para Sharpe y Sortino: RIX del BCRA + caucion de
+      # BYMA para los dias que el BCRA todavia no publico, y Fed Funds de FRED.
+      # continue-on-error a proposito: si una fuente de tasas se cae, no tiene
+      # que impedir que se comitee el snapshot de precios del dia.
+      - name: Actualizar tasas libres de riesgo
+        continue-on-error: true
+        run: python scripts/snapshot_tasas.py
+
       - name: Comitear si hubo cambios
         run: |
           git config user.name "snapshot-bot"
