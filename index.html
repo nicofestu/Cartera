@@ -68,7 +68,7 @@ body::after{
   background-image:var(--nasa-bg,none);
   background-size:cover;
   background-position:center;
-  filter:brightness(.25) saturate(.55) contrast(.95);
+  filter:brightness(.35) saturate(.55) contrast(.95);
   opacity:0;
   transition:opacity 1.8s var(--ease);
 }
@@ -5543,9 +5543,10 @@ function importar(ev){
 }
 
 /* ══════════════ Fondo NASA ══════════════
-   Foto real de la Tierra o la Luna vista desde el espacio, elegida en vivo
-   contra la API pública images-api.nasa.gov. Se excluyen personas, renders,
-   diagramas y cualquier temática de espacio profundo.
+   Foto real de la Tierra, la Luna o Marte (superficie u órbita) vista desde
+   el espacio, elegida en vivo contra la API pública images-api.nasa.gov. Se
+   excluyen personas, renders/ilustraciones, mapas o gráficos de datos, lunas
+   de otros planetas y cualquier temática de espacio profundo.
 
    La detección se basa en metadatos, no en reconocimiento de píxeles.
    Se elige una sola vez por sesión y la app sigue funcionando normalmente
@@ -5566,6 +5567,16 @@ const NASA_TEMAS = {
     "full moon nasa",
     "apollo moon"
   ],
+  marte: [
+    "mars rover panorama",
+    "curiosity rover panorama",
+    "perseverance rover panorama",
+    "valles marineris mars",
+    "olympus mons mars",
+    "gale crater mars",
+    "jezero crater mars",
+    "mars orbiter view"
+  ],
   tierraLuna: [
     "earth and moon",
     "earthrise moon",
@@ -5574,12 +5585,27 @@ const NASA_TEMAS = {
   ]
 };
 
-const NASA_BLACKLIST=["astronaut","cosmonaut","crew member","crew members"," crew ","portrait","spacewalk","extravehicular","eva ","press conference","group photo","photograph beside","poses beside","poses with","poses for","smiling","waves to","walks to","stands beside","stands in front","sits in","sits at","administrator","director of","engineer ","technician","flight controllers","mission control room","selfie","training exercise","suits up","suiting up","students","visit to","tour of","award ceremony","meeting with","spacesuit fitting","handshake","interview with","poses in front","speaks","speaking","addresses","audience","classroom","volunteers","staff photo","team photo"];
-const NASA_NO_FOTO=/\b(diagram|illustration|drawing|render|rendering|artist|artistic|concept|animation|infographic|logo|patch|model|simulation|visualization|map|chart|graphic|mosaic diagram)\b/;
-const NASA_NO_TEMA=/\b(nebula|galaxy|galaxies|deep field|telescope|rocket|launch|spacecraft assembly|mars|jupiter|saturn|venus|mercury|uranus|neptune|pluto|asteroid|comet)\b/;
+const NASA_BLACKLIST=["astronaut","cosmonaut","crew member","crew members"," crew ","portrait","spacewalk","extravehicular","eva ","press conference","group photo","photograph beside","poses beside","poses with","poses for","smiling","waves to","walks to","stands beside","stands in front","sits in","sits at","administrator","director of","engineer ","technician","flight controllers","mission control room","selfie","training exercise","suits up","suiting up","students","visit to","tour of","award ceremony","meeting with","spacesuit fitting","handshake","interview with","poses in front","speaks","speaking","addresses","audience","classroom","volunteers","staff photo","team photo","preflight","prelaunch","clean room","festival","environmental test","thermal vacuum","vibration test","being assembled","assembly facility","integration and test","flight spare","engineering model","instrument at nasa","goddard space flight center"];
+// "artist"/"artists" sin \b final: así también atrapa "artist's", "artists" (plural) y "artistic".
+const NASA_NO_FOTO=/\b(diagram|illustration|drawing|render|rendering|artist|artists|artistic|concept|animation|infographic|logo|patch|model|simulation|visualization|maps?|mapping|chart|graphic|mosaic diagram|radar|radargram|topography|topographic|weather report|gravity anomaly|gravity gradient|gravity field)\b/;
+const NASA_NO_TEMA=/\b(nebula|galaxy|galaxies|deep field|telescope|star cluster|constellation|rocket|launch|spacecraft assembly|jupiter|saturn|venus|mercury|uranus|neptune|pluto|asteroid|comet)\b/;
+// Modismo astronómico muy común: "N veces el tamaño de la luna llena" para dar escala de algo
+// que no tiene nada que ver con la Luna (ej. un cúmulo estelar). Si aparece esta frase, no cuenta
+// como mención real de la Luna.
+const NASA_LUNA_COMO_UNIDAD=/\b(size|width|diameter|area)s?\s+of\s+(the\s+)?(full\s+)?moons?\b/;
+// Lunas de otros planetas (y anillos): se excluyen siempre, incluso al buscar Marte, porque
+// "moon"/"martian moon" hace que texto de Fobos/Deimos se cuele como si fuera la Luna terrestre.
+// "moons" en plural casi nunca refiere a la nuestra (la Tierra tiene una sola): en el catálogo
+// de NASA aparece para hablar de las lunas de otros planetas en general.
+const NASA_OTRAS_LUNAS=/\b(martian moon|moons? of (mars|jupiter|saturn|uranus|neptune|pluto)|moons\b|phobos|deimos|titan|europa|enceladus|ganymede|callisto|triton|charon|titania|oberon|miranda|ariel|umbriel|mimas|rhea|dione|tethys|iapetus|hyperion|nereid|proteus|ringplane|saturn'?s? rings?|dwarf planet)\b/;
+// Títulos "código de catálogo" sin ninguna palabra (ej. "ARC-2005-ACD05-0022-005", "sts098-713a-019"):
+// el match vino solo de la descripción/keywords, así que hay más riesgo de que la imagen no
+// corresponda a lo esperado. Se descartan por las dudas.
+const NASA_TITULO_OPACO=/^[a-z0-9][a-z0-9\-.]{2,}$/i;
 const NASA_TIERRA=/\b(earth|blue marble|terrestrial|orbital sunrise|orbital sunset|earthrise|earth limb|home planet)\b/;
 const NASA_LUNA=/\b(moon|lunar|earthrise|lunar horizon)\b/;
-const NASA_BG_KEY="cartera_nasa_bg_v2";
+const NASA_MARTE=/\b(mars|martian|red planet|olympus mons|valles marineris|gale crater|jezero crater|curiosity|perseverance|ingenuity)\b/;
+const NASA_BG_KEY="cartera_nasa_bg_v3";
 
 function nasaTextoDe(item){
   const d=item.data?.[0]||{};
@@ -5588,24 +5614,42 @@ function nasaTextoDe(item){
 }
 function nasaTienePersonas(txt){ return NASA_BLACKLIST.some(w=>txt.includes(w)); }
 
-function nasaCategoria(txt){
-  const tierra=NASA_TIERRA.test(txt);
-  const luna=NASA_LUNA.test(txt);
-  if(tierra&&luna) return "tierraLuna";
-  if(luna) return "luna";
-  if(tierra) return "tierra";
-  return null;
+// El título pesa mucho más que el resto del texto: la descripción larga de
+// NASA suele mencionar "Earth"/"Moon" de pasada aunque la foto sea de otra
+// cosa (ej. "muestras devueltas a la Tierra", programa "de la Luna a Marte"
+// en la bajada de casi cualquier nota sobre Perseverance). Por eso primero
+// se decide solo con el título, y el texto completo queda como respaldo
+// débil para cuando el título no alcanza.
+function nasaCategoria(titulo,txt){
+  const decidir=tOriginal=>{
+    // Se descarta antes el modismo "N veces el tamaño de la luna llena" para que
+    // no cuente como mención real de la Luna (ver NASA_LUNA_COMO_UNIDAD).
+    const t=tOriginal.replace(NASA_LUNA_COMO_UNIDAD,"");
+    const tierra=NASA_TIERRA.test(t);
+    const luna=NASA_LUNA.test(t);
+    const marte=NASA_MARTE.test(t);
+    // Tierra/Luna tienen prioridad sobre Marte si el texto menciona ambas cosas
+    // (ej. "Venus, Earth and Its Moon, and Mars"): sigue siendo una foto de
+    // Tierra/Luna aunque nombre Marte de paso.
+    if(tierra&&luna) return "tierraLuna";
+    if(luna) return "luna";
+    if(tierra) return "tierra";
+    if(marte) return "marte";
+    return null;
+  };
+  return decidir(titulo)||decidir(txt);
 }
 
 function nasaPesoCategoria(categoria){
-  if(categoria==="tierra") return 80;
+  if(categoria==="tierra") return 45;
   if(categoria==="luna") return 15;
+  if(categoria==="marte") return 35;
   if(categoria==="tierraLuna") return 5;
   return 0;
 }
 
 function elegirCategoriaNasa(candidatos){
-  const disponibles=["tierra","luna","tierraLuna"]
+  const disponibles=["tierra","luna","marte","tierraLuna"]
     .filter(cat=>candidatos.some(c=>c.categoria===cat));
 
   if(!disponibles.length) return null;
@@ -5681,13 +5725,15 @@ async function buscarFondoNasa(){
       for(const it of (resultado.data?.collection?.items||[])){
         const d=it.data?.[0];
         if(!d||d.media_type!=="image"||!d.nasa_id) continue;
+        if(NASA_TITULO_OPACO.test(String(d.title||"").trim())) continue;
 
         const texto=nasaTextoDe(it);
         if(nasaTienePersonas(texto)) continue;
         if(NASA_NO_FOTO.test(texto)) continue;
         if(NASA_NO_TEMA.test(texto)) continue;
+        if(NASA_OTRAS_LUNAS.test(texto)) continue;
 
-        const categoria=nasaCategoria(texto);
+        const categoria=nasaCategoria(String(d.title||"").toLowerCase(),texto);
         if(!categoria) continue;
 
         candidatos.push({
