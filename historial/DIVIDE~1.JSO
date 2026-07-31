@@ -1,0 +1,232 @@
+{
+ "_": "Dividendos de los ETF que respaldan los CEDEARs del benchmark. 'ex'=fecha ex-dividendo (NO la de pago): es el dia en que el precio cae. 'monto'=USD por accion del ETF. 'px'=precio del ETF en USD la rueda anterior a 'ex'. 'frac'=monto/px, que es LO UNICO que usa el motor: el CEDEAR esta en otra escala y un monto absoluto no se le puede sumar. frac es un hecho historico cerrado, no se recalibra. Si este archivo falta o no carga, el benchmark queda como retorno de PRECIO y la app lo declara.",
+ "_px": "px se derivo del cierre oficial del indice dividido un divisor por ETF (SPY=10.0246, QQQ=41.0928), calibrado contra el precio real del ETF en julio 2026, porque no se consiguio una serie publica de cierres del ETF. Un error de 1% en el divisor mueve el benchmark 0,01% anual: el efecto es de segundo orden porque frac ya es ~0,3% trimestral. Si aparece una serie real de cierres del ETF, recalcular px y frac.",
+ "actualizado": "2026-07-30",
+ "fuente": "S&P Global Market Intelligence (montos y fechas ex)",
+ "SPY": [
+  {
+   "ex": "2022-03-18",
+   "monto": 1.36601,
+   "px": 440.08,
+   "frac": 0.003104
+  },
+  {
+   "ex": "2022-06-17",
+   "monto": 1.57687,
+   "px": 365.78,
+   "frac": 0.004311
+  },
+  {
+   "ex": "2022-09-16",
+   "monto": 1.5964,
+   "px": 389.18,
+   "frac": 0.004102
+  },
+  {
+   "ex": "2022-12-16",
+   "monto": 1.7814,
+   "px": 388.62,
+   "frac": 0.004584
+  },
+  {
+   "ex": "2023-03-17",
+   "monto": 1.5062,
+   "px": 395.06,
+   "frac": 0.003813
+  },
+  {
+   "ex": "2023-06-16",
+   "monto": 1.63837,
+   "px": 441.5,
+   "frac": 0.003711
+  },
+  {
+   "ex": "2023-09-15",
+   "monto": 1.58317,
+   "px": 449.4,
+   "frac": 0.003523
+  },
+  {
+   "ex": "2023-12-15",
+   "monto": 1.90607,
+   "px": 470.8,
+   "frac": 0.004049
+  },
+  {
+   "ex": "2024-03-15",
+   "monto": 1.59494,
+   "px": 513.78,
+   "frac": 0.003104
+  },
+  {
+   "ex": "2024-06-21",
+   "monto": 1.75902,
+   "px": 545.97,
+   "frac": 0.003222
+  },
+  {
+   "ex": "2024-09-20",
+   "monto": 1.74553,
+   "px": 569.96,
+   "frac": 0.003063
+  },
+  {
+   "ex": "2024-12-20",
+   "monto": 1.96555,
+   "px": 585.27,
+   "frac": 0.003358
+  },
+  {
+   "ex": "2025-03-21",
+   "monto": 1.69553,
+   "px": 564.9,
+   "frac": 0.003001
+  },
+  {
+   "ex": "2025-06-20",
+   "monto": 1.76112,
+   "px": 596.62,
+   "frac": 0.002952
+  },
+  {
+   "ex": "2025-09-19",
+   "monto": 1.83111,
+   "px": 661.57,
+   "frac": 0.002768
+  },
+  {
+   "ex": "2025-12-19",
+   "monto": 1.99337,
+   "px": 675.81,
+   "frac": 0.00295
+  },
+  {
+   "ex": "2026-03-20",
+   "monto": 1.797,
+   "px": 659.03,
+   "frac": 0.002727
+  },
+  {
+   "ex": "2026-06-18",
+   "monto": 1.90352,
+   "px": 740.19,
+   "frac": 0.002572
+  }
+ ],
+ "QQQ": [
+  {
+   "ex": "2022-03-21",
+   "monto": 0.43369,
+   "px": 350.92,
+   "frac": 0.001236
+  },
+  {
+   "ex": "2022-06-21",
+   "monto": 0.5274,
+   "px": 274.16,
+   "frac": 0.001924
+  },
+  {
+   "ex": "2022-09-19",
+   "monto": 0.51856,
+   "px": 288.65,
+   "frac": 0.001797
+  },
+  {
+   "ex": "2022-12-19",
+   "monto": 0.65541,
+   "px": 273.62,
+   "frac": 0.002395
+  },
+  {
+   "ex": "2023-03-20",
+   "monto": 0.47223,
+   "px": 304.67,
+   "frac": 0.00155
+  },
+  {
+   "ex": "2023-06-20",
+   "monto": 0.50395,
+   "px": 367.07,
+   "frac": 0.001373
+  },
+  {
+   "ex": "2023-09-18",
+   "monto": 0.53555,
+   "px": 369.95,
+   "frac": 0.001448
+  },
+  {
+   "ex": "2023-12-18",
+   "monto": 0.80826,
+   "px": 404.53,
+   "frac": 0.001998
+  },
+  {
+   "ex": "2023-12-27",
+   "monto": 0.21584,
+   "px": 410.74,
+   "frac": 0.000525
+  },
+  {
+   "ex": "2024-03-18",
+   "monto": 0.57345,
+   "px": 433.37,
+   "frac": 0.001323
+  },
+  {
+   "ex": "2024-06-24",
+   "monto": 0.7615,
+   "px": 479.41,
+   "frac": 0.001588
+  },
+  {
+   "ex": "2024-09-23",
+   "monto": 0.67686,
+   "px": 481.63,
+   "frac": 0.001405
+  },
+  {
+   "ex": "2024-12-23",
+   "monto": 0.83466,
+   "px": 518.08,
+   "frac": 0.001611
+  },
+  {
+   "ex": "2025-03-24",
+   "monto": 0.71571,
+   "px": 480.72,
+   "frac": 0.001489
+  },
+  {
+   "ex": "2025-06-23",
+   "monto": 0.59111,
+   "px": 526.28,
+   "frac": 0.001123
+  },
+  {
+   "ex": "2025-09-22",
+   "monto": 0.69395,
+   "px": 599.28,
+   "frac": 0.001158
+  },
+  {
+   "ex": "2025-12-22",
+   "monto": 0.79408,
+   "px": 616.8,
+   "frac": 0.001287
+  },
+  {
+   "ex": "2026-03-23",
+   "monto": 0.73282,
+   "px": 581.57,
+   "frac": 0.00126
+  },
+  {
+   "ex": "2026-06-22",
+   "monto": 0.81349,
+   "px": 739.94,
+   "frac": 0.001099
+  }
+ ]
+}
