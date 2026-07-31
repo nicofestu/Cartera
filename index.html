@@ -68,11 +68,12 @@ body::after{
   background-image:var(--nasa-bg,none);
   background-size:cover;
   background-position:center;
-  filter:brightness(.48) saturate(.82) contrast(1.04);
+  filter:brightness(.3) saturate(.55) contrast(.95);
   opacity:0;
   transition:opacity 1.8s var(--ease);
 }
-body.has-nasa-bg::after{opacity:.31}
+body.has-nasa-bg::after{opacity:.22}
+body.has-nasa-bg::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(180deg,rgba(5,5,5,.35),rgba(5,5,5,.6))}
 .wrap{max-width:1720px;margin:0 auto;padding:0 28px}
 a{color:var(--cool);text-decoration:none;transition:color .16s var(--ease)}
 a:hover{color:#C8E0FF}
@@ -732,6 +733,7 @@ td .op-v{color:var(--down)}
 .subtab:hover{color:var(--white);background:rgba(255,255,255,.04)}
 .subtab.active{color:var(--white);background:var(--cool-soft);border-color:rgba(135,188,255,.35)}
 .subtab.active::after{display:none}
+.subtab{border:0}
 .mkt-bar{display:flex;align-items:center;gap:13px;margin-bottom:18px;flex-wrap:wrap}
 .mkt-bar input{max-width:320px}
 .mkt-ts,.mkt-foot{
@@ -895,7 +897,7 @@ footer b{color:var(--grey);font-weight:500}
 @media(max-width:700px){
   .wrap{padding:0 14px}
   body{font-size:13px}
-  body.has-nasa-bg::after{opacity:.34}
+  body.has-nasa-bg::after{opacity:.26}
   .status .wrap{height:48px}
   .st-cell{padding:0 14px}
   .st-live{padding-right:15px}
