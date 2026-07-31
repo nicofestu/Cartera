@@ -1267,43 +1267,78 @@ function expandirSerie(c){
 let SP500_HIST={}, NDX_HIST={};
 let SP500_FECHAS=[], NDX_FECHAS=[];
 // Cierres OFICIALES tal como vienen de indices.json, sin los días que agrega
-// después extenderIndicesConCedears(). Ver el bloque de la extensión.
+// después reconstruirBench(). Ver el bloque de la extensión.
 let SP500_OFI={}, NDX_OFI={};
-/* Factores de calibración: precio del CEDEAR × factor = nivel del índice.
-   Los valores de acá son el respaldo — si indices.json se puede leer, los
-   sobreescribe con los suyos, así recalibrar no obliga a tocar este archivo. */
-let SPY_K=573.68;
-let QQQ_K=778.32;
-let MACRO_K={"sp": 573.4, "ndx": 787.35, "dji": 1911.93, "rut": 96.066, "eem": 4.7905, "oro": 521.3, "plata": 6.413, "wti": 9.604};
+// Procedencia de cada tramo del benchmark: 'cedear' | 'oficial' | 'base'.
+let SP500_FUENTE={}, NDX_FUENTE={};
+/* ══════════════ Benchmark: motor sobre retornos del CEDEAR (§5) ══════════════
+   Antes el benchmark mezclaba dos fuentes de distinta naturaleza: cierres
+   oficiales del índice para el pasado, y el precio del CEDEAR convertido a
+   "puntos de índice" con un factor calibrado a mano (SPY_K/QQQ_K) para hoy.
+   Ese factor congelaba el ruido del día en que se calibró y lo arrastraba a
+   toda ventana corta. El 2026-07-30 el S&P 500 cerró +1,66% y la card mostró
+   −0,79%.
+
+   Ahora la serie se construye ENCADENANDO RETORNOS, nunca comparando niveles
+   de fuentes distintas:
+
+     1. CEDEAR en dólares — especie D (MEP) y, si ese día no operó, especie C
+        (CCL). Las dos puntas de un mismo cociente van SIEMPRE por la misma
+        vía: mezclar D con C adentro de una división lee el salto entre dos
+        mercados como movimiento de precio (§6.7).
+     2. Donde el CEDEAR no tiene cobertura, el índice oficial POR RETORNO, y
+        sólo si las DOS fechas existen literalmente en la serie. Acá no se usa
+        nivelEn(): rellenar hacia atrás no distingue "el mercado estuvo
+        cerrado" de "todavía no cargué ese día", y ése fue exactamente el bug.
+     3. Si ninguna de las dos resuelve el tramo, no se inventa: se arrastra la
+        referencia anterior y se sigue sin perder el hilo.
+
+   Los dividendos del ETF se componen en la fecha ex, desde
+   historial/dividendos.json. Se aplican en TODO tramo, venga del CEDEAR o del
+   índice: las dos fuentes son retornos de precio y las dos excluyen el
+   dividendo por igual. Componerlo sólo en los tramos del CEDEAR metería un
+   escalón falso justo en la frontera del empalme.
+
+   El nivel que se muestra es COSMÉTICO: toda la serie se construye arrancando
+   en 1 y al final se multiplica por una constante que la ancla al cierre
+   oficial de la primera fecha común. Una constante sobre todos los puntos se
+   cancela en cualquier cociente — no por convención, por álgebra.
+
+   Sin dividendos.json el benchmark queda como retorno de PRECIO y se declara.
+   Sin datos/precios/ ni indices.json, no se dibuja la línea (§1.5). */
+
+const PRECIO_BASE="https://raw.githubusercontent.com/nicofestu/Cartera/main/datos/precios/";
+const BENCH_TICKERS=["SPY","SPYD","SPYC","QQQ","QQQD","QQQC"];
+// Series del archivo histórico de bolsar (2023-01-02 → 2026-07-24), por ticker.
+let BENCH_SERIES={};
+// "SPY"|"QQQ" -> [{ex,frac}] ordenado por ex. Vacío = benchmark de precio.
+let DIVIDENDOS={}, BENCH_DIV_OK=false;
 let BENCH_LISTO=false, _benchP=null;
 function cargarBenchmarks(){
   if(_benchP) return _benchP;
   _benchP=(async()=>{
-    // Las dos descargas salen juntas: tasas.json no tiene por qué esperar a
-    // indices.json. cargar() espera a esta función antes de guardar el cierre
-    // del día, así que encadenarlas le sumaría una vuelta de red a ese camino.
+    // Todo sale junto: ninguna de estas descargas depende de las otras.
     const pTasas=getJSON(HIST_REPO_BASE+"tasas.json").catch(()=>null);
+    const pDiv=getJSON(HIST_REPO_BASE+"dividendos.json").catch(()=>null);
+    const pBench=Promise.all(BENCH_TICKERS.map(t=>
+      getJSON(PRECIO_BASE+"bench/"+t+".json").then(d=>[t,d]).catch(()=>[t,null])));
     try{
       const d=await getJSON(HIST_REPO_BASE+"indices.json");
-      // Los cierres OFICIALES se guardan aparte (SP500_OFI/NDX_OFI) porque
-      // SP500_HIST/NDX_HIST pueden llevar días agregados por
-      // extenderIndicesConCedears(); si no se conservara el original, cada
-      // recarga encadenaría derivados sobre derivados.
-      if(d?.sp500?.v?.length){ SP500_OFI=expandirSerie(d.sp500); SP500_HIST={...SP500_OFI}; SP500_FECHAS=Object.keys(SP500_HIST).sort(); }
-      if(d?.ndx?.v?.length){   NDX_OFI=expandirSerie(d.ndx);     NDX_HIST={...NDX_OFI};     NDX_FECHAS=Object.keys(NDX_HIST).sort(); }
-      const k=d?.calibracion;
-      if(k){
-        if(k.SPY_K>0) SPY_K=k.SPY_K;
-        if(k.QQQ_K>0) QQQ_K=k.QQQ_K;
-        if(k.MACRO_K) MACRO_K={...MACRO_K,...k.MACRO_K};
+      if(d?.sp500?.v?.length) SP500_OFI=expandirSerie(d.sp500);
+      if(d?.ndx?.v?.length)   NDX_OFI=expandirSerie(d.ndx);
+    }catch(e){ /* sin índice oficial: sólo queda el tramo que cubre el CEDEAR */ }
+    try{
+      for(const [t,d] of await pBench) if(d?.v?.length) BENCH_SERIES[t]=expandirSerie(d);
+    }catch(e){ /* sin archivo histórico: el CEDEAR sólo aporta lo que haya en historial/AAAA.json */ }
+    try{
+      const dv=await pDiv;
+      for(const k of ["SPY","QQQ"]){
+        const l=(dv?.[k]||[]).filter(x=>x&&typeof x.ex==="string"&&x.frac>0&&x.frac<0.5);
+        if(l.length) DIVIDENDOS[k]=l.slice().sort((a,b)=>a.ex.localeCompare(b.ex));
       }
-      BENCH_LISTO=SP500_FECHAS.length>0;
-      invalidarMemo(); // las series memoizadas se calcularon sin benchmark
-      // Si el historial público ya está en memoria, se completan acá mismo las
-      // ruedas que le falten a indices.json. Si todavía no llegó, lo hace
-      // cargarHistorialRemoto() al terminar: gana el que cierra último.
-      extenderIndicesConCedears();
-    }catch(e){ /* sin benchmark la app anda igual, solo sin la línea del índice */ }
+      BENCH_DIV_OK=!!(DIVIDENDOS.SPY||DIVIDENDOS.QQQ);
+    }catch(e){ /* sin dividendos: benchmark de precio, la UI lo dice */ }
+    reconstruirBench();
     try{
       const t=await pTasas;
       for(const k of ["usd","ars"]){
@@ -1313,14 +1348,13 @@ function cargarBenchmarks(){
           pasos:p.filter(x=>Array.isArray(x)&&typeof x[0]==="string"&&isFinite(x[1]))
                  .sort((a,b)=>a[0].localeCompare(b[0]))};
       }
-    }catch(e){ /* sin el archivo: dólares con los escalones de respaldo, pesos con tasa 0 */ }
+    }catch(e){ /* dólares con los escalones de respaldo, pesos con tasa 0 */ }
     return BENCH_LISTO;
   })();
   return _benchP;
 }
-// Nivel del índice en una fecha; si ese día no cotizó, toma el último cierre
-// previo. Búsqueda binaria: se consulta miles de veces dentro de los bucles
-// del backfill y del benchmark, y el escaneo lineal era O(n) por consulta.
+// Nivel en una fecha; si ese día no cotizó, el último cierre previo. Búsqueda
+// binaria: se consulta miles de veces dentro de los bucles del benchmark.
 function nivelEn(hist,fechas,f){
   if(hist[f]!=null) return hist[f];
   let lo=0,hi=fechas.length-1,r=null;
@@ -1332,9 +1366,8 @@ function nivelEn(hist,fechas,f){
 }
 const sp500En=f=>nivelEn(SP500_HIST,SP500_FECHAS,f);
 const ndxEn=f=>nivelEn(NDX_HIST,NDX_FECHAS,f);
-// Fecha del cierre que nivelEn() termina usando para `f` (o null si no hay
-// ninguno anterior). Misma búsqueda binaria; la necesita benchPts para saber
-// CUÁN VIEJO es el dato con el que estaría comparando.
+// Fecha del cierre que nivelEn() termina usando para `f`. La necesita benchPts
+// para saber CUÁN VIEJO es el dato con el que estaría comparando.
 function fechaNivelEn(fechas,f){
   let lo=0,hi=fechas.length-1,r=null;
   while(lo<=hi){
@@ -1343,115 +1376,116 @@ function fechaNivelEn(fechas,f){
   }
   return r;
 }
-
-/* ══════════════ La serie oficial se atrasa; el CEDEAR no ══════════════
-   historial/indices.json se edita A MANO (el Action solo escribe
-   historial/AAAA.json), así que normalmente le faltan las últimas ruedas.
-   Y nivelEn() no puede distinguir "ese día el mercado estuvo cerrado" de
-   "ese día todavía no lo cargué": en los dos casos devuelve el último cierre
-   que tenga. Con la serie atrasada, la card "vs. S&P 500" del período "Hoy"
-   terminaba comparando el nivel EN VIVO contra el cierre de varias ruedas
-   antes — y así podía mostrar el índice bajando un día en que subió.
-
-   Los días que faltan sí están, todos los días hábiles y en automático, en
-   historial/AAAA.json: el CEDEAR SPY y su variante en dólares SPYD (ídem
-   QQQ/QQQD). No son el índice, pero su VARIACIÓN diaria en dólares lo sigue
-   de cerca. Se encadena esa variación sobre el último cierre oficial y se
-   completan los días faltantes.
-
-   Es una aproximación y conviene decirlo: el CEDEAR es un mercado chico, con
-   su propio horario de cierre, así que cada día encadenado suma unas décimas
-   de error de seguimiento. Pero es un error CHICO Y ACOTADO frente al que
-   reemplaza (comparar contra un cierre de varios días antes, que llega a dar
-   el signo cambiado), y desaparece solo apenas se actualiza indices.json,
-   porque los cierres oficiales siempre pisan a los derivados.
-
-   Importante: acá NO interviene SPY_K/QQQ_K. Todo son cocientes entre dos
-   precios del mismo CEDEAR, así que el factor de calibración se cancela. Eso
-   saca del cálculo del retorno un error que además crece con el tiempo: el
-   ETF reparte dividendos y el índice no, así que la relación precio→índice
-   se corre sola unos puntos por año y cualquier calibración vieja se
-   traducía en un retorno inventado sobre ventanas cortas. */
-// Precio del CEDEAR en dólares en una fecha del historial público, por el
-// camino pedido: "D" = el ticker en dólares (SPYD), "A" = el ticker en pesos
-// dividido el MEP de ese día. Nunca se mezclan los dos caminos dentro de un
-// mismo cociente: cada uno tiene su propio sesgo y el salto entre ambos se
-// leería como movimiento del índice.
-function cedearUsdHist(f,base,dolar,via){
-  const c=HIST_REMOTO&&HIST_REMOTO.precios[f]&&HIST_REMOTO.precios[f].cedear;
-  if(!c) return null;
-  const k=factorRatio(base,f); // por si hubo cambio de ratio en el medio
-  if(via==="D") return c[dolar]>0?c[dolar]*k:null;
-  const mep=mepHistorial(f);
-  return (c[base]>0&&mep>0)?c[base]*k/mep:null;
-}
-function cedearUsdHoy(base,dolar,via){
-  const p=ESTADO&&ESTADO.preciosCedears; if(!p) return null;
-  const k=factorRatio(base,hoy());
-  const r=p[via==="D"?dolar:base];
-  const px=r&&(r.c||r.px_bid);
-  if(!(px>0)) return null;
-  if(via==="D") return px*k;
-  return ESTADO.MEP>0?px*k/ESTADO.MEP:null;
-}
-// Cociente creíble entre dos ruedas consecutivas. Fuera de esta banda no es
-// mercado: es un dato roto o un cambio de ratio no declarado, y se saltea.
+// Cociente creíble entre dos ruedas. Fuera de esta banda no es mercado: es un
+// dato roto o un cambio de ratio no declarado, y se saltea el tramo.
 const RATIO_OK=r=>r>0.8&&r<1.25;
-function extenderSerie(ofi,base,dolar){
-  const out={...ofi};
-  const fo=Object.keys(ofi).sort();
-  if(!fo.length||!HIST_REMOTO) return out;
-  const hoyF=hoy();
-  // Solo días ANTERIORES a hoy: el de hoy lo aporta nivelHoyEncadenado() con
-  // precios en vivo, y el historial público todavía no lo tiene cerrado.
-  const pend=Object.keys(HIST_REMOTO.precios).filter(f=>f>fo[fo.length-1]&&f<hoyF).sort();
-  let ref=fo[fo.length-1], nivel=ofi[ref];
-  if(!(nivel>0)) return out;
-  for(const f of pend){
-    let r=null;
-    for(const via of ["D","A"]){
-      const a=cedearUsdHist(ref,base,dolar,via), b=cedearUsdHist(f,base,dolar,via);
-      if(a>0&&b>0){ r=b/a; break; }
-    }
-    if(!RATIO_OK(r)) continue; // se sigue desde el mismo `ref`, sin perder el hilo
-    nivel*=r; out[f]=nivel; ref=f;
-  }
-  return out;
+/* Escala del PRECIO por cambio de ratio. factorRatio() devuelve 1 cuando el
+   usuario cargó el ajuste a mano como movimiento — correcto para sus tenencias,
+   pero acá estorba: el quiebre de escala de la serie de precios es un hecho del
+   mercado y no depende de qué registró el usuario. Sin esto, el tramo del
+   29/05/2026 (SPY ×3) daba un cociente de 0,33, RATIO_OK lo rechazaba y ese día
+   se perdía en silencio. */
+function factorRatioPrecio(ticker,f){
+  const ajs=ticker?AJUSTES_RATIO[ticker]:null;
+  if(!ajs) return 1;
+  let k=1; for(const a of ajs) if(a.fecha<=f) k*=a.factor;
+  return k;
 }
-// Se rehace cada vez que cambia alguna de las dos fuentes (el sello lo
-// detecta) y nunca encadena sobre lo ya derivado: siempre parte de *_OFI.
-let _SELLO_EXT=null;
-function extenderIndicesConCedears(){
-  if(!HIST_REMOTO||!SP500_FECHAS.length) return false;
-  const fh=Object.keys(HIST_REMOTO.precios).sort();
-  const sello=(fh[fh.length-1]||"")+"|"+Object.keys(SP500_OFI).length+"|"+Object.keys(NDX_OFI).length;
-  if(_SELLO_EXT===sello) return false;
-  _SELLO_EXT=sello;
-  SP500_HIST=extenderSerie(SP500_OFI,"SPY","SPYD"); SP500_FECHAS=Object.keys(SP500_HIST).sort();
-  NDX_HIST=extenderSerie(NDX_OFI,"QQQ","QQQD");     NDX_FECHAS=Object.keys(NDX_HIST).sort();
-  invalidarMemo(); // las series memoizadas se calcularon con el benchmark corto
-  if(ESTADO) render(); // ya se dibujó una vez con la serie corta: hay que repintar
+/* Precio del CEDEAR en DÓLARES en una fecha. Dos fuentes, en orden: el archivo
+   histórico de bolsar y, para las ruedas que ese archivo no alcanza (termina el
+   2026-07-24), historial/AAAA.json que escribe el Action. Nunca ARS dividido el
+   MEP: ese camino le metía al benchmark el ruido diario del dólar implícito. */
+function usdEn(t,f,base){
+  const a=BENCH_SERIES[t]&&BENCH_SERIES[t][f];
+  let px=(a>0)?a:null;
+  if(px===null){
+    const c=HIST_REMOTO&&HIST_REMOTO.precios[f]&&HIST_REMOTO.precios[f].cedear;
+    if(c&&c[t]>0) px=c[t];
+  }
+  return px===null?null:px*factorRatioPrecio(base,f);
+}
+function usdHoy(t,base){
+  const p=ESTADO&&ESTADO.preciosCedears; if(!p) return null;
+  const r=p[t], px=r&&(r.c||r.px_bid);
+  return px>0?px*factorRatioPrecio(base,hoy()):null;
+}
+// Producto de (1+frac) de los dividendos con fecha ex dentro de (a, b].
+function factorDiv(div,a,b){
+  let k=1; for(const d of div) if(d.ex>a&&d.ex<=b) k*=(1+d.frac);
+  return k;
+}
+/* Construye la serie de niveles sintéticos encadenando retornos. Devuelve
+   también la procedencia de cada tramo, para el diagnóstico. */
+function construirBench(ofi,base,tD,tC,divKey){
+  const cal=new Set(Object.keys(ofi||{}));
+  for(const t of [tD,tC]) for(const f in (BENCH_SERIES[t]||{})) cal.add(f);
+  if(HIST_REMOTO) for(const f in HIST_REMOTO.precios) cal.add(f);
+  const hoyF=hoy();
+  // Sólo días anteriores a hoy: el de hoy lo aporta nivelHoyEncadenado() con
+  // precios en vivo, y el cierre todavía no existe.
+  const fechas=[...cal].filter(f=>f<hoyF).sort();
+  if(fechas.length<2) return null;
+  const div=DIVIDENDOS[divKey]||[];
+  const out={}, src={};
+  let prev=null, nivel=1;
+  for(const f of fechas){
+    if(prev===null){ out[f]=nivel; src[f]="base"; prev=f; continue; }
+    let r=null, via=null;
+    for(const t of [tD,tC]){                       // D primero, C de respaldo
+      const a=usdEn(t,prev,base), b=usdEn(t,f,base);
+      if(a>0&&b>0){ const q=b/a; if(RATIO_OK(q)){ r=q; via="cedear"; break; } }
+    }
+    if(r===null&&ofi&&ofi[prev]>0&&ofi[f]>0){      // empalme por RETORNO
+      const q=ofi[f]/ofi[prev]; if(RATIO_OK(q)){ r=q; via="oficial"; }
+    }
+    if(r===null) continue;                          // se arrastra `prev`
+    nivel*=r*factorDiv(div,prev,f);
+    out[f]=nivel; src[f]=via; prev=f;
+  }
+  if(Object.keys(out).length<2) return null;
+  /* Ancla cosmética: una constante sobre TODA la serie, elegida para que la
+     primera fecha con cierre oficial coincida con ese cierre. Se cancela en
+     cualquier cociente; si no hay fecha común, queda en 1 y no se muestra
+     ningún nivel. */
+  let k=1;
+  if(ofi) for(const f of Object.keys(out)){ if(ofi[f]>0){ k=ofi[f]/out[f]; break; } }
+  if(k!==1) for(const f in out) out[f]*=k;
+  return {niveles:out,fuente:src};
+}
+// Se rehace cuando cambia alguna fuente. Nunca encadena sobre lo ya derivado:
+// siempre parte de los cierres oficiales y del archivo de precios.
+let _SELLO_BENCH=null;
+function reconstruirBench(){
+  const fh=HIST_REMOTO?Object.keys(HIST_REMOTO.precios).sort():[];
+  const sello=(fh[fh.length-1]||"")+"|"+Object.keys(SP500_OFI).length+"|"
+    +Object.keys(BENCH_SERIES).length+"|"+(BENCH_DIV_OK?1:0);
+  if(_SELLO_BENCH===sello) return false;
+  _SELLO_BENCH=sello;
+  const a=construirBench(SP500_OFI,"SPY","SPYD","SPYC","SPY");
+  const b=construirBench(NDX_OFI,"QQQ","QQQD","QQQC","QQQ");
+  if(a){ SP500_HIST=a.niveles; SP500_FECHAS=Object.keys(SP500_HIST).sort(); SP500_FUENTE=a.fuente; }
+  if(b){ NDX_HIST=b.niveles;   NDX_FECHAS=Object.keys(NDX_HIST).sort();     NDX_FUENTE=b.fuente; }
+  BENCH_LISTO=SP500_FECHAS.length>1;
+  invalidarMemo();            // las series memoizadas se calcularon sin benchmark
+  if(ESTADO) render();        // ya se dibujó una vez: hay que repintar
   return true;
 }
-// Nivel de HOY: el último cierre conocido movido por la variación en vivo del
-// CEDEAR desde ESE mismo día. Sin calibración de por medio.
-function nivelHoyEncadenado(hist,fechas,base,dolar,K){
+/* Nivel de HOY: el último nivel conocido movido por la variación en vivo del
+   CEDEAR desde ESE mismo día. Ya no hay respaldo por factor de calibración: si
+   no hay precio en vivo, se devuelve el último nivel (retorno 0 hoy), que es el
+   dato honesto en vez de un número derivado de una calibración vieja (§6.3). */
+function nivelHoyEncadenado(hist,fechas,base,tD,tC,divKey){
   if(!fechas.length) return null;
   const fU=fechas[fechas.length-1], nU=hist[fU];
-  if(nU>0&&ESTADO&&ESTADO.preciosCedears){
-    for(const via of ["D","A"]){
-      const a=cedearUsdHist(fU,base,dolar,via), b=cedearUsdHoy(base,dolar,via);
-      if(a>0&&b>0){ const r=b/a; if(RATIO_OK(r)) return nU*r; }
-    }
+  if(!(nU>0)) return null;
+  for(const t of [tD,tC]){
+    const a=usdEn(t,fU,base), b=usdHoy(t,base);
+    if(a>0&&b>0){ const r=b/a; if(RATIO_OK(r)) return nU*r*factorDiv(DIVIDENDOS[divKey]||[],fU,hoy()); }
   }
-  // Respaldo: el nivel absoluto vía factor de calibración — lo que hacía
-  // antes esta función. Se usa cuando historial/AAAA.json todavía no cargó.
-  const c=ESTADO&&ESTADO.preciosCedears&&ESTADO.preciosCedears[base];
-  if(c&&c.c>0&&ESTADO.MEP>0) return c.c/ESTADO.MEP*K;
-  return nU>0?nU:null;
+  return nU;
 }
-function sp500Hoy(){ return nivelHoyEncadenado(SP500_HIST,SP500_FECHAS,"SPY","SPYD",SPY_K); }
-function ndxHoy(){   return nivelHoyEncadenado(NDX_HIST,NDX_FECHAS,"QQQ","QQQD",QQQ_K); }
+function sp500Hoy(){ return nivelHoyEncadenado(SP500_HIST,SP500_FECHAS,"SPY","SPYD","SPYC","SPY"); }
+function ndxHoy(){   return nivelHoyEncadenado(NDX_HIST,NDX_FECHAS,"QQQ","QQQD","QQQC","QQQ"); }
 
 /* ── Tasa libre de riesgo, una por moneda ──────────────────────────────
    Sharpe y Sortino comparaban contra tasa 0. En dólares eso no es neutro
@@ -1550,8 +1584,8 @@ async function cargarHistorialRemoto(){
   HIST_REMOTO=Object.keys(precios).length?{precios,mepHist,mepFechas}:null;
   // Contraparte del disparo que hay en cargarBenchmarks(): recién con las dos
   // fuentes en memoria se pueden completar las ruedas que le falten a
-  // indices.json (ver extenderIndicesConCedears).
-  extenderIndicesConCedears();
+  // indices.json (ver reconstruirBench).
+  reconstruirBench();
   return HIST_REMOTO;
 }
 /* ══════════════ Cambios de ratio de CEDEARs (y splits) ══════════════
@@ -2922,7 +2956,7 @@ function initChartTooltip(d){
     else dotSp.style.display="none";
     let html=`<div class="tt-date">${fechaEnX(xFrac)}</div>`;
     if(retC!=null) html+=`<div class="tt-row"><span class="tt-dot" style="background:#FFFFFF"></span>Cartera <b class="${cls(retC)}">${sgn(retC*100)}</b></div>`;
-    if(retS!=null) html+=`<div class="tt-row"><span class="tt-dot" style="background:#8E8E8E"></span>S&amp;P 500 <b style="color:var(--grey)">${sgn(retS*100)}</b></div>`;
+    if(retS!=null) html+=`<div class="tt-row"><span class="tt-dot" style="background:#8E8E8E"></span>SPY (CEDEAR) <b style="color:var(--grey)">${sgn(retS*100)}</b></div>`;
     tip.innerHTML=html;
     const cr=card.getBoundingClientRect();
     tip.style.left=(clientX-cr.left)+"px";
@@ -3137,7 +3171,7 @@ function render(soloEstructura){
       <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}</div>
         <div class="chart-key">
           <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
-          ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
+          ${benchHoy!=null?`<span><i class="ln spy"></i>SPY (CEDEAR) <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
         </div></div>
       <svg id="rend-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera">
         ${ticks.map(t=>`<line x1="0" y1="${t.y}" x2="${W}" y2="${t.y}" stroke="#161616" stroke-width="1"/>`).join("")}
@@ -3218,7 +3252,7 @@ function render(soloEstructura){
         <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda} · ${rango.etiqueta}</div>
           <div class="chart-key">
             <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
-            ${benchHoy!=null?`<span><i class="ln spy"></i>S&amp;P 500 <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
+            ${benchHoy!=null?`<span><i class="ln spy"></i>SPY (CEDEAR) <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
           </div></div>
         <svg id="rend-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Rendimiento acumulado de la cartera en el período elegido">
           ${ticks.map(t=>`<line x1="0" y1="${t.y}" x2="${W}" y2="${t.y}" stroke="#161616" stroke-width="1"/>`).join("")}
@@ -3292,12 +3326,12 @@ function render(soloEstructura){
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
             <div class="d">anualizado · ${diasTot}d</div></div>`,
-          benchTot!=null?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
+          benchTot!=null?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
             <div class="v ${cls(retTot-benchTot)}">${sgn((retTot-benchTot)*100)}</div>
-            <div class="d">índice ${sgn(benchTot*100)} con tus mismos aportes</div></div>`:null,
-          benchNdx!=null?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
+            <div class="d">benchmark ${sgn(benchTot*100)} con tus mismos aportes</div></div>`:null,
+          benchNdx!=null?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
             <div class="v ${cls(retTot-benchNdx)}">${sgn((retTot-benchNdx)*100)}</div>
-            <div class="d">índice ${sgn(benchNdx*100)} con tus mismos aportes</div></div>`:null,
+            <div class="d">benchmark ${sgn(benchNdx*100)} con tus mismos aportes</div></div>`:null,
           `<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(baseCap)}</div>
             <div class="d">plata que entró de afuera</div></div>`,
@@ -3334,7 +3368,7 @@ function render(soloEstructura){
         notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
-          <b>vs. S&amp;P 500</b> y <b>vs. Nasdaq 100</b>: simulan tus mismos aportes (fechas y montos) comprando cada índice, valuados hoy vía los CEDEARs SPY y QQQ. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
+          <b>vs. SPY (CEDEAR)</b> y <b>vs. QQQ (CEDEAR)</b>: simulan tus mismos aportes (fechas y montos) comprando el CEDEAR, medido por su cotización en dólares en BYMA (especie D, con la C de respaldo)${BENCH_DIV_OK?" y con los dividendos del ETF reinvertidos en la fecha ex":", <b>sin</b> dividendos: falta historial/dividendos.json, así que es retorno de precio"}. Donde el CEDEAR no tiene cobertura se empalma la variación del índice oficial. <b>No coincide con el índice del noticiero</b>: mide el instrumento que se puede comprar acá, con su propio horario y su error de seguimiento. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
       }
     } else {
       // Cualquier otro período: retorno time-weighted sobre la serie diaria
@@ -3378,12 +3412,12 @@ function render(soloEstructura){
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
             <div class="d">anualizado · ${r.dias}d nominales</div></div>`,
-          bSP?`<div class="perf"><div class="k">vs. S&amp;P 500</div>
+          bSP?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
             <div class="v ${cls(r.ret-bSP.ret)}">${sgn((r.ret-bSP.ret)*100)}</div>
-            <div class="d">índice ${sgn(bSP.ret*100)} en el período</div></div>`:null,
-          bNDX?`<div class="perf"><div class="k">vs. Nasdaq 100</div>
+            <div class="d">benchmark ${sgn(bSP.ret*100)} en el período</div></div>`:null,
+          bNDX?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
             <div class="v ${cls(r.ret-bNDX.ret)}">${sgn((r.ret-bNDX.ret)*100)}</div>
-            <div class="d">índice ${sgn(bNDX.ret*100)} en el período</div></div>`:null,
+            <div class="d">benchmark ${sgn(bNDX.ret*100)} en el período</div></div>`:null,
           aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(aportePer)}</div>
             <div class="d">entró durante el período</div></div>`:null,
@@ -3937,7 +3971,13 @@ const MKT_MENU=[
 
 function panelMacro(){
   const cd=s=>buscarFila(MKT.cedear,s);
-  const lvl=(r,k,dec=0)=>r?fmt(r.c*k,dec):null;
+  /* Los niveles de este panel salían de multiplicar el CEDEAR por un factor
+     calibrado a mano (MACRO_K), desviado hasta 2% al 2026-07-30. Un número de
+     display equivocado sigue siendo un número equivocado, así que se muestra
+     sólo la variación, que viene directo de la fuente (§5, panel macro). */
+  const mcVar=(nom,vr,extra)=>`<div class="mc"><div class="mc-k">${nom}</div>
+    <div class="mc-v ${cls(vr)}">${vr!=null?sgn(vr):"—"}</div>
+    <div class="mc-b">${extra||""}</div></div>`;
   const mc=(nom,val,vr,extra)=>`<div class="mc"><div class="mc-k">${nom}</div>
     <div class="mc-v">${val??"—"}</div>
     <div class="mc-b">${vr!=null?`<span class="mc-var ${cls(vr)}">${sgn(vr)}</span>`:""}${extra||""}</div></div>`;
@@ -3953,14 +3993,14 @@ function panelMacro(){
 
   // Bloque global: índices y commodities, todo vía CEDEARs en vivo
   const global=[
-    mc("S&P 500",lvl(cd("SPYD"),MACRO_K.sp),cd("SPYD")?.pct_change),
-    mc("Nasdaq",lvl(cd("QQQD"),MACRO_K.ndx),cd("QQQD")?.pct_change),
-    mc("Dow Jones",lvl(cd("DIAD"),MACRO_K.dji),cd("DIAD")?.pct_change),
-    mc("Russell 2000",lvl(cd("IWMD"),MACRO_K.rut),cd("IWMD")?.pct_change),
-    mc("Emergentes",lvl(cd("EEMD"),MACRO_K.eem,2),cd("EEMD")?.pct_change),
-    mc("Oro",lvl(cd("GLDD"),MACRO_K.oro),cd("GLDD")?.pct_change),
-    mc("Plata",lvl(cd("SLVD"),MACRO_K.plata,1),cd("SLVD")?.pct_change),
-    mc("WTI",lvl(cd("USOD"),MACRO_K.wti,1),cd("USOD")?.pct_change),
+    mcVar("S&P 500",cd("SPYD")?.pct_change),
+    mcVar("Nasdaq",cd("QQQD")?.pct_change),
+    mcVar("Dow Jones",cd("DIAD")?.pct_change),
+    mcVar("Russell 2000",cd("IWMD")?.pct_change),
+    mcVar("Emergentes",cd("EEMD")?.pct_change),
+    mcVar("Oro",cd("GLDD")?.pct_change),
+    mcVar("Plata",cd("SLVD")?.pct_change),
+    mcVar("WTI",cd("USOD")?.pct_change),
   ];
 
   // Bloque local: Merval + las más negociadas del día
