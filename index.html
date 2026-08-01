@@ -2623,10 +2623,98 @@ function metricasPorPosicion(pos){
     const motivo=ret!=null?null
       :val==null?"sin precio de hoy"
       :"costo promedio en cero (canje, compra sin precio, o una venta sin su compra previa)";
+    // `gan` unifica con el campo que ya usa metricasPorPosicionEnPeriodo y
+    // posicionesCerradasEnPeriodo: la tabla de Histórico completo antes
+    // calculaba p.valM-p.costoM al vuelo en el render, que da NaN para una
+    // fila cerrada (valM/costoM son null ahí) — con el campo ya resuelto acá
+    // las tres fuentes de filas hablan el mismo idioma y el render no tiene
+    // que saber de dónde vino cada una.
+    const gan=(val!=null&&costo>0)?val-costo:null;
     return {...p,desde,dias,ret,motivo,tna:(ret!=null&&dias)?anualizar(ret,dias):null,
-      costoM:costo,valM:val,contrib:null};
+      costoM:costo,valM:val,gan,contrib:null};
   });
 }
+
+// Posiciones que tuviste en cartera durante la ventana (desde,hasta] pero que
+// HOY ya no existen (las vendiste del todo) — derivarPosiciones() solo
+// devuelve tenencias vivas, así que sin esto una posición cerrada
+// desaparecía del cuadro de Rendimientos apenas la liquidabas, aunque
+// hubiera estado en cartera (y hubiera rendido, bien o mal) durante el
+// período que estás mirando. Encargo original: "quiero ver cómo me fue con
+// CADA activo que tuve en cartera en el período, no solo los que sigo
+// teniendo".
+//
+// El retorno se mide SOLO con lo que pasó adentro de la ventana: plata
+// obtenida en las ventas que caen en (desde,hasta] contra el costo promedio
+// ponderado de esas unidades en el momento de cada venta (mismo cálculo que
+// ya usa realizadoEnPeriodo(), pero por posición y como cociente en vez de
+// diferencia). Si ya la habías empezado a vender antes de `desde`, esa parte
+// no cuenta acá — misma filosofía que el resto de esta pantalla: medir nada
+// más que la ventana elegida, no el historial completo de la posición.
+//
+// Solo entran posiciones con cantidad ~0 al llegar a `hasta` (cerradas para
+// ESE momento) que además tuvieron alguna venta dentro de la ventana. Si hoy
+// (fecha real, no `hasta`) la posición está viva de nuevo — la cerraste
+// adentro del período pero la volviste a comprar después — se excluye acá:
+// la sigue midiendo metricasPorPosicionEnPeriodo del lado de las vivas, con
+// su propia limitación conocida (mide desde la primera compra de toda la
+// vida, no desde la reapertura). Ampliar eso a ciclos de compra/venta
+// múltiples por posición es una mejora aparte, no la de este pedido.
+function posicionesCerradasEnPeriodo(desde,hasta,existentes){
+  const vivas=new Set(existentes.map(p=>p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta));
+  const map={};
+  const movs=[...DATOS.movimientos].filter(m=>m.tipo!=="cash"&&m.fecha<=hasta)
+    .sort((a,b)=>a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
+  for(const m of movs){
+    const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
+    if(vivas.has(key)) continue; // sigue viva hoy: la mide el otro camino, no duplicar
+    const div=divisorDe(m.tipo);
+    const bruto=m.precio/div*m.cantidad;
+    const cARS=m.moneda==="USD"?bruto*m.mep:bruto;
+    const cUSD=m.moneda==="USD"?bruto:bruto/m.mep;
+    if(!map[key]) map[key]={tipo:m.tipo,ticker:m.ticker,cuenta:m.cuenta,fondo:m.fondo,
+      qty:0,costARS:0,costUSD:0,ventaARS:0,ventaUSD:0,costoVendidoARS:0,costoVendidoUSD:0,
+      ultimaVenta:null,primeraCompra:null};
+    const p=map[key];
+    if(m.op==="compra"){
+      p.qty+=m.cantidad; p.costARS+=cARS; p.costUSD+=cUSD;
+      if(!p.primeraCompra) p.primeraCompra=m.fecha;
+    } else {
+      const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
+      if(m.fecha>desde){ // venta DENTRO de la ventana (el filtro de arriba ya garantiza <=hasta)
+        p.ventaARS+=cARS; p.ventaUSD+=cUSD;
+        p.costoVendidoARS+=aARS*m.cantidad; p.costoVendidoUSD+=aUSD*m.cantidad;
+        p.ultimaVenta=m.fecha;
+      }
+      p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
+    }
+  }
+  return Object.values(map)
+    .filter(p=>Math.abs(p.qty)<1e-6&&p.ultimaVenta) // cerrada a `hasta` Y con venta dentro de la ventana
+    .map(p=>{
+      const venta=VISTA==="ARS"?p.ventaARS:p.ventaUSD;
+      const costoVendido=VISTA==="ARS"?p.costoVendidoARS:p.costoVendidoUSD;
+      const ret=costoVendido>1e-9?venta/costoVendido-1:null;
+      return {tipo:p.tipo,ticker:p.ticker,cuenta:p.cuenta,fondo:p.fondo,cerrada:true,
+        desde:p.primeraCompra,desdeCompra:p.primeraCompra,
+        dias:p.primeraCompra?diasEntre(p.primeraCompra,p.ultimaVenta):null,
+        ret,motivo:ret==null?"costo promedio en cero (canje o venta sin su compra previa)":null,
+        valHoy:null,valM:null,costoM:null,
+        gan:ret!=null?venta-costoVendido:null,contrib:null};
+    });
+}
+// Orden de la tabla "Retorno por activo" cuando hay posiciones cerradas
+// mezcladas con las vivas: las vivas medibles van primero (mejor a peor,
+// igual que ordenPorRet), después las cerradas del período (también mejor a
+// peor entre sí), y al final las que no se pudieron medir. Las cerradas NO
+// entran al ranking de "mejor/peor posición" de las cards de arriba —esas
+// cards siguen usando metMed/metPMed, calculadas antes de mezclar— pero sí
+// aparecen en la tabla completa, con su propio tag.
+const ordenConCerradas=(a,b)=>{
+  const grupo=x=>x.ret==null?2:(x.cerrada?1:0);
+  const ga=grupo(a),gb=grupo(b);
+  return ga!==gb?ga-gb:(b.ret-a.ret);
+};
 
 /* ══════════════ Carga de precios y valuación ══════════════ */
 async function cargar(){
@@ -3704,8 +3792,17 @@ function render(soloEstructura){
             tir:vNDX==null?null:tirDe(0,fPrim,flujosTot,vNDX,hoy()),gan:vNDX==null?null:vNDX-netoTot},
         ],tituloMoneda);
         met.forEach(p=>{ p.contrib=(baseCap>0&&p.ret!=null)?(p.valM-p.costoM)/baseCap:null; });
-        // Mejor/peor solo entre las medibles: si no, "peor posición" termina
-        // siendo una fila sin retorno calculable.
+        // Posiciones que vendiste del todo en algún momento del historial:
+        // sin esto, la tabla "Retorno por activo" de Histórico completo solo
+        // mostraba lo que seguís teniendo hoy, como si nunca hubieras tenido
+        // nada más. restarDias(fPrim,1) como `desde` para que cuente CUALQUIER
+        // venta de toda la vida de la cartera (mismo truco que flujosTot).
+        const cerradasTot=posicionesCerradasEnPeriodo(restarDias(fPrim,1),hoy(),pos);
+        cerradasTot.forEach(p=>{ p.contrib=(baseCap>0&&p.gan!=null)?p.gan/baseCap:null; });
+        const metTabla=[...met,...cerradasTot].sort(ordenConCerradas);
+        // Mejor/peor solo entre las medibles y VIVAS: si no, "peor posición"
+        // termina siendo una fila sin retorno calculable, y las cerradas no
+        // compiten en este ranking (ver ordenConCerradas).
         const mejor=metMed[0], peor=metMed[metMed.length-1];
         const realTot=VISTA==="ARS"?realARS:realUSD;
         const monedaLblTot=tituloMoneda;
@@ -3746,15 +3843,15 @@ function render(soloEstructura){
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
             <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
           </tr></thead><tbody>
-          ${(()=>{const maxC=Math.max(...met.map(x=>Math.abs(x.contrib||0)))||1;
-            return met.map(p=>{
+          ${(()=>{const maxC=Math.max(...metTabla.map(x=>Math.abs(x.contrib||0)))||1;
+            return metTabla.map(p=>{
             const w=Math.abs(p.contrib||0)/maxC*100;
             const medible=p.ret!=null;
-            return `<tr${medible?"":' style="opacity:.72"'}><td class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}</td>
+            return `<tr${medible?"":' style="opacity:.72"'}><td class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}${p.cerrada?' <span class="cta-tag" style="opacity:.6">cerrada</span>':""}</td>
             <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
             <td>${p.desde||"—"}</td><td>${p.dias||"—"}</td>
             <td>${p.costoM>0?money(p.costoM):"—"}</td><td>${p.valM==null?"—":money(p.valM)}</td>
-            <td class="${medible?cls(p.valM-p.costoM):""}">${medible?signoMoney(p.valM-p.costoM):"—"}</td>
+            <td class="${p.gan!=null?cls(p.gan):""}">${p.gan!=null?signoMoney(p.gan):"—"}</td>
             <td class="${cls(p.ret)}">${medible?sgn(p.ret*100):"—"}</td>
             <td class="l">${medible
               ?`<div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
@@ -3765,6 +3862,7 @@ function render(soloEstructura){
           <b>TIR anual</b> = la tasa efectiva anual que iguala el valor presente de todos tus flujos (aportes con signo negativo, retiros y valor actual con signo positivo). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso: si aportaste fuerte justo antes de una caída, el retorno total puede ser positivo y la TIR bajar igual. Los dos números describen la misma cartera y responden preguntas distintas — cómo rindieron los activos, y cómo rindió tu plata.<br>
           El <b>resultado en plata</b> sigue siendo el hecho verificable contra el extracto: valor actual + retirado − aportado. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
+          Las filas con el tag <b>cerrada</b> son posiciones que vendiste del todo: su retorno sale de comparar lo que obtuviste en la venta contra el costo promedio de lo vendido, no contra un precio de mercado de hoy (no tienen). Van al final y no entran en "mejor/peor posición".
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. SPY (CEDEAR)</b> y <b>vs. QQQ (CEDEAR)</b>: simulan tus mismos aportes (fechas y montos) comprando el CEDEAR, medido por su cotización en dólares en BYMA (especie D, con la C de respaldo)${BENCH_DIV_OK?" y con los dividendos del ETF reinvertidos en la fecha ex":", <b>sin</b> dividendos: falta historial/dividendos.json, así que es retorno de precio"}. Donde el CEDEAR no tiene cobertura se empalma la variación del índice oficial. <b>No coincide con el índice del noticiero</b>: mide el instrumento que se puede comprar acá, con su propio horario y su error de seguimiento. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
       }
@@ -3785,6 +3883,13 @@ function render(soloEstructura){
         // con el motivo, pero no pueden ganar ni perder un ranking).
         const metPMed=metP.filter(x=>x.ret!=null);
         const mejor=metPMed[0], peor=metPMed[metPMed.length-1];
+        // Posiciones que tuviste en cartera durante ESTA ventana pero que hoy
+        // ya no existen (las vendiste del todo): sin esto, elegir un año
+        // anterior en el selector de período solo mostraba lo que seguís
+        // teniendo hoy, no lo que realmente pasó por la cartera ese año.
+        // Ventana EFECTIVA (r.desde/r.hasta), igual criterio que mejor/peor.
+        const cerradasP=posicionesCerradasEnPeriodo(r.desde,r.hasta,pos);
+        const metPTabla=[...metP,...cerradasP].sort(ordenConCerradas);
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(r.desde,r.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
         const monedaLbl=tituloMoneda;
@@ -3871,21 +3976,22 @@ function render(soloEstructura){
         metaHtml=`<span>${r.diasReales} día${r.diasReales>1?"s":""} · ${r.desde} → ${r.hasta}`
           +(desalineado?` <span style="color:var(--grey)">(pedido: ${rango.desdeNominal||rango.desde} → ${rango.hasta})</span>`:"")
           +`</span>`;
-        if(metP.length){
+        if(metP.length||cerradasP.length){
           // Contribución relativa al valor total de las posiciones con precio
           // en esta ventana (no al capital aportado, que no aplica igual acá:
           // una posición puede venir de antes del período).
           const baseCapP=metP.reduce((s,p)=>s+(p.valHoy||0),0)||totalBase;
           metP.forEach(p=>{ p.contrib=(baseCapP>0&&p.gan!=null)?p.gan/baseCapP:null; });
-          const maxC=Math.max(...metP.map(x=>Math.abs(x.contrib||0)))||1;
+          cerradasP.forEach(p=>{ p.contrib=(baseCapP>0&&p.gan!=null)?p.gan/baseCapP:null; });
+          const maxC=Math.max(...metPTabla.map(x=>Math.abs(x.contrib||0)))||1;
           tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
               <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
               <th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
             </tr></thead><tbody>
-            ${metP.map(p=>{
+            ${metPTabla.map(p=>{
               const w=p.contrib!=null?Math.abs(p.contrib)/maxC*100:0;
               const medible=p.ret!=null;
-              return `<tr${medible?"":' style="opacity:.72"'}><td class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}</td>
+              return `<tr${medible?"":' style="opacity:.72"'}><td class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}${p.cerrada?' <span class="cta-tag" style="opacity:.6">cerrada</span>':""}</td>
               <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
               <td>${p.desdeCompra||"—"}</td><td>${p.dias||"—"}</td>
               <td>${p.valHoy==null?"—":money(p.valHoy)}</td>
@@ -3910,7 +4016,10 @@ function render(soloEstructura){
           miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
           tarde), también en ${monedaLbl} y no contra tu costo de compra original. El cuadro lista <b>todas</b> las
           posiciones en cartera: las que no se pueden medir en esta ventana aparecen igual, con "—" en Retorno y el
-          motivo escrito en la última columna (antes se descartaban sin avisar). La columna "Desde" conserva siempre la fecha de compra,
+          motivo escrito en la última columna (antes se descartaban sin avisar). También lista, con el tag <b>cerrada</b>
+          y al final de la tabla, las posiciones que vendiste del todo en algún momento dentro de esta ventana aunque hoy
+          ya no las tengas: su retorno compara lo obtenido en la venta contra el costo promedio de lo vendido, no contra
+          un precio de mercado (no tienen). No entran en "mejor/peor posición". La columna "Desde" conserva siempre la fecha de compra,
           aunque el cálculo respete el período elegido. Los días con menos de
           US$${NAV_MIN_USD} de cartera no se cuentan — con saldo casi en cero cualquier movimiento chico da un
           % sin sentido.${notaBaseCCL?"<br><br>"+notaBaseCCL:""}</div>`;
