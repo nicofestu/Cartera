@@ -768,12 +768,6 @@ td .op-v{color:var(--down)}
 .periodo-bar{display:flex;align-items:center;gap:12px;margin-bottom:17px}
 .periodo-bar .periodo-lbl{color:var(--grey);font-family:var(--din);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.12em}
 .periodo-bar select{width:auto;min-width:205px;padding:11px 16px;background:var(--surf);font-size:14px;font-weight:600}
-.rend-top{display:grid;grid-template-columns:275px 1fr;gap:16px;align-items:start;margin-bottom:25px}
-.rend-left{display:flex;flex-direction:column;gap:16px}
-.rend-left .periodo-bar{margin-bottom:0}
-.rend-hoy{border-radius:var(--r)}
-.rend-hoy .v{font-size:24px}
-.rend-right .chart-card{margin-bottom:0}
 
 /* MODALS / FORMS */
 .modal-bg{
@@ -883,12 +877,10 @@ footer b{color:var(--grey);font-weight:500}
 /* RESPONSIVE */
 @media(max-width:1080px){
   .macro-grid{grid-template-columns:repeat(4,1fr)!important}
-  .rend-top{grid-template-columns:245px 1fr}
 }
 @media(max-width:820px){
   .perf-grid{grid-template-columns:repeat(2,1fr)!important}
   .perf-grid>:last-child:nth-child(odd){grid-column:span 2}
-  .rend-top{grid-template-columns:1fr}
 }
 @media(max-width:760px){
   .alloc{grid-template-columns:1fr}
@@ -2826,7 +2818,13 @@ function metricasRiesgo(serie){
 }
 
 // Bloque de UI: Riesgo, scoped al mismo período que eligió el usuario arriba.
-function seccionRiesgo(secIdxRef,rango){
+// Devuelve las piezas de la sección Riesgo por separado (en vez de un solo
+// string armado) para que el llamador pueda intercalarlas en el orden que
+// quiera: las cards van entre "cuadros de rendimiento" y "retorno por
+// activo", pero el texto explicativo (hintHtml) se guarda oculto — queda en
+// el documento, listo para una futura sección de Ayuda/Disclaimers, pero no
+// se muestra en el flujo normal.
+function seccionRiesgo(rango){
   const card=(k,val,det,cls2)=>`<div class="perf"><div class="k">${k}</div>
     <div class="v ${cls2||""}">${val}</div><div class="d">${det||""}</div></div>`;
   const serieFull=serieDiaria();
@@ -2834,51 +2832,51 @@ function seccionRiesgo(secIdxRef,rango){
 
   const m=metricasRiesgo(serie);
   const MIN_VOL=20, MIN_BETA=20;
-  let html=`<div class="section-h"><span class="idx">${secIdxRef}</span><h2>Riesgo</h2>
-    <span style="margin-left:auto">${m?.n||0} tramos${m?.dias?` · ${m.dias} días`:""} · ${rango.etiqueta}</span></div>`;
+  const meta=`${m?.n||0} tramos${m?.dias?` · ${m.dias} días`:""} · ${rango.etiqueta}`;
   if(!m||m.n<MIN_VOL){
-    html+=`<div class="chart-warn">Con ${m?.n||0} cierre${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
-      todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
-      ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
-      más largo, o esperá a que se acumulen más días.</div>`;
-  } else {
-    const cardsR=[
-      card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío por rueda, anualizado"),
-      card("Retorno anualizado",m.retAnual==null?"—":sgn(m.retAnual*100),
-        `sobre ${m.dias} días de calendario`,m.retAnual==null?"":cls(m.retAnual)),
-      card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
-        m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,1)}% anual) por unidad de riesgo`
-               :"retorno por unidad de riesgo · tasa libre 0",
-        m.sharpe==null?"":cls(m.sharpe)),
-      card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),
-        m.conRF?"idem, solo penaliza lo que quedó abajo de la tasa":"idem, solo penaliza caídas",
-        m.sortino==null?"":cls(m.sortino)),
-      card("Máx. caída",fmt(m.mdd*100,1)+"%","peor bajada desde un pico",m.mdd<0?"down":""),
-      m.beta==null
-        ? card("Beta vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
-        : card("Beta vs S&amp;P",fmt(m.beta,2),"cuánto se mueve por cada 1% del índice"),
-      m.correl==null
-        ? card("Correlación S&amp;P","—","sin datos suficientes")
-        : card("Correlación S&amp;P",fmt(m.correl,2),"1 = se mueven igual, 0 = sin relación"),
-    ];
-    html+=filasGrid(cardsR,"perf-grid",4);
-    html+=`<div class="hint" style="margin-top:12px;line-height:1.9">
-      Calculado con ${m.n} cierres de ${rango.etiqueta.toLowerCase()}, que cubren ${m.dias} días de calendario, y anualizado a 252 ruedas.
-      Los tramos no son todos de un día: cuando falta un cierre en el medio, ese punto abarca varios días y se
-      pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
-      si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada.
-      ${m.conRF
-        ? `Sharpe y Sortino descuentan la <b>${m.tasaNombre}</b>, que sobre este período equivale a
-           <b>${fmt(m.rfAnual*100,1)}%</b> anual: es lo que habría rendido la plata sin correr riesgo, así que lo que
-           puntúa es el excedente por encima de eso y no el retorno a secas (${sgn(m.retAnual*100)} anualizado
-           → ${sgn(m.excAnual*100)} de exceso). Sortino usa esa misma tasa como piso en lugar de cero.
-           ${m.cobRF<0.999?`<b>Ojo:</b> solo el ${fmt(m.cobRF*100,0)}% de los días del período tiene tasa cargada;
-             el resto se descuenta a 0, así que los dos ratios salen algo más altos de lo que corresponde.`:""}`
-        : `Sharpe y Sortino usan tasa libre de riesgo <b>0</b>, porque todavía no se pudo leer la serie de tasas
-           (historial/tasas.json). Mientras tanto conviene leerlos como comparación relativa entre períodos más que
-           como un valor absoluto.`}</div>`;
+    return {meta,
+      warnHtml:`<div class="chart-warn">Con ${m?.n||0} cierre${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
+        todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
+        ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
+        más largo, o esperá a que se acumulen más días.</div>`,
+      cardsHtml:"", hintHtml:""};
   }
-  return html;
+  const cardsR=[
+    card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío por rueda, anualizado"),
+    card("Retorno anualizado",m.retAnual==null?"—":sgn(m.retAnual*100),
+      `sobre ${m.dias} días de calendario`,m.retAnual==null?"":cls(m.retAnual)),
+    card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
+      m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,1)}% anual) por unidad de riesgo`
+             :"retorno por unidad de riesgo · tasa libre 0",
+      m.sharpe==null?"":cls(m.sharpe)),
+    card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),
+      m.conRF?"idem, solo penaliza lo que quedó abajo de la tasa":"idem, solo penaliza caídas",
+      m.sortino==null?"":cls(m.sortino)),
+    card("Máx. caída",fmt(m.mdd*100,1)+"%","peor bajada desde un pico",m.mdd<0?"down":""),
+    m.beta==null
+      ? card("Beta vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
+      : card("Beta vs S&amp;P",fmt(m.beta,2),"cuánto se mueve por cada 1% del índice"),
+    m.correl==null
+      ? card("Correlación S&amp;P","—","sin datos suficientes")
+      : card("Correlación S&amp;P",fmt(m.correl,2),"1 = se mueven igual, 0 = sin relación"),
+  ];
+  const cardsHtml=filasGrid(cardsR,"perf-grid",4);
+  const hintHtml=`<div class="hint" style="margin-top:12px;line-height:1.9">
+    Calculado con ${m.n} cierres de ${rango.etiqueta.toLowerCase()}, que cubren ${m.dias} días de calendario, y anualizado a 252 ruedas.
+    Los tramos no son todos de un día: cuando falta un cierre en el medio, ese punto abarca varios días y se
+    pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
+    si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada.
+    ${m.conRF
+      ? `Sharpe y Sortino descuentan la <b>${m.tasaNombre}</b>, que sobre este período equivale a
+         <b>${fmt(m.rfAnual*100,1)}%</b> anual: es lo que habría rendido la plata sin correr riesgo, así que lo que
+         puntúa es el excedente por encima de eso y no el retorno a secas (${sgn(m.retAnual*100)} anualizado
+         → ${sgn(m.excAnual*100)} de exceso). Sortino usa esa misma tasa como piso en lugar de cero.
+         ${m.cobRF<0.999?`<b>Ojo:</b> solo el ${fmt(m.cobRF*100,0)}% de los días del período tiene tasa cargada;
+           el resto se descuenta a 0, así que los dos ratios salen algo más altos de lo que corresponde.`:""}`
+      : `Sharpe y Sortino usan tasa libre de riesgo <b>0</b>, porque todavía no se pudo leer la serie de tasas
+         (historial/tasas.json). Mientras tanto conviene leerlos como comparación relativa entre períodos más que
+         como un valor absoluto.`}</div>`;
+  return {meta, warnHtml:"", cardsHtml, hintHtml};
 }
 
 /* Reparte un conjunto de cards en filas que quedan siempre completas: con pocas
@@ -3070,9 +3068,10 @@ function render(soloEstructura){
     <div class="card"><div class="k">Asignación · Cuenta</div>${barra(allocCta)}</div></div>`;
 
   // ══ Selector de período (Rendimientos) ══ se calcula temprano porque
-  // controla tanto el gráfico de abajo como las cards de rendimiento.
-  // Va en la columna izquierda, junto con el rendimiento de hoy; el gráfico
-  // queda más chico, a la derecha (ver ensamblado de .rend-top más abajo).
+  // controla tanto el gráfico como las cards de rendimiento y de riesgo.
+  // Se muestra solo (ver más abajo); el orden completo de la pestaña queda
+  // armado más adelante: selector → cuadros de rendimiento → riesgo →
+  // retorno por activo → gráfico.
   let rango=null, serieT=null, periodoBarHtml="", fPrimGlobal=null, ytdEsHistorico=false;
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
     const anioActual=hoy().slice(0,4);
@@ -3264,21 +3263,20 @@ function render(soloEstructura){
         t0,span,mn,rg,W,H,pl,pt,pb};
     }
   }
-  // Ensamblado: columna izquierda (selector de período) y columna derecha
-  // más angosta con el gráfico. La card de rendimiento de hoy ya no se
-  // repite acá: queda solo en Inicio, que es donde siempre está visible.
+  // Orden de la pestaña Rendimientos: selector de período, cuadros de
+  // rendimiento, métricas de riesgo, retorno por activo y por último el
+  // gráfico comparativo (ver ensamblado completo más abajo). El selector va
+  // solo acá arriba; el resto se arma después de calcular cardsPerf/riesgo.
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    html+=`<div class="rend-top">
-      <div class="rend-left">${periodoBarHtml}</div>
-      <div class="rend-right">${chartHtml}</div>
-    </div>`;
+    html+=periodoBarHtml;
   }
 
   let secIdx=0;
-  // ══ RENDIMIENTOS ══
+  // ══ RENDIMIENTOS ══ (cardsPerf/tablaHtml/notaHtml se usan más abajo, en
+  // "Retorno por activo" y en los disclaimers ocultos — de ahí que estén
+  // declarados afuera del if, en vez de adentro como antes)
+  let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
   if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
-    let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
-
     if(PERIODO==="todo"||ytdEsHistorico){
       // Camino de siempre: retorno money-weighted sobre el capital aportado
       // total, con la tabla detallada por posición desde su primera compra.
@@ -3476,17 +3474,45 @@ function render(soloEstructura){
       }
     }
 
+    // 1) Cuadros de rendimiento, primero, debajo del selector de período.
     html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Rendimientos</h2>
       <span style="margin-left:auto">${metaHtml}</span></div>`;
     html+=cardsPerf
-      ? filasGrid(cardsPerf,"perf-grid",4)+tablaHtml+notaHtml
+      ? filasGrid(cardsPerf,"perf-grid",4)
       : `<div class="chart-warn">No hay datos suficientes todavía para calcular ${rango.etiqueta.toLowerCase()}.</div>`;
+  }
+  // 2) Métricas de riesgo, después de los cuadros de rendimiento. Depende
+  // solo de los snapshots diarios (no de tener posiciones abiertas): se
+  // muestra igual aunque la cartera esté cerrada o algún precio no cargue.
+  // El texto explicativo (hintHtml) se guarda oculto, no se descarta — ver
+  // el bloque "disclaimers ocultos" más abajo.
+  let riesgoHintHtml="";
+  if(TAB==="rendimientos"&&DATOS.movimientos.length){
+    const riesgo=seccionRiesgo(rangoPeriodo(PERIODO));
+    html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Riesgo</h2>
+      <span style="margin-left:auto">${riesgo.meta}</span></div>`;
+    html+=riesgo.warnHtml+riesgo.cardsHtml;
+    riesgoHintHtml=riesgo.hintHtml;
+  }
+  // 3) Retorno por activo: la tabla detallada, período por período. La nota
+  // explicativa (notaHtml) también se guarda oculta, no se descarta.
+  if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length&&cardsPerf){
+    html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Retorno por activo</h2></div>`;
+    html+=tablaHtml;
     html+=diagnosticoSerieHtml(serieT,pos);
   }
-  // Riesgo depende de los snapshots diarios, no de tener posiciones abiertas:
-  // se muestra igual aunque la cartera esté cerrada o algún precio no cargue.
+  // Textos explicativos de Rendimientos y Riesgo: quedan guardados en el
+  // documento (ocultos con display:none) para cuando se arme una sección de
+  // Ayuda/Disclaimers — no se descartan, solo no se muestran acá.
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    html+=seccionRiesgo(String(++secIdx).padStart(2,"0"),rangoPeriodo(PERIODO));
+    html+=`<div class="disclaimers-ocultos" style="display:none">
+      <div data-disclaimer="rendimientos">${notaHtml||""}</div>
+      <div data-disclaimer="riesgo">${riesgoHintHtml}</div>
+    </div>`;
+  }
+  // 4) Gráfico comparativo, por último.
+  if(TAB==="rendimientos"&&chartHtml){
+    html+=chartHtml;
   }
 
   // Tablas de posiciones
