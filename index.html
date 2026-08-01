@@ -475,14 +475,8 @@ select option{background:#0A0C0E;color:var(--white)}
 .perf{position:relative;padding:21px;border-radius:var(--r)}
 .perf .v{font-size:20px;font-weight:600;line-height:1;letter-spacing:-.01em}
 .perf.hero .v{font-size:28px;font-weight:700}
-.perf .d-money{margin-top:7px;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1}
 .perf-note{max-width:880px;margin-top:14px;color:var(--grey-dim);font-size:11px;line-height:1.9}
 .perf-tbl td{padding:13px 12px}
-.cmp-tbl tbody tr.cmp-yo td{font-weight:700;background:rgba(255,255,255,.028)}
-.cmp-tbl .cmp-na{color:var(--grey-dim)}
-.cmp-tbl tfoot td{padding-top:14px;color:var(--grey);font-size:11px;line-height:1.75;font-weight:400;border-top:1px solid var(--hair)}
-.periodo-bar .periodo-hint{color:var(--grey-dim);font-size:11px;line-height:1.5}
-@media(max-width:900px){.periodo-bar .periodo-hint{display:none}}
 .contrib-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
 .contrib-bar{height:7px;min-width:1px;border-radius:99px}
 .contrib-bar.pos{background:var(--up)}
@@ -773,6 +767,12 @@ td .op-v{color:var(--down)}
 .periodo-bar{display:flex;align-items:center;gap:12px;margin-bottom:17px}
 .periodo-bar .periodo-lbl{color:var(--grey);font-family:var(--din);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.12em}
 .periodo-bar select{width:auto;min-width:205px;padding:11px 16px;background:var(--surf);font-size:14px;font-weight:600}
+.rend-top{display:grid;grid-template-columns:275px 1fr;gap:16px;align-items:start;margin-bottom:25px}
+.rend-left{display:flex;flex-direction:column;gap:16px}
+.rend-left .periodo-bar{margin-bottom:0}
+.rend-hoy{border-radius:var(--r)}
+.rend-hoy .v{font-size:24px}
+.rend-right .chart-card{margin-bottom:0}
 
 /* MODALS / FORMS */
 .modal-bg{
@@ -882,10 +882,12 @@ footer b{color:var(--grey);font-weight:500}
 /* RESPONSIVE */
 @media(max-width:1080px){
   .macro-grid{grid-template-columns:repeat(4,1fr)!important}
+  .rend-top{grid-template-columns:245px 1fr}
 }
 @media(max-width:820px){
   .perf-grid{grid-template-columns:repeat(2,1fr)!important}
   .perf-grid>:last-child:nth-child(odd){grid-column:span 2}
+  .rend-top{grid-template-columns:1fr}
 }
 @media(max-width:760px){
   .alloc{grid-template-columns:1fr}
@@ -1005,7 +1007,7 @@ footer b{color:var(--grey);font-weight:500}
       <div><label>Operación</label><select id="m-op" onchange="opChanged()">
         <option value="compra">Compra</option><option value="venta">Venta</option>
         <option value="deposito">Depósito de dinero</option><option value="retiro">Retiro de dinero</option>
-        <option value="dividendo">Dividendo / renta cobrada</option><option value="gasto">Gasto / comisión / impuesto</option>
+        <option value="dividendo">Dividendo / renta cobrada</option><option value="gasto">Gasto / comisión / impuesto</option><option value="caucion_colocadora">Caución colocadora (presto dinero)</option><option value="caucion_tomadora">Caución tomadora (tomo dinero prestado)</option>
       </select></div>
       <div id="f-tipo"><label>Tipo</label>
         <select id="m-tipo" onchange="tipoChanged()">
@@ -1044,28 +1046,32 @@ footer b{color:var(--grey);font-weight:500}
       </div>
       <div id="f-cant"><label>Cantidad</label><input type="number" id="m-cant" step="any" min="0" placeholder="Nominales / cuotapartes">
         <div class="hint" id="h-cant"></div></div>
-      <div><label id="lbl-precio">Precio unitario</label><input type="number" id="m-precio" step="any" min="0">
+      <div id="f-precio"><label id="lbl-precio">Precio unitario</label><input type="number" id="m-precio" step="any" min="0">
         <div class="hint" id="h-precio">Bonos/letras/ONs: c/100 VN · FCI: VCP por 1.000 cp</div></div>
-      <div><label>Moneda del precio</label><select id="m-moneda" onchange="monedaChanged()"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
-      <div id="f-poolusd" style="display:none"><label>Tipo de dólar</label><select id="m-poolusd">
-          <option value="MEP">Dólar MEP (local)</option>
-          <option value="CCL">Dólar CCL (cable/exterior)</option>
-        </select>
-        <div class="hint">De qué custodia sale o entra la plata: local (se vende/compra al MEP) o exterior (se vende/compra al CCL). Son dos pesos distintos, no una forma de mirar el mismo saldo.</div></div>
+      <div id="f-moneda"><label>Moneda del precio</label><select id="m-moneda" onchange="monedaChanged()"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
       <div class="full" id="f-maxret" style="display:none">
         <div class="maxrow">
           <span class="txt" id="maxret-lbl">—</span>
           <button type="button" class="btn mini" id="maxret-btn" onclick="usarMaxRetiro()">Usar máximo</button>
         </div>
       </div>
-      <div><label>Total operación</label><input id="m-total" disabled></div>
-      <div><label>Liquidación</label><select id="m-liq">
+      <div id="f-total"><label>Total operación</label><input id="m-total" disabled></div>
+      <div id="f-liq"><label>Liquidación</label><select id="m-liq">
           <option value="">Plazo habitual del instrumento</option>
           <option value="0">Contado inmediato (T+0)</option>
           <option value="1">T+1 (24 hs)</option>
           <option value="2">T+2 (48 hs)</option>
         </select>
         <div class="hint">Cuándo queda disponible la plata. No cambia el NAV ni el rendimiento: solo separa la liquidez entre disponible y T + 1.</div></div>
+      <div class="full" id="f-caucion" style="display:none">
+        <div class="f-grid" style="grid-template-columns:repeat(3,1fr);padding:0;border:none">
+          <div><label>Monto (capital)</label><input type="number" id="m-cau-monto" step="any" min="0" oninput="calcCaucion()"></div>
+          <div><label>Tasa TNA %</label><input type="number" id="m-cau-tasa" step="any" min="0" oninput="calcCaucion()"></div>
+          <div><label>Plazo (días)</label><input type="number" id="m-cau-plazo" step="1" min="1" oninput="calcCaucion()"></div>
+        </div>
+        <div style="margin-top:12px"><label>Moneda</label><select id="m-cau-moneda" onchange="calcCaucion()"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+        <div class="hint" id="cau-preview" style="margin-top:12px;line-height:1.7">Completá fecha, monto, tasa y plazo para ver el vencimiento y el interés.</div>
+      </div>
     </div>
     <div class="f-err" id="m-err"></div>
     <div class="modal-actions">
@@ -1898,41 +1904,18 @@ function fechaLiqDe(m){ return sumarHabiles(m.fecha,plazoLiq(m)); }
    Se lleva la misma cuenta en las dos bases (ARS y USD al MEP de cada
    operación), igual que el resto del motor de rendimiento. Devuelve un hito
    por FECHA: el último estado de cada día. */
-// cA/cU (y apor/aporU/ret/retU) son la base BIMONETARIA de siempre: la MISMA
-// plata valuada en dos unidades (pesos, y su equivalente en dólares al MEP de
-// cada operación) — no dos tenencias reales. Un depósito en pesos también
-// mueve cU (a cuánto equivalían esos pesos en dólares ese día); eso es
-// intencional, es lo que usa el motor de rendimiento, y no se toca acá.
-//
-// Lo nuevo son nA/nM/nC: TRES tenencias nativas de verdad, independientes
-// entre sí — pesos, dólar en custodia local (MEP) y dólar en custodia
-// exterior (CCL) — que solo se mueven con movimientos EN esa moneda/pool
-// (`m.moneda`, y si es USD, `m.poolUSD`; default "MEP" en movimientos viejos,
-// de antes de que existiera la distinción). Comprar un CEDEAR en pesos no
-// toca el dólar CCL, y viceversa: son plata separada de verdad, no la misma
-// plata mirada con otro tipo de cambio. Una compra SÍ lleva el mismo tope que
-// cA/cU ("no pagar con lo que no hay": si la cuenta no tiene cargado el
-// depósito o la transferencia que financió la compra, no se muestra la
-// posición en rojo por un agujero de carga — se tapa en 0, igual que ya hace
-// el resto de la app). Retiro y gasto NO tienen tope, a propósito, igual que
-// cA/cU: ahí un negativo sí es información real (se retiró más de lo
-// cargado). El tope es solo contable para esta UI: no toca apor/aporU, que
-// siguen siendo el a/u bimonetario de siempre. Solo las consume la UI de
-// Liquidez, que lee hitosCaja() en vivo — no tocan snapshots guardados ni la
-// reconstrucción histórica.
 function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
-  const cA={}, cU={}, nA={}, nM={}, nC={};
+  const cA={}, cU={};
   let apor=0,aporU=0,ret=0,retU=0;
   const hitos=[], eventosAporte=[], liquidaciones=[];
   for(const m of movs){
     const k=m.cuenta||"—";
-    if(cA[k]==null){ cA[k]=0; cU[k]=0; nA[k]=0; nM[k]=0; nC[k]=0; }
-    const esUSD=m.moneda==="USD", esCCL=esUSD&&m.poolUSD==="CCL";
+    if(cA[k]==null){ cA[k]=0; cU[k]=0; }
     const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
-    const a=esUSD?bruto*m.mep:bruto;
-    const u=esUSD?bruto:bruto/m.mep;
-    let dA=0,dU=0,dN=0; // dN: efecto neto NATIVO (pesos o dólares, según m.moneda) de este movimiento
+    const a=m.moneda==="USD"?bruto*m.mep:bruto;
+    const u=m.moneda==="USD"?bruto:bruto/m.mep;
+    let dA=0,dU=0; // efecto NETO de este movimiento sobre la caja de esa cuenta
     if(m.op==="compra"){
       // Math.max(0,…) sobre el mínimo: con caja negativa, Math.min devolvía un
       // número negativo y la compra terminaba SUMANDO efectivo e inflando el
@@ -1940,29 +1923,21 @@ function construirHitosCaja(){
       dA=-Math.max(0,Math.min(cA[k],a)); dU=-Math.max(0,Math.min(cU[k],u));
       apor+=a+dA; aporU+=u+dU;
       if(u+dU>1e-9) eventosAporte.push({fecha:m.fecha,usd:u+dU});
-      const nP=esUSD?(esCCL?nC:nM):nA;
-      dN=-Math.max(0,Math.min(nP[k],bruto));
     }
-    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); dN=bruto; }
-    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; dN=-bruto; }
+    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); }
+    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; }
     // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
     // retenciones, impuestos): mueven la caja pero NO son capital que entró o
     // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
     // el denominador del retorno; contarlos como retiro lo infla al revés.
-    else if(m.op==="gasto"){ dA=-a; dU=-u; dN=-bruto; }
-    else { dA=a; dU=u; dN=bruto; } // venta y dividendo acreditan caja y no son aporte externo
+    else if(m.op==="gasto"){ dA=-a; dU=-u; }
+    else { dA=a; dU=u; } // venta y dividendo acreditan caja y no son aporte externo
     cA[k]+=dA; cU[k]+=dU;
-    const pool=esUSD?(esCCL?"C":"M"):"A";
-    (pool==="A"?nA:pool==="M"?nM:nC)[k]+=dN;
     const fl=fechaLiqDe(m);
-    if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,pool,n:dN});
+    if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,u:dU});
     const caja=Object.values(cA).reduce((s,x)=>s+x,0);
     const cajaU=Object.values(cU).reduce((s,x)=>s+x,0);
-    const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU},
-      ctaPesos:{...nA},ctaMep:{...nM},ctaCcl:{...nC},
-      pesos:Object.values(nA).reduce((s,x)=>s+x,0),
-      usdMep:Object.values(nM).reduce((s,x)=>s+x,0),
-      usdCcl:Object.values(nC).reduce((s,x)=>s+x,0)};
+    const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU}};
     const prev=hitos[hitos.length-1];
     if(prev&&prev.fecha===m.fecha) hitos[hitos.length-1]=snap; else hitos.push(snap);
   }
@@ -1992,20 +1967,14 @@ function ajusteManualARS(mep){
 function cajaTotalEnFecha(hitos,fecha,mep){ return cajaEnFecha(hitos,fecha)+ajusteManualARS(mep); }
 // Cuánto de la caja de cada cuenta todavía no liquidó a la fecha `f`. Con
 // signo: una venta de hoy suma, una compra de hoy que se paga mañana resta.
-// `a`/`ctaU`/`tot`/`totU` son la base bimonetaria de siempre (compat); `pesos`
-// /`mep`/`ccl` son el desglose nativo por posición real, para la UI de Liquidez.
 function cajaALiquidar(hitos,f){
-  const cta={},ctaU={},ctaPesos={},ctaMep={},ctaCcl={};
-  let tot=0,totU=0,pesos=0,mep=0,ccl=0;
+  const cta={},ctaU={}; let tot=0,totU=0;
   for(const L of (hitos.liquidaciones||[])){
     if(L.fecha>f||L.hasta<=f) continue;
-    cta[L.cuenta]=(cta[L.cuenta]||0)+L.a; tot+=L.a;
-    const u=L.pool==="A"?0:L.n; ctaU[L.cuenta]=(ctaU[L.cuenta]||0)+u; totU+=u;
-    if(L.pool==="A"){ ctaPesos[L.cuenta]=(ctaPesos[L.cuenta]||0)+L.n; pesos+=L.n; }
-    else if(L.pool==="M"){ ctaMep[L.cuenta]=(ctaMep[L.cuenta]||0)+L.n; mep+=L.n; }
-    else { ctaCcl[L.cuenta]=(ctaCcl[L.cuenta]||0)+L.n; ccl+=L.n; }
+    cta[L.cuenta]=(cta[L.cuenta]||0)+L.a; ctaU[L.cuenta]=(ctaU[L.cuenta]||0)+L.u;
+    tot+=L.a; totU+=L.u;
   }
-  return {cta,ctaU,ctaPesos,ctaMep,ctaCcl,tot,totU,pesos,mep,ccl};
+  return {cta,ctaU,tot,totU};
 }
 
 /* Normaliza los cierres ya guardados a la definición única de caja.
@@ -2093,21 +2062,6 @@ const sgn=n=> (n>0?"+":"")+fmt(n,2)+"%";
 const hoy=()=> new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD local
 async function getJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error(url.split("/").slice(-2).join("/")+" HTTP "+r.status); return r.json(); }
 
-// Convierte un monto nativo de un pool de caja (ARS, dólar MEP o dólar CCL) a
-// la moneda de otro. Puente siempre por pesos: un dólar CCL a "vista MEP" es
-// lo que rendiría venderlo al CCL de hoy y comprar dólar MEP con esos pesos
-// (mismo criterio que ya usa ajusteCta en render() para el ajuste manual).
-// Devuelve null si falta la cotización necesaria (p.ej. sin CCL publicado).
-function convMoneda(monto,origen,destino,MEP,CCL){
-  if(monto==null||!isFinite(monto)) return null;
-  if(origen===destino) return monto;
-  const rate=p=>p==="ARS"?1:p==="MEP"?MEP:CCL;
-  const rOrigen=rate(origen), rDestino=rate(destino);
-  if(!(rOrigen>0)||!(rDestino>0)) return null;
-  if(destino==="ARS") return monto*rOrigen;
-  if(origen==="ARS") return monto/rDestino;
-  return monto*rOrigen/rDestino;
-}
 function setMoneda(m){
   VISTA=m;
   document.getElementById("btn-ars").classList.toggle("active",m==="ARS");
@@ -2256,138 +2210,6 @@ function diasEntre(a,b){ return Math.max(1,Math.round((new Date(b+"T12:00")-new 
 function diasCal(a,b){ return Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5); }
 function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null; }
 
-/* ══════════════ TIR (XIRR) ══════════════
-   anualizar() eleva un retorno acumulado a 365/días: eso es una tasa efectiva
-   anual (CAGR), y durante mucho tiempo la app la rotuló "TNA equivalente", que
-   es doblemente incorrecto — no es nominal y no sale de una TIR. Peor todavía
-   en histórico, donde el retorno de base era money-weighted: elevarlo a
-   365/días asume que TODA la plata estuvo desde el primer día, y no estuvo.
-
-   La TIR resuelve las dos cosas de una: es la tasa que hace que el valor
-   presente de los flujos (aportes con signo negativo, retiros y valor final
-   con signo positivo) dé cero, así que cada peso pesa por el tiempo que
-   estuvo realmente invertido. Por construcción con base 365 ya es EFECTIVA
-   ANUAL — "TIR" y "TIREA" son el mismo número, por eso se muestra uno solo.
-
-   Se resuelve por bisección y no por Newton-Raphson: Newton diverge cuando
-   hay un aporte grande sobre una cartera chica (la derivada se aplana y el
-   paso se va a −100%), que es exactamente el caso de una cartera que arranca.
-   La bisección es más lenta y no le importa: 200 iteraciones sobre una
-   función de unas pocas decenas de flujos es imperceptible, y no puede
-   divergir mientras haya cambio de signo en el intervalo. */
-function xirr(cf){
-  if(!cf||cf.length<2) return null;
-  const v=cf.map(c=>c.monto);
-  // Sin al menos un flujo de cada signo no hay raíz: no existe tasa que
-  // convierta plata que solo entró en plata que solo salió.
-  if(!v.some(x=>x>1e-9)||!v.some(x=>x<-1e-9)) return null;
-  const f0=cf[0].fecha;
-  const t=cf.map(c=>diasCal(f0,c.fecha)/365);
-  const npv=r=>{
-    const b=1+r;
-    if(b<=1e-9) return NaN;
-    let sum=0;
-    for(let i=0;i<v.length;i++) sum+=v[i]/Math.pow(b,t[i]);
-    return sum;
-  };
-  let lo=-0.9999, hi=1, flo=npv(lo), fhi=npv(hi);
-  if(!isFinite(flo)) return null;
-  // Ensanchar el techo hasta que haya cambio de signo. El tope de 60 duplicaciones
-  // cubre tasas absurdamente altas y corta si la función no cruza nunca.
-  let k=0;
-  while(isFinite(fhi)&&flo*fhi>0&&k<60){ hi=hi*2+1; fhi=npv(hi); k++; }
-  if(!isFinite(fhi)||flo*fhi>0) return null;
-  for(let i=0;i<200;i++){
-    const mid=(lo+hi)/2, fm=npv(mid);
-    if(!isFinite(fm)) return null;
-    if(flo*fm<=0){ hi=mid; fhi=fm; } else { lo=mid; flo=fm; }
-  }
-  const r=(lo+hi)/2;
-  return (isFinite(r)&&r>-0.9999&&r<1e3)?r:null;
-}
-
-/* TIR de una ventana. v0 es el valor al inicio (entra al vector como si lo
-   hubieras aportado ese día), `flujos` son los aportes (+) y retiros (−) NETOS
-   con su fecha tal como los devuelve serieRendimiento().flujosEntre, y v1 el
-   valor al cierre. Ojo con el signo: flujosEntre usa la convención de la
-   cartera (positivo = entró plata) y XIRR la del inversor (positivo = recibiste
-   plata), así que van invertidos.
-
-   Menos de 30 días no se anualiza, misma guarda que anualizar(): una TIR sobre
-   una semana amplifica el ruido todavía más que un CAGR — +2% en cinco días se
-   convierte en +180% anual. */
-function tirDe(v0,d0,flujos,v1,d1){
-  if(v1==null||!isFinite(v1)||!(diasCal(d0,d1)>=30)) return null;
-  const cf=[];
-  if(v0>0) cf.push({fecha:d0,monto:-v0});
-  for(const fl of (flujos||[])) cf.push({fecha:fl.fecha,monto:-fl.monto});
-  cf.push({fecha:d1,monto:v1});
-  cf.sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  return xirr(cf);
-}
-
-/* Valor final de la MISMA secuencia de flujos invertida en un índice: compra
-   unidades a la cotización de cada fecha y las valúa al cierre de la ventana.
-   Se usa para la TIR del benchmark, que necesita un valor terminal en moneda
-   (no un %) para poder pasar por el mismo xirr() que la cartera.
-
-   Se diferencia de mkBench() —el simulador que dibuja la línea punteada del
-   gráfico— en dos cosas: arranca de un valor inicial v0 (mkBench siempre
-   arranca de cero, porque solo mide desde el origen de la cartera) y los
-   retiros VENDEN unidades en vez de ignorarse. Sin eso la TIR del índice se
-   compararía contra un patrimonio del que nunca salió plata mientras que la
-   de la cartera sí, y la diferencia sería puro artefacto. */
-function simIndice(hist,fechas,nivelHoyFn,v0,d0,flujos,d1){
-  const ars=VISTA==="ARS", hoyF=hoy();
-  const pxEn=f=>{
-    const n=(f>=hoyF?(nivelHoyFn()??nivelEn(hist,fechas,f)):nivelEn(hist,fechas,f));
-    if(!(n>0)) return null;
-    if(!ars) return n;
-    const m=(f>=hoyF?((ESTADO&&ESTADO.MEP)||mepEnFecha(f)):mepEnFecha(f));
-    return m>0?n*m:null;
-  };
-  const p0=pxEn(d0); if(!p0) return null;
-  let u=v0>0?v0/p0:0;
-  for(const fl of (flujos||[])){
-    const p=pxEn(fl.fecha);
-    if(!p) return null;
-    u+=fl.monto/p;
-  }
-  const pf=pxEn(d1); if(!pf) return null;
-  const val=u*pf;
-  return isFinite(val)?val:null;
-}
-
-/* Tabla comparativa cartera vs. índices. Reemplaza las cards sueltas
-   "vs. SPY +7,1%", que eran ambiguas por construcción: ese número era una
-   RESTA de porcentajes y se leía como un retorno, y encima no decía si el
-   porcentaje era acumulado o anualizado. Con un encabezado de columna la
-   unidad se declara una sola vez y la duda desaparece; las diferencias van en
-   puntos porcentuales (pp), que es lo que son. */
-function tablaComparativa(filas,moneda){
-  const na='<span class="cmp-na">—</span>';
-  const pct=x=>x==null?na:`<span class="${cls(x)}">${sgn(x*100)}</span>`;
-  const plata=x=>x==null?na:`<span class="${cls(x)}">${signoMoney(x)}</span>`;
-  const pp=(a,b)=>(a==null||b==null)?na:`<span class="${cls(a-b)}">${(a-b>=0?"+":"−")+fmt(Math.abs((a-b)*100),1)} pp</span>`;
-  const base=filas[0];
-  const cuerpo=filas.map((f,i)=>`<tr${i===0?' class="cmp-yo"':""}>
-      <td class="l">${f.nombre}</td>
-      <td>${pct(f.ret)}</td>
-      <td>${pct(f.tir)}</td>
-      <td>${plata(f.gan)}</td>
-      <td>${i===0?na:pp(base.ret,f.ret)}</td>
-      <td>${i===0?na:pp(base.tir,f.tir)}</td>
-    </tr>`).join("");
-  return `<div class="tbl-scroll"><table class="perf-tbl cmp-tbl"><thead><tr>
-      <th class="l">Comparativa</th><th>Retorno total</th><th>TIR anual</th><th>Resultado</th>
-      <th>Dif. retorno</th><th>Dif. TIR</th>
-    </tr></thead><tbody>${cuerpo}</tbody>
-    <tfoot><tr><td colspan="6" class="l"><b>Retorno total</b>: acumulado del período, sin anualizar.
-      <b>TIR anual</b>: tasa efectiva anual (TIREA), pondera cuándo entró cada peso.
-      Diferencias en puntos porcentuales sobre tu cartera. Todo en ${moneda}.</td></tr></tfoot>
-    </table></div>`;
-}
-
 /* ══════════════ Selector de período (pestaña Rendimientos) ══════════════
    Un solo menú controla qué ventana de tiempo miran TODAS las cards de
    arriba: histórico completo (como siempre), un año calendario puntual, YTD,
@@ -2398,7 +2220,7 @@ function tablaComparativa(filas,moneda){
 function rangoPeriodo(periodo){
   const hoyF=hoy(), anioAct=+hoyF.slice(0,4);
   // "dias" es el calendario real y nominal del período — 1/ene→hoy en YTD,
-  // día 1 del mes→hoy, lunes de esta semana→hoy en semanal — SIEMPRE fijo según la fecha de
+  // día 1 del mes→hoy, hoy−7→hoy en semanal — SIEMPRE fijo según la fecha de
   // hoy, sin importar cuántos snapshots con datos haya en el medio (huecos,
   // días de saldo bajo descartados, o que no se haya abierto la app todos los
   // días). Es la base que usa TNA para anualizar; si se calculara a partir de
@@ -2407,7 +2229,7 @@ function rangoPeriodo(periodo){
   if(periodo==="hoy") return {desde:restarDias(hoyF,1),hasta:hoyF,etiqueta:"Hoy",dias:1,desdeNominal:hoyF};
   if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD",dias:diasEntre(anioAct+"-01-01",hoyF),desdeNominal:anioAct+"-01-01"};
   if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(hoyF.slice(0,8)+"01",hoyF),desdeNominal:hoyF.slice(0,8)+"01"};
-  if(periodo==="semanal") return {desde:lunesDeSemana(hoyF),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(lunesDeSemana(hoyF),hoyF),desdeNominal:lunesDeSemana(hoyF)};
+  if(periodo==="semanal") return {desde:restarDias(hoyF,7),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(restarDias(hoyF,7),hoyF),desdeNominal:restarDias(hoyF,7)};
   if(/^\d{4}$/.test(periodo)){
     const fin=periodo+"-12-31";
     const hastaEf=fin>hoyF?hoyF:fin;
@@ -2821,12 +2643,7 @@ function retornoEntre(serie,desde,hasta,diasNominal){
   // data real (aviso de hueco, "período efectivo").
   return {ret:c-1,sp:haySp?csp-1:null,ndx:haySp?cndx-1:null,
     dias:diasNominal!=null?diasNominal:diasEntre(desde,hasta),desde:desdeR,hasta:hastaR,
-    diasReales:Math.max(1,diasEntre(desdeR,hastaR)),gan,
-    // Extremos en moneda del tramo medido: son el primer y el último flujo del
-    // vector que necesita la TIR (valor inicial como aporte, valor final como
-    // rescate). Salen de acá y no de un recálculo aparte para que la TIR mida
-    // EXACTAMENTE la misma ventana que el retorno time-weighted de al lado.
-    v0:tramo[0].v0, v1:tramo[tramo.length-1].v};
+    diasReales:Math.max(1,diasEntre(desdeR,hastaR)),gan};
 }
 
 /* ══════════════ Variación del día: FUENTE ÚNICA ══════════════
@@ -2930,7 +2747,6 @@ function diagnosticoSerieHtml(serie,pos){
 
 function ymd(d){ return d.toISOString().slice(0,10); }
 function restarDias(f,n){ const d=new Date(f+"T00:00:00Z"); d.setUTCDate(d.getUTCDate()-n); return ymd(d); }
-function lunesDeSemana(f){ const d=new Date(f+"T00:00:00Z"); const back=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-back); return ymd(d); } // lunes de la semana calendario de f (reset los lunes)
 
 /* Métricas de riesgo estándar sobre la serie de retornos.
 
@@ -3017,13 +2833,7 @@ function metricasRiesgo(serie){
 }
 
 // Bloque de UI: Riesgo, scoped al mismo período que eligió el usuario arriba.
-// Devuelve las piezas de la sección Riesgo por separado (en vez de un solo
-// string armado) para que el llamador pueda intercalarlas en el orden que
-// quiera: las cards van entre "cuadros de rendimiento" y "retorno por
-// activo", pero el texto explicativo (hintHtml) se guarda oculto — queda en
-// el documento, listo para una futura sección de Ayuda/Disclaimers, pero no
-// se muestra en el flujo normal.
-function seccionRiesgo(rango){
+function seccionRiesgo(secIdxRef,rango){
   const card=(k,val,det,cls2)=>`<div class="perf"><div class="k">${k}</div>
     <div class="v ${cls2||""}">${val}</div><div class="d">${det||""}</div></div>`;
   const serieFull=serieDiaria();
@@ -3031,59 +2841,51 @@ function seccionRiesgo(rango){
 
   const m=metricasRiesgo(serie);
   const MIN_VOL=20, MIN_BETA=20;
-  const meta=`${m?.n||0} tramos${m?.dias?` · ${m.dias} días`:""} · ${rango.etiqueta}`;
+  let html=`<div class="section-h"><span class="idx">${secIdxRef}</span><h2>Riesgo</h2>
+    <span style="margin-left:auto">${m?.n||0} tramos${m?.dias?` · ${m.dias} días`:""} · ${rango.etiqueta}</span></div>`;
   if(!m||m.n<MIN_VOL){
-    return {meta,
-      warnHtml:`<div class="chart-warn">Con ${m?.n||0} cierre${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
-        todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
-        ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
-        más largo, o esperá a que se acumulen más días.</div>`,
-      cardsHtml:"", hintHtml:""};
+    html+=`<div class="chart-warn">Con ${m?.n||0} cierre${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
+      todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
+      ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
+      más largo, o esperá a que se acumulen más días.</div>`;
+  } else {
+    const cardsR=[
+      card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío por rueda, anualizado"),
+      card("Retorno anualizado",m.retAnual==null?"—":sgn(m.retAnual*100),
+        `sobre ${m.dias} días de calendario`,m.retAnual==null?"":cls(m.retAnual)),
+      card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
+        m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,1)}% anual) por unidad de riesgo`
+               :"retorno por unidad de riesgo · tasa libre 0",
+        m.sharpe==null?"":cls(m.sharpe)),
+      card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),
+        m.conRF?"idem, solo penaliza lo que quedó abajo de la tasa":"idem, solo penaliza caídas",
+        m.sortino==null?"":cls(m.sortino)),
+      card("Máx. caída",fmt(m.mdd*100,1)+"%","peor bajada desde un pico",m.mdd<0?"down":""),
+      m.beta==null
+        ? card("Beta vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
+        : card("Beta vs S&amp;P",fmt(m.beta,2),"cuánto se mueve por cada 1% del índice"),
+      m.correl==null
+        ? card("Correlación S&amp;P","—","sin datos suficientes")
+        : card("Correlación S&amp;P",fmt(m.correl,2),"1 = se mueven igual, 0 = sin relación"),
+    ];
+    html+=filasGrid(cardsR,"perf-grid",4);
+    html+=`<div class="hint" style="margin-top:12px;line-height:1.9">
+      Calculado con ${m.n} cierres de ${rango.etiqueta.toLowerCase()}, que cubren ${m.dias} días de calendario, y anualizado a 252 ruedas.
+      Los tramos no son todos de un día: cuando falta un cierre en el medio, ese punto abarca varios días y se
+      pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
+      si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada.
+      ${m.conRF
+        ? `Sharpe y Sortino descuentan la <b>${m.tasaNombre}</b>, que sobre este período equivale a
+           <b>${fmt(m.rfAnual*100,1)}%</b> anual: es lo que habría rendido la plata sin correr riesgo, así que lo que
+           puntúa es el excedente por encima de eso y no el retorno a secas (${sgn(m.retAnual*100)} anualizado
+           → ${sgn(m.excAnual*100)} de exceso). Sortino usa esa misma tasa como piso en lugar de cero.
+           ${m.cobRF<0.999?`<b>Ojo:</b> solo el ${fmt(m.cobRF*100,0)}% de los días del período tiene tasa cargada;
+             el resto se descuenta a 0, así que los dos ratios salen algo más altos de lo que corresponde.`:""}`
+        : `Sharpe y Sortino usan tasa libre de riesgo <b>0</b>, porque todavía no se pudo leer la serie de tasas
+           (historial/tasas.json). Mientras tanto conviene leerlos como comparación relativa entre períodos más que
+           como un valor absoluto.`}</div>`;
   }
-  const cardsR=[
-    card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío por rueda, anualizado"),
-    // "Retorno anualizado" vivía acá y no correspondía: es una medida de
-    // rendimiento, no de riesgo, y competía con la TIR de arriba mostrando dos
-    // tasas anuales distintas para la misma ventana. El cálculo se conserva
-    // (retAnual sigue alimentando Sharpe y Sortino); lo que se muestra ahora es
-    // el EXCESO sobre la tasa libre, que es literalmente el numerador de esos
-    // ratios y hasta ahora solo aparecía enterrado en el texto explicativo.
-    card("Exceso sobre tasa libre",m.excAnual==null?"—":sgn(m.excAnual*100),
-      m.conRF?`por encima de ${m.tasaNombre} (${fmt(m.rfAnual*100,1)}% anual) · numerador de Sharpe y Sortino`
-             :"tasa libre 0: falta historial/tasas.json",
-      m.excAnual==null?"":cls(m.excAnual)),
-    card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
-      m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,1)}% anual) por unidad de riesgo`
-             :"retorno por unidad de riesgo · tasa libre 0",
-      m.sharpe==null?"":cls(m.sharpe)),
-    card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),
-      m.conRF?"idem, solo penaliza lo que quedó abajo de la tasa":"idem, solo penaliza caídas",
-      m.sortino==null?"":cls(m.sortino)),
-    card("Máx. caída",fmt(m.mdd*100,1)+"%","peor bajada desde un pico",m.mdd<0?"down":""),
-    m.beta==null
-      ? card("Beta vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
-      : card("Beta vs S&amp;P",fmt(m.beta,2),"cuánto se mueve por cada 1% del índice"),
-    m.correl==null
-      ? card("Correlación S&amp;P","—","sin datos suficientes")
-      : card("Correlación S&amp;P",fmt(m.correl,2),"1 = se mueven igual, 0 = sin relación"),
-  ];
-  const cardsHtml=filasGrid(cardsR,"perf-grid",4);
-  const hintHtml=`<div class="hint" style="margin-top:12px;line-height:1.9">
-    Calculado con ${m.n} cierres de ${rango.etiqueta.toLowerCase()}, que cubren ${m.dias} días de calendario, y anualizado a 252 ruedas.
-    Los tramos no son todos de un día: cuando falta un cierre en el medio, ese punto abarca varios días y se
-    pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
-    si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada.
-    ${m.conRF
-      ? `Sharpe y Sortino descuentan la <b>${m.tasaNombre}</b>, que sobre este período equivale a
-         <b>${fmt(m.rfAnual*100,1)}%</b> anual: es lo que habría rendido la plata sin correr riesgo, así que lo que
-         puntúa es el excedente por encima de eso y no el retorno a secas (${sgn(m.retAnual*100)} anualizado
-         → ${sgn(m.excAnual*100)} de exceso). Sortino usa esa misma tasa como piso en lugar de cero.
-         ${m.cobRF<0.999?`<b>Ojo:</b> solo el ${fmt(m.cobRF*100,0)}% de los días del período tiene tasa cargada;
-           el resto se descuenta a 0, así que los dos ratios salen algo más altos de lo que corresponde.`:""}`
-      : `Sharpe y Sortino usan tasa libre de riesgo <b>0</b>, porque todavía no se pudo leer la serie de tasas
-         (historial/tasas.json). Mientras tanto conviene leerlos como comparación relativa entre períodos más que
-         como un valor absoluto.`}</div>`;
-  return {meta, warnHtml:"", cardsHtml, hintHtml};
+  return html;
 }
 
 /* Reparte un conjunto de cards en filas que quedan siempre completas: con pocas
@@ -3251,35 +3053,10 @@ function render(soloEstructura){
       <div class="hero-side"><div class="k">${rendDiaLbl.k}</div><div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
         <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
     </div></div>
-    ${hayCash?(()=>{
-      // Liquidez en 3 posiciones nativas — pesos, dólar MEP (custodia local) y
-      // dólar CCL (custodia exterior) — cada una es plata distinta, con su
-      // propia cotización. Cada card se convierte a la moneda de VISTA con el
-      // mismo puente por pesos que ya usa ajusteCta; "Consolidada" las suma ya
-      // convertidas, así que trae la brecha MEP/CCL adentro del total.
-      const totPesos=cuentas.reduce((s,c)=>s+((ultC.ctaPesos||{})[c]||0)+((saldos[c]||{}).ars||0),0);
-      const totMep=cuentas.reduce((s,c)=>s+((ultC.ctaMep||{})[c]||0)+((saldos[c]||{}).usd||0),0);
-      const totCcl=cuentas.reduce((s,c)=>s+((ultC.ctaCcl||{})[c]||0),0);
-      const pendPesos=cuentas.reduce((s,c)=>s+((pend.ctaPesos||{})[c]||0),0);
-      const pendMep=cuentas.reduce((s,c)=>s+((pend.ctaMep||{})[c]||0),0);
-      const pendCcl=cuentas.reduce((s,c)=>s+((pend.ctaCcl||{})[c]||0),0);
-      const vP=convMoneda(totPesos,"ARS",VISTA,MEP,CCL);
-      const vM=convMoneda(totMep,"MEP",VISTA,MEP,CCL);
-      const vC=convMoneda(totCcl,"CCL",VISTA,MEP,CCL);
-      const partes=[vP,vM,vC].filter(x=>x!=null);
-      const vCons=partes.length?partes.reduce((s,x)=>s+x,0):null;
-      const cardPool=(k,nat,pendNat,pool,v)=>{
-        if(Math.abs(nat)<0.005&&Math.abs(pendNat)<0.005) return "";
-        const pendConv=convMoneda(pendNat,pool,VISTA,MEP,CCL);
-        return `<div class="card"><div class="k">Liquidez · ${k}</div><div class="v ${v<0?"down":""}">${v==null?"—":(v<0?"−":"")+money(Math.abs(v))}</div>
-        <div class="d">${Math.abs(pendNat)>0.005?"incl. "+(pendConv==null?"—":money(Math.abs(pendConv)))+" en T + 1":"ya liquidado"}</div></div>`;
-      };
-      return cardPool("Pesos",totPesos,pendPesos,"ARS",vP)
-        +cardPool("Dólar MEP",totMep,pendMep,"MEP",vM)
-        +cardPool("Dólar CCL",totCcl,pendCcl,"CCL",vC)
-        +`<div class="card"><div class="k">Liquidez · Consolidada</div><div class="v ${vCons<0?"down":""}">${vCons==null?"—":(vCons<0?"−":"")+money(Math.abs(vCons))}</div>
-        <div class="d">${total?fmt((vCons||0)/total*100,1)+"% del total · ":""}pesos + MEP + CCL</div></div>`;
-    })():""}
+    ${hayCash?`<div class="card"><div class="k">Liquidez · Disponible</div><div class="v ${cashDisp<0?"down":""}">${(cashDisp<0?"−":"")+money(Math.abs(cashDisp))}</div>
+      <div class="d">${fmt(cashDisp/total*100,1)}% del total · ya liquidado</div></div>
+    ${Math.abs(cashPend)>0.5?`<div class="card"><div class="k">Liquidez · T + 1</div><div class="v ${cashPend<0?"down":""}">${(cashPend<0?"−":"")+money(Math.abs(cashPend))}</div>
+      <div class="d">operado, acredita en 24 hs · ya cuenta en el NAV</div></div>`:""}`:""}
     <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
       <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
     ${Math.abs(realizado)>0.01?`<div class="card"><div class="k">P&amp;L · Realizado</div>
@@ -3300,25 +3077,16 @@ function render(soloEstructura){
     <div class="card"><div class="k">Asignación · Cuenta</div>${barra(allocCta)}</div></div>`;
 
   // ══ Selector de período (Rendimientos) ══ se calcula temprano porque
-  // controla tanto el gráfico como las cards de rendimiento y de riesgo.
-  // Se muestra solo (ver más abajo); el orden completo de la pestaña queda
-  // armado más adelante: selector → cuadros de rendimiento → riesgo →
-  // retorno por activo → gráfico.
-  let rango=null, serieT=null, periodoBarHtml="", fPrimGlobal=null, ytdEsHistorico=false;
+  // controla tanto el gráfico de abajo como las cards de rendimiento.
+  // Va en la columna izquierda, junto con el rendimiento de hoy; el gráfico
+  // queda más chico, a la derecha (ver ensamblado de .rend-top más abajo).
+  let rango=null, serieT=null, periodoBarHtml="";
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
     const anioActual=hoy().slice(0,4);
     const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))]
       .filter(a=>a!==anioActual).sort().reverse();
     rango=rangoPeriodo(PERIODO);
     serieT=serieDiaria(); // ya descarta días con menos de US$100 de NAV
-    // Si la cartera arrancó DESPUÉS del 1/1 de este año, "YTD" y "Histórico
-    // completo" cubren exactamente el mismo historial — no tiene sentido
-    // medirlos con dos métodos distintos (time-weighted por un lado,
-    // money-weighted por otro) y mostrar dos números que no coinciden para
-    // la misma ventana. En ese caso YTD se resuelve con el mismo camino que
-    // "todo" (ver más abajo), y se aclara en pantalla.
-    fPrimGlobal=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
-    ytdEsHistorico=PERIODO==="ytd"&&fPrimGlobal>(anioActual+"-01-01");
     periodoBarHtml=`<div class="periodo-bar"><span class="periodo-lbl">Período</span>
       <select id="sel-periodo" onchange="setPeriodo(this.value)">
       <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
@@ -3327,8 +3095,7 @@ function render(soloEstructura){
       <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
       <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
       ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
-    </select>
-      <span class="periodo-hint">Los retornos son <b>acumulados del período</b>, sin anualizar. La <b>TIR</b> es la única tasa anual (efectiva).</span></div>`;
+    </select></div>`;
   }
 
   // ══ Gráfico de rendimiento acumulado ══ (se arma aparte en chartHtml y se
@@ -3348,7 +3115,7 @@ function render(soloEstructura){
       <div class="chart-warn">No se puede calcular el rendimiento porque ${sinPx.length===1?"una posición no tiene":sinPx.length+" posiciones no tienen"} precio:
       <b>${sinPx.map(p=>p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker).join(", ")}</b>.
       Revisá que el tipo de instrumento sea el correcto (editando el movimiento) o cargá un precio manual.</div></div>`;
-  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&(PERIODO==="todo"||ytdEsHistorico)){
+  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&PERIODO==="todo"){
     const retHoy=(totalBase+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
     const pts=sr.puntos.filter(p=>p.fecha!==hoy());
     pts.push({fecha:hoy(),ret:retHoy});
@@ -3387,7 +3154,7 @@ function render(soloEstructura){
     // Escala Y: 4 niveles
     const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
     chartHtml+=`<div class="chart-card" id="rend-chart-card">
-      <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}${ytdEsHistorico?" · YTD = histórico completo":""}</div>
+      <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}</div>
         <div class="chart-key">
           <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
           ${benchHoy!=null?`<span><i class="ln spy"></i>SPY (CEDEAR) <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
@@ -3496,84 +3263,41 @@ function render(soloEstructura){
         t0,span,mn,rg,W,H,pl,pt,pb};
     }
   }
-  // Orden de la pestaña Rendimientos: selector de período, cuadros de
-  // rendimiento, métricas de riesgo, retorno por activo y por último el
-  // gráfico comparativo (ver ensamblado completo más abajo). El selector va
-  // solo acá arriba; el resto se arma después de calcular cardsPerf/riesgo.
+  // Ensamblado: columna izquierda (selector de período + rendimiento de hoy,
+  // bien visible) y columna derecha más angosta con el gráfico.
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    html+=periodoBarHtml;
+    html+=`<div class="rend-top">
+      <div class="rend-left">${periodoBarHtml}
+        <div class="card rend-hoy"><div class="k">${rendDiaLbl.k}</div>
+          <div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
+          <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
+      </div>
+      <div class="rend-right">${chartHtml}</div>
+    </div>`;
   }
 
   let secIdx=0;
-  // ══ RENDIMIENTOS ══ (cardsPerf/tablaHtml/notaHtml se usan más abajo, en
-  // "Retorno por activo" y en los disclaimers ocultos — de ahí que estén
-  // declarados afuera del if, en vez de adentro como antes)
-  let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="", cmpHtml="";
+  // ══ RENDIMIENTOS ══
   if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
-    if(PERIODO==="todo"||ytdEsHistorico){
+    let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
+
+    if(PERIODO==="todo"){
       // Camino de siempre: retorno money-weighted sobre el capital aportado
       // total, con la tabla detallada por posición desde su primera compra.
       // Se listan TODAS las posiciones; las que no se pueden medir van al
       // final con el motivo escrito (antes se filtraban y desaparecían).
-      // Se entra también acá cuando PERIODO==="ytd" pero la cartera arrancó
-      // después del 1/1: ver ytdEsHistorico más arriba.
       const met=metricasPorPosicion(pos).sort(ordenPorRet);
       const metMed=met.filter(p=>p.ret!=null);
       if(met.length){
         const invTot=met.reduce((s,p)=>s+(p.costoM>0?p.costoM:0),0);
         const srT=serieRendimiento();
         const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
+        const retTot=baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0;
+        const benchTot=srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null;
+        const benchNdx=srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null;
         const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
         const diasTot=diasEntre(fPrim,hoy());
-        // ── Histórico también mide TIME-WEIGHTED ──────────────────────────
-        // Antes acá el retorno era money-weighted (valor + retirado) / aportado
-        // − 1 mientras que los períodos usaban la serie diaria encadenada, los
-        // dos bajo el mismo rótulo genérico y sin decir cuál era cuál: dos
-        // pantallas del mismo dato que no se podían comparar entre sí. Con los
-        // dos caminos en time-weighted, "Retorno total" significa lo mismo en
-        // toda la app, y el efecto del timing de los aportes —lo único que
-        // aportaba el criterio viejo— pasa a la TIR, que es su lugar correcto.
-        const rTot=retornoEntre(serieT,fPrim,hoy(),diasTot);
-        const twOk=!!rTot;
-        // Respaldo money-weighted para una cartera nueva, sin dos cierres que
-        // encadenar. Es preferible un número medido con otra definición —y
-        // rotulado como tal— que un "—" en la card principal.
-        const retTot=twOk?rTot.ret:(baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0);
-        // La ganancia en plata NO se toca: valor + retirado − aportado es un
-        // hecho verificable contra el extracto del bróker, independiente del
-        // método con que se exprese el porcentaje.
-        const ganTot=totalBase+(srT?.retirado||0)-baseCap;
-        // Cuánto del historial cubre de verdad la serie diaria. Si arranca
-        // bastante después de la primera compra, el TWR se está perdiendo ese
-        // tramo inicial y hay que avisarlo — es el mismo criterio que el aviso
-        // de "período desalineado" del otro camino.
-        const twParcial=twOk&&diasEntre(fPrim,rTot.desde)>7;
-        // Flujos de TODO el historial. flujosEntre es exclusivo en `desde`, así
-        // que hay que arrancar un día antes de la primera compra o el aporte
-        // inicial queda afuera del vector.
-        const flujosTot=srT?srT.flujosEntre(restarDias(fPrim,1),hoy()):[];
-        const netoTot=flujosTot.reduce((sum,f)=>sum+f.monto,0);
-        // El valor terminal es el NAV a secas, SIN sumarle lo retirado: cada
-        // retiro ya entró al vector como flujo positivo en su propia fecha.
-        // Sumarlo otra vez acá lo contaría dos veces y dispararía la TIR.
-        const tirTot=srT?tirDe(0,fPrim,flujosTot,totalBase,hoy()):null;
-        // Índices sobre la misma ventana efectiva que el TWR de la cartera y
-        // con la misma fuente que dibuja la línea punteada del gráfico. Si no
-        // hay serie diaria se cae al simulador money-weighted de siempre, que
-        // es el criterio consistente con el respaldo de retTot.
-        const benchTot=twOk?(benchSP(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
-                           :(srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null);
-        const benchNdx=twOk?(benchNDX(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
-                           :(srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null);
-        const vSP=srT?simIndice(SP500_HIST,SP500_FECHAS,sp500Hoy,0,fPrim,flujosTot,hoy()):null;
-        const vNDX=srT?simIndice(NDX_HIST,NDX_FECHAS,ndxHoy,0,fPrim,flujosTot,hoy()):null;
-        cmpHtml=tablaComparativa([
-          {nombre:"Tu cartera",ret:retTot,tir:tirTot,gan:ganTot},
-          {nombre:"SPY (CEDEAR)",ret:benchTot==null?null:benchTot,
-            tir:vSP==null?null:tirDe(0,fPrim,flujosTot,vSP,hoy()),gan:vSP==null?null:vSP-netoTot},
-          {nombre:"QQQ (CEDEAR)",ret:benchNdx==null?null:benchNdx,
-            tir:vNDX==null?null:tirDe(0,fPrim,flujosTot,vNDX,hoy()),gan:vNDX==null?null:vNDX-netoTot},
-        ],tituloMoneda);
+        const tnaTot=anualizar(retTot,diasTot);
         met.forEach(p=>{ p.contrib=(baseCap>0&&p.ret!=null)?(p.valM-p.costoM)/baseCap:null; });
         // Mejor/peor solo entre las medibles: si no, "peor posición" termina
         // siendo una fila sin retorno calculable.
@@ -3582,15 +3306,18 @@ function render(soloEstructura){
         const monedaLblTot=tituloMoneda;
 
         cardsPerf=[
-          `<div class="perf hero"><div class="k">${ytdEsHistorico?"Retorno total · YTD = histórico":"Retorno total"}</div>
+          `<div class="perf hero"><div class="k">Retorno total</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
-            <div class="d-money ${cls(ganTot)}">${signoMoney(ganTot)}</div>
-            <div class="d">${twOk?"time-weighted":"sobre lo aportado (sin serie diaria)"} · acumulado, sin anualizar · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
-          `<div class="perf"><div class="k">TIR anual</div>
-            <div class="v ${cls(tirTot)}">${tirTot==null?"—":sgn(tirTot*100)}</div>
-            <div class="d">${tirTot==null
-              ?"necesita al menos 30 días de historial y un aporte registrado"
-              :`efectiva anual (TIREA) · ${diasTot}d · pondera cuándo entró cada peso`}</div></div>`,
+            <div class="d">${signoMoney(totalBase+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
+          `<div class="perf"><div class="k">TNA equivalente</div>
+            <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
+            <div class="d">anualizado · ${diasTot}d</div></div>`,
+          benchTot!=null?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
+            <div class="v ${cls(retTot-benchTot)}">${sgn((retTot-benchTot)*100)}</div>
+            <div class="d">benchmark ${sgn(benchTot*100)} con tus mismos aportes</div></div>`:null,
+          benchNdx!=null?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
+            <div class="v ${cls(retTot-benchNdx)}">${sgn((retTot-benchNdx)*100)}</div>
+            <div class="d">benchmark ${sgn(benchNdx*100)} con tus mismos aportes</div></div>`:null,
           `<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(baseCap)}</div>
             <div class="d">plata que entró de afuera</div></div>`,
@@ -3604,10 +3331,7 @@ function render(soloEstructura){
             <div class="v ${cls(realTot)}">${signoMoney(realTot)}</div>
             <div class="d">ventas cerradas</div></div>`:null,
         ];
-        metaHtml=`<span>${diasTot} días · desde ${fPrim} (inicio de la cartera)`
-          +(twParcial?` <span style="color:var(--amber)">(los cierres diarios recién arrancan el ${rTot.desde}: el retorno time-weighted no cubre el tramo anterior — la TIR sí, porque sale de los movimientos)</span>`:"")
-          +(ytdEsHistorico?` <span style="color:var(--grey)">(pediste YTD, pero es igual a Histórico completo: la cartera arrancó después del 1/1)</span>`:"")
-          +`</span>`;
+        metaHtml=`<span>${diasTot} días · desde ${fPrim}</span>`;
         tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
             <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
@@ -3627,9 +3351,7 @@ function render(soloEstructura){
               <span>${sgn(p.contrib*100)}</span></div>`
               :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("");})()}
           </tbody></table></div>`;
-        notaHtml=`<div class="perf-note">${ytdEsHistorico?`<b>Elegiste YTD, pero tu cartera arrancó el ${fPrim}</b> — después del 1/1 de este año — así que no hay nada anterior que medir: YTD y "Histórico completo" son exactamente la misma ventana y el mismo cálculo. Por eso todos los números de esta pantalla (retorno, TNA, comparación vs. índices, mejor/peor posición, tabla) son los del historial completo.<br><br>`:""}<b>Retorno total</b> = retorno <b>time-weighted</b>: se encadenan los retornos de cada tramo diario descontando la plata que entró o salió, así un depósito no se confunde con una ganancia. Mide cómo se comportó lo que elegiste, independientemente de cuánto capital había puesto en cada momento.<br>
-          <b>TIR anual</b> = la tasa efectiva anual que iguala el valor presente de todos tus flujos (aportes con signo negativo, retiros y valor actual con signo positivo). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso: si aportaste fuerte justo antes de una caída, el retorno total puede ser positivo y la TIR bajar igual. Los dos números describen la misma cartera y responden preguntas distintas — cómo rindieron los activos, y cómo rindió tu plata.<br>
-          El <b>resultado en plata</b> sigue siendo el hecho verificable contra el extracto: valor actual + retirado − aportado. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
+        notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. SPY (CEDEAR)</b> y <b>vs. QQQ (CEDEAR)</b>: simulan tus mismos aportes (fechas y montos) comprando el CEDEAR, medido por su cotización en dólares en BYMA (especie D, con la C de respaldo)${BENCH_DIV_OK?" y con los dividendos del ETF reinvertidos en la fecha ex":", <b>sin</b> dividendos: falta historial/dividendos.json, así que es retorno de precio"}. Donde el CEDEAR no tiene cobertura se empalma la variación del índice oficial. <b>No coincide con el índice del noticiero</b>: mide el instrumento que se puede comprar acá, con su propio horario y su error de seguimiento. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
@@ -3642,6 +3364,7 @@ function render(soloEstructura){
         const srT=serieRendimiento();
         const a0=srT?srT.aporteEn(rango.desde):null, a1=srT?srT.aporteEn(rango.hasta):null;
         const aportePer=(a0&&a1)?(a1.ap-a0.ap):null;
+        const tnaPer=anualizar(r.ret,r.dias);
         // Mejor/peor posición miden EXACTAMENTE la misma ventana que "Retorno
         // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
         // serie diaria arranca más tarde que el período nominal por un hueco
@@ -3667,48 +3390,20 @@ function render(soloEstructura){
         // bajando, sobre el mismo período.
         const bSP=benchSP(r.desde,r.hasta,srT?srT.hitos:null);
         const bNDX=benchNDX(r.desde,r.hasta,srT?srT.hitos:null);
-        // Capital medio efectivo del tramo: el mismo que produjo r.gan a la
-        // tasa r.ret (r.gan = Σ base_día×retorno_día, r.ret = producto de los
-        // retornos diarios encadenados). Se usa para traducir el % del
-        // benchmark a moneda con el mismo capital que tuvo tu cartera — no es
-        // exacto en compounding con flujos grandes en el medio, es la misma
-        // aproximación simple-return que ya usa "vs. índice" en Histórico.
-        // ── TIR de la ventana ─────────────────────────────────────────────
-        // Reemplaza a la vieja "TNA equivalente", que no era ni TNA ni salía de
-        // una TIR: era anualizar(r.ret) sobre los días NOMINALES del período.
-        // La TIR mide la ventana EFECTIVA (r.desde → r.hasta, donde hay
-        // cierres de verdad) y arranca del NAV inicial como si lo hubieras
-        // aportado ese día, así que el time-weighted de al lado y ella hablan
-        // exactamente del mismo tramo. Que difieran no es un error: el TWR mide
-        // cómo se comportaron los activos y la TIR cómo rindió tu plata dada la
-        // secuencia de aportes.
-        const flujosPer=srT?srT.flujosEntre(r.desde,r.hasta):[];
-        const tirPer=tirDe(r.v0,r.desde,flujosPer,r.v1,r.hasta);
-        const netoPer=flujosPer.reduce((sum,f)=>sum+f.monto,0);
-        // El mismo NAV inicial y los mismos flujos, pero comprando el índice.
-        const vSPp=simIndice(SP500_HIST,SP500_FECHAS,sp500Hoy,r.v0,r.desde,flujosPer,r.hasta);
-        const vNDXp=simIndice(NDX_HIST,NDX_FECHAS,ndxHoy,r.v0,r.desde,flujosPer,r.hasta);
-        const invPer=(r.v0||0)+netoPer; // capital puesto: lo que había + lo que entró neto
-        cmpHtml=tablaComparativa([
-          {nombre:"Tu cartera",ret:r.ret,tir:tirPer,gan:r.gan},
-          {nombre:"SPY (CEDEAR)",ret:bSP?bSP.ret:null,
-            tir:vSPp==null?null:tirDe(r.v0,r.desde,flujosPer,vSPp,r.hasta),
-            gan:vSPp==null?null:vSPp-invPer},
-          {nombre:"QQQ (CEDEAR)",ret:bNDX?bNDX.ret:null,
-            tir:vNDXp==null?null:tirDe(r.v0,r.desde,flujosPer,vNDXp,r.hasta),
-            gan:vNDXp==null?null:vNDXp-invPer},
-        ],monedaLbl);
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
-            <div class="d-money ${cls(r.gan)}">${signoMoney(r.gan)}</div>
-            <div class="d">time-weighted · acumulado, sin anualizar · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
-          `<div class="perf"><div class="k">TIR anual</div>
-            <div class="v ${cls(tirPer)}">${tirPer==null?"—":sgn(tirPer*100)}</div>
-            <div class="d">${tirPer==null
-              ?`el período mide ${r.diasReales} día${r.diasReales>1?"s":""}: por debajo de 30 anualizar amplifica el ruido`
-              :`efectiva anual (TIREA) · ${r.diasReales}d efectivos · pondera cuándo entró cada peso`}</div></div>`,
+            <div class="d">${signoMoney(r.gan)} · time-weighted · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
+          `<div class="perf"><div class="k">TNA equivalente</div>
+            <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
+            <div class="d">anualizado · ${r.dias}d nominales</div></div>`,
+          bSP?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
+            <div class="v ${cls(r.ret-bSP.ret)}">${sgn((r.ret-bSP.ret)*100)}</div>
+            <div class="d">benchmark ${sgn(bSP.ret*100)} en el período</div></div>`:null,
+          bNDX?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
+            <div class="v ${cls(r.ret-bNDX.ret)}">${sgn((r.ret-bNDX.ret)*100)}</div>
+            <div class="d">benchmark ${sgn(bNDX.ret*100)} en el período</div></div>`:null,
           aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(aportePer)}</div>
             <div class="d">entró durante el período</div></div>`:null,
@@ -3756,14 +3451,12 @@ function render(soloEstructura){
         }
         notaHtml=`<div class="perf-note">${desalineado?`<b>Ojo:</b> pediste ${rango.desdeNominal||rango.desde} → ${rango.hasta},
           pero los cierres diarios disponibles arrancan en <b>${r.desde}</b> y terminan en <b>${r.hasta}</b>.
-          TODO lo que se muestra acá (retorno del período, TIR, mejor/peor posición, comparación vs. índices y el
-          gráfico) mide esa ventana efectiva de ${r.diasReales} día${r.diasReales>1?"s":""}, no la nominal. La serie solo
+          TODO lo que se muestra acá (retorno del período, TNA, mejor/peor posición, comparación vs. índices y el
+          gráfico) mide esa ventana efectiva de ${r.diasReales} día${r.diasReales>1?"s":""}, no la nominal — la única
+          excepción es la TNA, que anualiza sobre los ${r.dias} días de calendario del período pedido. La serie solo
           registra los días en que abriste la app o en que el historial público cubre todas tus posiciones; se cierra
           solo a medida que ese historial avance.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
-          salió, así un depósito no se confunde con una ganancia. Es un <b>acumulado del período, sin anualizar</b>.
-          La <b>TIR anual</b> de al lado es otra cosa: una tasa efectiva anual que arranca del valor de la cartera al
-          inicio del tramo y pondera la fecha de cada aporte y retiro. Si la TIR supera al time-weighted anualizado,
-          tus aportes cayeron en buen momento; si queda por debajo, el timing jugó en contra. El cuadro por activo y mejor/peor posición se
+          salió, así un depósito no se confunde con una ganancia. El cuadro por activo y mejor/peor posición se
           miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
           tarde), también en ${monedaLbl} y no contra tu costo de compra original. El cuadro lista <b>todas</b> las
           posiciones en cartera: las que no se pueden medir en esta ventana aparecen igual, con "—" en Retorno y el
@@ -3774,50 +3467,17 @@ function render(soloEstructura){
       }
     }
 
-    // 1) Cuadros de rendimiento, primero, debajo del selector de período.
     html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Rendimientos</h2>
       <span style="margin-left:auto">${metaHtml}</span></div>`;
     html+=cardsPerf
-      ? filasGrid(cardsPerf,"perf-grid",4)
+      ? filasGrid(cardsPerf,"perf-grid",4)+tablaHtml+notaHtml
       : `<div class="chart-warn">No hay datos suficientes todavía para calcular ${rango.etiqueta.toLowerCase()}.</div>`;
-    // La comparativa contra los índices va inmediatamente debajo de las cards,
-    // como tabla y no como cards sueltas: el encabezado de columna declara la
-    // unidad una sola vez y evita que "+7,1%" se lea como un retorno cuando en
-    // realidad es una resta de porcentajes.
-    if(cmpHtml) html+=cmpHtml;
-  }
-  // 2) Métricas de riesgo, después de los cuadros de rendimiento. Depende
-  // solo de los snapshots diarios (no de tener posiciones abiertas): se
-  // muestra igual aunque la cartera esté cerrada o algún precio no cargue.
-  // El texto explicativo (hintHtml) se guarda oculto, no se descarta — ver
-  // el bloque "disclaimers ocultos" más abajo.
-  let riesgoHintHtml="";
-  if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    const riesgo=seccionRiesgo(rangoPeriodo(PERIODO));
-    html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Riesgo</h2>
-      <span style="margin-left:auto">${riesgo.meta}</span></div>`;
-    html+=riesgo.warnHtml+riesgo.cardsHtml;
-    riesgoHintHtml=riesgo.hintHtml;
-  }
-  // 3) Retorno por activo: la tabla detallada, período por período. La nota
-  // explicativa (notaHtml) también se guarda oculta, no se descarta.
-  if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length&&cardsPerf){
-    html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Retorno por activo</h2></div>`;
-    html+=tablaHtml;
     html+=diagnosticoSerieHtml(serieT,pos);
   }
-  // Textos explicativos de Rendimientos y Riesgo: quedan guardados en el
-  // documento (ocultos con display:none) para cuando se arme una sección de
-  // Ayuda/Disclaimers — no se descartan, solo no se muestran acá.
+  // Riesgo depende de los snapshots diarios, no de tener posiciones abiertas:
+  // se muestra igual aunque la cartera esté cerrada o algún precio no cargue.
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
-    html+=`<div class="disclaimers-ocultos" style="display:none">
-      <div data-disclaimer="rendimientos">${notaHtml||""}</div>
-      <div data-disclaimer="riesgo">${riesgoHintHtml}</div>
-    </div>`;
-  }
-  // 4) Gráfico comparativo, por último.
-  if(TAB==="rendimientos"&&chartHtml){
-    html+=chartHtml;
+    html+=seccionRiesgo(String(++secIdx).padStart(2,"0"),rangoPeriodo(PERIODO));
   }
 
   // Tablas de posiciones
@@ -3862,19 +3522,7 @@ function render(soloEstructura){
         <td class="${aj<0?"down":""}">${Math.abs(aj)<0.5?"—":(aj<0?"−":"")+money(Math.abs(aj))}</td>
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
       </tbody></table>
-      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div>
-      <div class="tbl-scroll" style="margin-top:16px"><table><thead><tr><th>Cuenta</th><th>Pesos</th><th>Dólar MEP</th><th>Dólar CCL</th></tr></thead><tbody>
-      ${cuentas.map(c=>{
-        const pes=((ultC.ctaPesos||{})[c]||0)+((saldos[c]||{}).ars||0);
-        const dm=((ultC.ctaMep||{})[c]||0)+((saldos[c]||{}).usd||0);
-        const dc=((ultC.ctaCcl||{})[c]||0);
-        if(Math.abs(pes)<0.5&&Math.abs(dm)<0.005&&Math.abs(dc)<0.005) return "";
-        return `<tr><td class="tk">${c}</td>
-        <td class="${pes<0?"down":""}">${Math.abs(pes)<0.5?"—":(pes<0?"−":"")+"$ "+fmt(Math.abs(pes),0)}</td>
-        <td class="${dm<0?"down":""}">${Math.abs(dm)<0.005?"—":(dm<0?"−":"")+"US$ "+fmt(Math.abs(dm),2)}</td>
-        <td class="${dc<0?"down":""}">${Math.abs(dc)<0.005?"—":(dc<0?"−":"")+"US$ "+fmt(Math.abs(dc),2)}</td></tr>`;}).join("")}
-      </tbody></table>
-      <div class="hint" style="margin-top:10px">Desglose por posición nativa (sin convertir): pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). Son tres saldos reales distintos, no el mismo saldo mirado con otro tipo de cambio — para eso están las cards de arriba, que sí convierten según el selector de moneda.</div></div>`;
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div></div>`;
   }
 
   // Historial de movimientos
@@ -3902,7 +3550,7 @@ function render(soloEstructura){
     </div></div>
     <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>MEP del día</th><th></th></tr></thead><tbody>
     ${movs.map(m=>{
-      const nombre=m.tipo==="cash"?(ETIQ_CASH[m.op]||String(m.op||"").toUpperCase()):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker;
+      const nombre=m.grupoCaucion?m.ticker:(m.tipo==="cash"?(ETIQ_CASH[m.op]||String(m.op||"").toUpperCase()):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker);
       const tot=m.precio/divisorDe(m.tipo)*m.cantidad;
       const opCls=(m.op==="compra"||m.op==="deposito"||m.op==="dividendo")?"op-c":"op-v";
       return `<tr><td>${m.fecha}</td>
@@ -4520,6 +4168,10 @@ function secTabla(titulo,ths,filas){
 function abrirMov(id){
   EDIT_ID=id??null;
   const ed=id?DATOS.movimientos.find(m=>m.id===id):null;
+  if(ed&&ed.grupoCaucion){
+    alert("Esta operación forma parte de una caución "+ed.caucionRol+" con varios movimientos vinculados (capital y interés). Para corregirla, borrala (✕, borra todo el grupo) y cargala de nuevo.");
+    EDIT_ID=null; return;
+  }
   document.getElementById("mov-title").textContent=ed?"Editar movimiento":"Registrar movimiento";
   document.getElementById("m-guardar").textContent=ed?"Guardar cambios":"Guardar movimiento";
   document.getElementById("m-fecha").value=ed?ed.fecha:hoy();
@@ -4540,16 +4192,14 @@ function abrirMov(id){
     document.getElementById("m-cant").value=ed.cantidad;
     document.getElementById("m-precio").value=ed.precio;
     document.getElementById("m-moneda").value=ed.moneda;
-    document.getElementById("m-poolusd").value=ed.poolUSD||"MEP";
     if(ed.tipo==="fci"){ document.getElementById("m-cat").value=ed.categoria; cargarFondos().then(()=>comboSet("fondo",ed.fondo)); }
     calcTotal();
   } else {
     comboLimpiar("ticker"); comboLimpiar("fondo");
     ["m-cant","m-precio"].forEach(i=>document.getElementById(i).value="");
     document.getElementById("m-moneda").value="ARS";
-    document.getElementById("m-poolusd").value="MEP";
   }
-  monedaChanged();
+  refrescarMaxRetiro();
   document.getElementById("modal-mov").classList.add("open");
 }
 function abrirPrecio(t){
@@ -4569,23 +4219,25 @@ function cuentaChanged(){
   if(esNueva) inp.focus(); else inp.value="";
   refrescarMaxRetiro();
 }
-function monedaChanged(){
-  const esUSD=document.getElementById("m-moneda").value==="USD";
-  document.getElementById("f-poolusd").style.display=esUSD?"block":"none";
-  refrescarMaxRetiro();
-}
+function monedaChanged(){ refrescarMaxRetiro(); }
 function catChanged(){ comboLimpiar("fondo"); cargarFondos(); }
 const OPS_CASH=["deposito","retiro","dividendo","gasto"];
 const ETIQ_CASH={deposito:"DEPÓSITO",retiro:"RETIRO",dividendo:"RENTA",gasto:"GASTO"};
+const OPS_CAUCION=["caucion_colocadora","caucion_tomadora"];
 function esCash(){ return OPS_CASH.includes(document.getElementById("m-op").value); }
+function esCaucion(){ return OPS_CAUCION.includes(document.getElementById("m-op").value); }
 function opChanged(){
   const cash=esCash();
-  ["f-tipo","f-cant"].forEach(i=>document.getElementById(i).style.display=cash?"none":"block");
-  document.getElementById("f-ticker").style.display=cash?"none":(document.getElementById("m-tipo").value==="fci"?"none":"block");
-  document.getElementById("f-fci").style.display=cash?"none":(document.getElementById("m-tipo").value==="fci"?"block":"none");
+  const caucion=esCaucion();
+  ["f-tipo","f-cant"].forEach(i=>document.getElementById(i).style.display=(cash||caucion)?"none":"block");
+  document.getElementById("f-ticker").style.display=(cash||caucion)?"none":(document.getElementById("m-tipo").value==="fci"?"none":"block");
+  document.getElementById("f-fci").style.display=(cash||caucion)?"none":(document.getElementById("m-tipo").value==="fci"?"block":"none");
+  ["f-precio","f-moneda","f-total","f-liq"].forEach(i=>document.getElementById(i).style.display=caucion?"none":"block");
+  document.getElementById("f-caucion").style.display=caucion?"block":"none";
   document.getElementById("lbl-precio").textContent=cash?"Monto":"Precio unitario";
   document.getElementById("h-precio").textContent=cash?"Dinero que entra o sale de la cuenta":"";
-  if(!cash) tipoChanged();
+  if(!cash&&!caucion) tipoChanged();
+  if(caucion) calcCaucion();
   refrescarMaxRetiro();
 }
 function tipoChanged(){
@@ -4654,6 +4306,7 @@ async function guardarMov(){
   const err=document.getElementById("m-err");
   const tipo=document.getElementById("m-tipo").value;
   if(esCash()){ return guardarCash(); }
+  if(esCaucion()){ return guardarCaucion(); }
   const selCta=document.getElementById("m-cuenta-sel").value;
   const cuenta=canonizarCta(selCta==="__nueva__"?document.getElementById("m-cuenta-nueva").value:selCta);
   const m={
@@ -4666,7 +4319,6 @@ async function guardarMov(){
     cantidad:parseFloat(document.getElementById("m-cant").value),
     precio:parseFloat(document.getElementById("m-precio").value),
     moneda:document.getElementById("m-moneda").value,
-    poolUSD:document.getElementById("m-poolusd").value,
   };
   if(tipo==="fci"){ m.categoria=document.getElementById("m-cat").value; m.fondo=comboValor("fondo").trim(); }
   // Plazo de liquidación explícito. Vacío = el default del tipo (ver plazoLiq).
@@ -4738,6 +4390,13 @@ async function guardarMov(){
 }
 function borrarMov(id){
   const m=DATOS.movimientos.find(x=>x.id===id); if(!m) return;
+  if(m.grupoCaucion){
+    const patas=DATOS.movimientos.filter(x=>x.grupoCaucion===m.grupoCaucion);
+    if(!confirm("¿Eliminar la caución "+m.caucionRol+" de \""+m.cuenta+"\" ("+patas.length+" movimientos vinculados: capital + interés)? Esto recalcula posiciones y P&L.")) return;
+    DATOS.movimientos=DATOS.movimientos.filter(x=>x.grupoCaucion!==m.grupoCaucion);
+    persistirYSync(); cargar();
+    return;
+  }
   if(!confirm("¿Eliminar "+m.op+" de "+(m.tipo==="fci"?m.fondo:m.ticker)+" del "+m.fecha+"? Esto recalcula posiciones y P&L.")) return;
   DATOS.movimientos=DATOS.movimientos.filter(x=>x.id!==id);
   persistirYSync(); cargar();
@@ -4940,28 +4599,25 @@ function cuentaDelForm(){
   const sel=document.getElementById("m-cuenta-sel"); if(!sel) return "";
   return canonizarCta(sel.value==="__nueva__"?document.getElementById("m-cuenta-nueva").value:sel.value);
 }
-function dispRetiroDe(cuenta,moneda,pool,excluirId){
+function dispRetiroDe(cuenta,moneda,excluirId){
   if(!cuenta) return null;
   const mep=(ESTADO&&ESTADO.MEP>0)?ESTADO.MEP:null;
   if(moneda==="USD"&&!mep) return null;   // sin MEP no se puede expresar en USD
-  const esCCL=moneda==="USD"&&pool==="CCL";
-  const kCta=moneda==="USD"?(esCCL?"ctaCcl":"ctaMep"):"ctaPesos";
-  const kSal=esCCL?"usdCcl":"usdMep";
   const hitos=hitosCaja();
   const ult=hitos[hitos.length-1]||{};
   const pend=cajaALiquidar(hitos,hoy());
   const sal=(DATOS.saldos||{})[cuenta]||{};
-  // saldos viejos guardaban un único "usd" sin distinguir pool: se toma como
-  // MEP (era la única plata en dólares que existía antes de esta separación).
-  const salUSD=(sal[kSal]!=null?sal[kSal]:(esCCL?0:(sal.usd||0)));
-  const caja=(ult[kCta]||{})[cuenta]||0;
-  const t1  =(pend[kCta]||{})[cuenta]||0;
-  const aj  =moneda==="USD"?salUSD:(sal.ars||0); // cada pool nativo, sin cruzar moneda
+  const caja=moneda==="USD"?((ult.ctaU||{})[cuenta]||0):((ult.cta||{})[cuenta]||0);
+  const t1  =moneda==="USD"?((pend.ctaU||{})[cuenta]||0):((pend.cta||{})[cuenta]||0);
+  const aj  =moneda==="USD"?(sal.usd||0)+(mep?(sal.ars||0)/mep:0)
+                           :(sal.ars||0)+(mep?(sal.usd||0)*mep:0);
   let disp=caja+aj-t1;
   const prev=excluirId?DATOS.movimientos.find(x=>x.id===excluirId):null;
-  if(prev&&prev.tipo==="cash"&&claveCta(prev.cuenta)===claveCta(cuenta)&&prev.moneda===moneda&&(moneda!=="USD"||(prev.poolUSD||"MEP")===pool)){
-    const bruto=prev.precio*prev.cantidad; // ya nativo a esta moneda/pool
-    disp+=(prev.op==="deposito"||prev.op==="dividendo")?-bruto:bruto;
+  if(prev&&prev.tipo==="cash"&&claveCta(prev.cuenta)===claveCta(cuenta)&&prev.mep>0){
+    const bruto=prev.precio*prev.cantidad;
+    const val=moneda==="USD"?(prev.moneda==="USD"?bruto:bruto/prev.mep)
+                            :(prev.moneda==="USD"?bruto*prev.mep:bruto);
+    disp+=(prev.op==="deposito"||prev.op==="dividendo")?-val:val;
   }
   return disp;
 }
@@ -4972,9 +4628,8 @@ function refrescarMaxRetiro(){
   if(!esRetiro){ MAX_RETIRO=null; return; }
   const lbl=document.getElementById("maxret-lbl"), btn=document.getElementById("maxret-btn");
   const cuenta=cuentaDelForm(), mon=document.getElementById("m-moneda").value;
-  const pool=document.getElementById("m-poolusd").value;
   const sim=mon==="USD"?"US$ ":"$ ";
-  const bruto=dispRetiroDe(cuenta,mon,pool,EDIT_ID);
+  const bruto=dispRetiroDe(cuenta,mon,EDIT_ID);
   // Se trunca a centavos (no se redondea) para no ofrecer un centavo más de lo
   // que hay; el .toFixed intermedio evita que el binario deje 1.234.567,89 en
   // 1.234.567,88. Se guarda ya truncado para que el cartel, el botón y lo que
@@ -5013,7 +4668,6 @@ async function guardarCash(){
     cuenta, cantidad:1,
     precio:parseFloat(document.getElementById("m-precio").value),
     moneda:document.getElementById("m-moneda").value,
-    poolUSD:document.getElementById("m-poolusd").value,
   };
   if(!m.fecha||!cuenta||!(m.precio>0)){ err.textContent="Completá fecha, cuenta y monto."; err.style.display="block"; return; }
   if(m.fecha>hoy()){ err.textContent="La fecha no puede ser futura."; err.style.display="block"; return; }
@@ -5026,6 +4680,100 @@ async function guardarCash(){
   }
   if(EDIT_ID){ DATOS.movimientos[DATOS.movimientos.findIndex(x=>x.id===EDIT_ID)]=m; }
   else DATOS.movimientos.push(m);
+  EDIT_ID=null;
+  persistirYSync(); cerrarModales(); cargar();
+}
+
+/* ══════════════ Caución (colocadora / tomadora) ══════════════
+   Una caución es un préstamo de cortísimo plazo (1 a 120 días) garantizado
+   por BYMA: el COLOCADOR presta efectivo y al vencimiento cobra capital +
+   interés; el TOMADOR recibe el efectivo y al vencimiento devuelve capital +
+   interés, dejando títulos en garantía. Fórmula estándar de mercado:
+   interés = capital × TNA × (días corridos / 365).
+
+   Se modela con MOVIMIENTOS DE CAJA (no como compra/venta de un activo
+   sintético) para que el capital nunca distorsione el rendimiento: depósito
+   y retiro son flujos externos que Modified Dietz ya excluye del cálculo de
+   retorno, y el interés entra como renta (colocadora) o gasto (tomadora),
+   que sí impacta P&L igual que cualquier otro interés cobrado o pagado.
+   Los 3 movimientos quedan vinculados por "grupoCaucion" para poder
+   borrarlos juntos (no son editables individualmente, ver abrirMov).
+
+   Nota: como capital y retiro pasan por depósito/retiro, las tarjetas
+   "Capital aportado" y "Retirado" van a incluir el ida-y-vuelta de cada
+   caución (no son ya un espejo puro de aportes propios). El rendimiento en
+   sí no se distorsiona: eso es lo que Modified Dietz corrige.
+*/
+const ETIQ_CAUCION={colocadora:"COLOCADORA",tomadora:"TOMADORA"};
+// Días CORRIDOS (no hábiles): así se pacta el plazo de una caución y así se
+// calcula el interés — a diferencia de sumarHabiles(), que es para liquidación.
+function sumarDiasCorridos(fecha,n){
+  const d=new Date(fecha+"T12:00");
+  d.setDate(d.getDate()+Math.round(n||0));
+  return d.toLocaleDateString("sv-SE");
+}
+function interesCaucion(monto,tasaPct,plazoDias){
+  return Math.round(monto*(tasaPct/100)*(plazoDias/365)*100)/100;
+}
+function calcCaucion(){
+  if(!esCaucion()) return;
+  const prev=document.getElementById("cau-preview");
+  const fecha=document.getElementById("m-fecha").value;
+  const monto=parseFloat(document.getElementById("m-cau-monto").value);
+  const tasa=parseFloat(document.getElementById("m-cau-tasa").value);
+  const plazo=parseInt(document.getElementById("m-cau-plazo").value,10);
+  if(!fecha||!(monto>0)||!(tasa>=0)||!(plazo>0)){
+    prev.textContent="Completá fecha, monto, tasa y plazo para ver el vencimiento y el interés.";
+    return;
+  }
+  const venc=sumarDiasCorridos(fecha,plazo);
+  const interes=interesCaucion(monto,tasa,plazo);
+  const colocadora=document.getElementById("m-op").value==="caucion_colocadora";
+  const sim=document.getElementById("m-cau-moneda").value==="USD"?"US$ ":"$ ";
+  prev.innerHTML=colocadora
+    ? `Vencimiento: <b>${venc}</b> · Interés a cobrar: <b>${sim}${fmt(interes,2)}</b><br>
+       Se van a registrar 3 movimientos: retiro de ${sim}${fmt(monto,2)} el ${fecha} (sale el capital), depósito de ${sim}${fmt(monto,2)} el ${venc} (vuelve el capital) y renta de ${sim}${fmt(interes,2)} el ${venc} (el interés cobrado).`
+    : `Vencimiento: <b>${venc}</b> · Interés a pagar: <b>${sim}${fmt(interes,2)}</b><br>
+       Se van a registrar 3 movimientos: depósito de ${sim}${fmt(monto,2)} el ${fecha} (entra el capital tomado), retiro de ${sim}${fmt(monto,2)} el ${venc} (se devuelve el capital) y gasto de ${sim}${fmt(interes,2)} el ${venc} (el interés pagado).`;
+}
+async function guardarCaucion(){
+  const err=document.getElementById("m-err");
+  if(EDIT_ID){ err.textContent="Una caución no se edita: cancelá, borrala y cargala de nuevo."; err.style.display="block"; return; }
+  const op=document.getElementById("m-op").value;
+  const colocadora=op==="caucion_colocadora";
+  const selCta=document.getElementById("m-cuenta-sel").value;
+  const cuenta=canonizarCta(selCta==="__nueva__"?document.getElementById("m-cuenta-nueva").value:selCta);
+  const fecha=document.getElementById("m-fecha").value;
+  const monto=parseFloat(document.getElementById("m-cau-monto").value);
+  const tasa=parseFloat(document.getElementById("m-cau-tasa").value);
+  const plazo=parseInt(document.getElementById("m-cau-plazo").value,10);
+  const moneda=document.getElementById("m-cau-moneda").value;
+  if(!fecha||!cuenta||!(monto>0)||!(tasa>=0)||!(plazo>0)){
+    err.textContent="Completá fecha, cuenta, monto, tasa y plazo."; err.style.display="block"; return;
+  }
+  if(fecha>hoy()){ err.textContent="La fecha no puede ser futura."; err.style.display="block"; return; }
+  const venc=sumarDiasCorridos(fecha,plazo);
+  const interes=interesCaucion(monto,tasa,plazo);
+  err.textContent="Obteniendo MEP…"; err.style.color="var(--grey)"; err.style.display="block";
+  let mepIni,mepVenc;
+  try{
+    mepIni=Math.round(await mepDeFecha(fecha)*100)/100;
+    mepVenc=fecha===venc?mepIni:Math.round(await mepDeFecha(venc)*100)/100;
+  }catch(e){ err.textContent=e.message; err.style.color="var(--down)"; return; }
+  err.style.display="none";
+  const grupo=Date.now();
+  const rolTxt=colocadora?"colocadora":"tomadora";
+  const etiqRol=ETIQ_CAUCION[rolTxt];
+  const mCapitalIni={id:grupo,fecha,op:colocadora?"retiro":"deposito",tipo:"cash",
+    ticker:"CAUCIÓN "+etiqRol+" (capital)".replace("Ó","O"),cuenta,cantidad:1,precio:monto,moneda,mep:mepIni,
+    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc};
+  const mCapitalVenc={id:grupo+1,fecha:venc,op:colocadora?"deposito":"retiro",tipo:"cash",
+    ticker:"CAUCIÓN "+etiqRol+" (capital vto.)".replace("Ó","O"),cuenta,cantidad:1,precio:monto,moneda,mep:mepVenc,
+    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc};
+  const mInteres={id:grupo+2,fecha:venc,op:colocadora?"dividendo":"gasto",tipo:"cash",
+    ticker:"CAUCIÓN "+etiqRol+" (interés)".replace("Ó","O"),cuenta,cantidad:1,precio:interes,moneda,mep:mepVenc,
+    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc};
+  DATOS.movimientos.push(mCapitalIni,mCapitalVenc,mInteres);
   EDIT_ID=null;
   persistirYSync(); cerrarModales(); cargar();
 }
