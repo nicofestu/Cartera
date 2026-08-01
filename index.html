@@ -2328,6 +2328,24 @@ function diasEntre(a,b){ return Math.max(1,Math.round((new Date(b+"T12:00")-new 
 function diasCal(a,b){ return Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5); }
 function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null; }
 
+// Textos de ayuda (atributo title, tooltip nativo del navegador al pasar el
+// mouse) para las dos cards que muestran "un año" al lado de la otra.
+// Escritos para alguien sin formación financiera: sin jerga, con una imagen
+// concreta ("como si metieras todo el primer día" / "como una libreta con
+// tasa variable") y explicando por qué pueden dar números tan distintos.
+const TIP_ANUALIZADO=`Toma lo que ganó tu cartera en este período y lo estira a un año, `+
+  `como si ese mismo ritmo se mantuviera 365 días. Ojo: es COMO SI todo tu `+
+  `capital hubiera estado invertido desde el primer día. Si en realidad fuiste `+
+  `metiendo plata de a poco, este número no lo tiene en cuenta — para eso está `+
+  `la TIREA de al lado.`;
+const TIP_TIREA=`Es la tasa de interés anual que, aplicada a cada peso desde el `+
+  `día exacto en que lo pusiste (como si fuera una libreta a tasa fija), `+
+  `explica el resultado final de tu cartera. A diferencia del "Rendimiento `+
+  `anualizado", a la plata que aportaste hace poco le da menos tiempo para `+
+  `rendir — así que si aportaste fuerte sobre el final, la TIREA suele salir `+
+  `más alta (a ese aporte reciente "le costó menos" llegar al resultado). Es la `+
+  `forma más justa de medir cómo rindió TU plata, no solo la estrategia.`;
+
 /* ══════════════ TIR (XIRR) ══════════════
    anualizar() eleva un retorno acumulado a 365/días: eso es una tasa efectiva
    anual (CAGR), y durante mucho tiempo la app la rotuló "TNA equivalente", que
@@ -3659,6 +3677,15 @@ function render(soloEstructura){
         // retiro ya entró al vector como flujo positivo en su propia fecha.
         // Sumarlo otra vez acá lo contaría dos veces y dispararía la TIR.
         const tirTot=srT?tirDe(0,fPrim,flujosTot,totalBase,hoy()):null;
+        // Rendimiento anualizado "simple": proyecta el retorno total (time-
+        // weighted) a un año usando interés compuesto, SIN mirar cuándo entró
+        // cada aporte — equivale a asumir que todo el capital estuvo invertido
+        // desde el día 1. Es la métrica estándar para juzgar cómo se comportó
+        // la estrategia/los activos (piénsalo como el CAGR). Se muestra al
+        // lado de la TIR (que sí pesa el timing de la plata) a propósito: son
+        // respuestas a preguntas distintas y pueden diferir mucho si hiciste
+        // aportes grandes a mitad de camino.
+        const tnaTot=twOk?anualizar(retTot,diasTot):null;
         // Índices sobre la misma ventana efectiva que el TWR de la cartera y
         // con la misma fuente que dibuja la línea punteada del gráfico. Si no
         // hay serie diaria se cae al simulador money-weighted de siempre, que
@@ -3688,11 +3715,16 @@ function render(soloEstructura){
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
             <div class="d-money ${cls(ganTot)}">${signoMoney(ganTot)}</div>
             <div class="d">${twOk?"time-weighted":"sobre lo aportado (sin serie diaria)"} · acumulado, sin anualizar · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
-          `<div class="perf"><div class="k">TIR anual</div>
+          `<div class="perf" title="${TIP_ANUALIZADO}"><div class="k">Rendimiento anualizado</div>
+            <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
+            <div class="d">${tnaTot==null
+              ?"necesita al menos 30 días con serie diaria"
+              :`retorno total llevado a un año · ${diasTot}d`}</div></div>`,
+          `<div class="perf" title="${TIP_TIREA}"><div class="k">TIR anual (TIREA)</div>
             <div class="v ${cls(tirTot)}">${tirTot==null?"—":sgn(tirTot*100)}</div>
             <div class="d">${tirTot==null
               ?"necesita al menos 30 días de historial y un aporte registrado"
-              :`efectiva anual (TIREA) · ${diasTot}d · pondera cuándo entró cada peso`}</div></div>`,
+              :`pondera cuándo entró cada peso · ${diasTot}d`}</div></div>`,
           `<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(baseCap)}</div>
             <div class="d">plata que entró de afuera</div></div>`,
@@ -3786,6 +3818,10 @@ function render(soloEstructura){
         // secuencia de aportes.
         const flujosPer=srT?srT.flujosEntre(r.desde,r.hasta):[];
         const tirPer=tirDe(r.v0,r.desde,flujosPer,r.v1,r.hasta);
+        // Mismo par de métricas que en Histórico: anualizar() proyecta el
+        // retorno del tramo a 365 días asumiendo que todo el capital estuvo
+        // invertido desde el arranque; la TIR de arriba ya pesa el timing.
+        const tnaPer=anualizar(r.ret,r.diasReales);
         const netoPer=flujosPer.reduce((sum,f)=>sum+f.monto,0);
         // El mismo NAV inicial y los mismos flujos, pero comprando el índice.
         const vSPp=simIndice(SP500_HIST,SP500_FECHAS,sp500Hoy,r.v0,r.desde,flujosPer,r.hasta);
@@ -3806,11 +3842,16 @@ function render(soloEstructura){
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
             <div class="d-money ${cls(r.gan)}">${signoMoney(r.gan)}</div>
             <div class="d">time-weighted · acumulado, sin anualizar · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
-          `<div class="perf"><div class="k">TIR anual</div>
+          `<div class="perf" title="${TIP_ANUALIZADO}"><div class="k">Rendimiento anualizado</div>
+            <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
+            <div class="d">${tnaPer==null
+              ?`el período mide ${r.diasReales} día${r.diasReales>1?"s":""}: por debajo de 30 anualizar amplifica el ruido`
+              :`retorno del período llevado a un año · ${r.diasReales}d`}</div></div>`,
+          `<div class="perf" title="${TIP_TIREA}"><div class="k">TIR anual (TIREA)</div>
             <div class="v ${cls(tirPer)}">${tirPer==null?"—":sgn(tirPer*100)}</div>
             <div class="d">${tirPer==null
               ?`el período mide ${r.diasReales} día${r.diasReales>1?"s":""}: por debajo de 30 anualizar amplifica el ruido`
-              :`efectiva anual (TIREA) · ${r.diasReales}d efectivos · pondera cuándo entró cada peso`}</div></div>`,
+              :`pondera cuándo entró cada peso · ${r.diasReales}d efectivos`}</div></div>`,
           aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(aportePer)}</div>
             <div class="d">entró durante el período</div></div>`:null,
