@@ -1942,6 +1942,18 @@ function construirHitosCaja(){
     const a=esUSD?bruto*m.mep:bruto;
     const u=esUSD?bruto:bruto/m.mep;
     let dA=0,dU=0,dN=0; // dN: efecto neto NATIVO (pesos o dólares, según m.moneda) de este movimiento
+    // Caución colocadora: el capital "sale" el día que se coloca y "vuelve" al
+    // vencimiento, pero prestar plata no te hace más pobre ni más rico (solo
+    // el interés lo hace) — así que estas dos patas NO mueven la caja (dA/dU/
+    // dN neutros: el NAV no pega el salto de ida y el de vuelta). apor/ret sí
+    // se llevan igual que siempre (con `a`/`u`, no con dA), para que Modified
+    // Dietz las siga viendo como flujo externo, tal como documenta el bloque
+    // de arriba. Mientras tanto el capital no está disponible: se marca
+    // pendiente más abajo, con el vencimiento PACTADO (días corridos, ver
+    // caucionVenc) en vez del cálculo de settlement hábil de fechaLiqDe — ese
+    // es para liquidación de títulos, no para el plazo de una caución.
+    const capIniColoc=m.grupoCaucion&&m.caucionRol==="colocadora"&&m.caucionLeg==="capital_ini";
+    const capVencColoc=m.grupoCaucion&&m.caucionRol==="colocadora"&&m.caucionLeg==="capital_venc";
     if(m.op==="compra"){
       // Math.max(0,…) sobre el mínimo: con caja negativa, Math.min devolvía un
       // número negativo y la compra terminaba SUMANDO efectivo e inflando el
@@ -1952,8 +1964,13 @@ function construirHitosCaja(){
       const nP=esUSD?(esCCL?nC:nM):nA;
       dN=-Math.max(0,Math.min(nP[k],bruto));
     }
-    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); dN=bruto; }
-    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; dN=-bruto; }
+    else if(m.op==="deposito"){
+      dA=capVencColoc?0:a; dU=capVencColoc?0:u; apor+=a; aporU+=u;
+      eventosAporte.push({fecha:m.fecha,usd:u}); dN=capVencColoc?0:bruto;
+    }
+    else if(m.op==="retiro"){
+      dA=capIniColoc?0:-a; dU=capIniColoc?0:-u; ret+=a; retU+=u; dN=capIniColoc?0:-bruto;
+    }
     // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
     // retenciones, impuestos): mueven la caja pero NO son capital que entró o
     // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
@@ -1965,6 +1982,7 @@ function construirHitosCaja(){
     (pool==="A"?nA:pool==="M"?nM:nC)[k]+=dN;
     const fl=fechaLiqDe(m);
     if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,pool,n:dN});
+    if(capIniColoc&&m.caucionVenc>m.fecha) liquidaciones.push({fecha:m.fecha,hasta:m.caucionVenc,cuenta:k,a,pool,n:bruto});
     const caja=Object.values(cA).reduce((s,x)=>s+x,0);
     const cajaU=Object.values(cU).reduce((s,x)=>s+x,0);
     const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU},
@@ -3233,7 +3251,7 @@ function render(soloEstructura){
      El modal "Saldos en cuenta" quedó como AJUSTE contra el extracto del
      bróker y se suma arriba de lo derivado. */
   const hitosC=hitosCaja();
-  const ultC=hitosC[hitosC.length-1]||{cta:{},ctaU:{}};
+  const ultC=hitoEn(hitosC,hoy())||{cta:{},ctaU:{}};
   const cjCta=(VISTA==="ARS"?ultC.cta:ultC.ctaU)||{};
   const pend=cajaALiquidar(hitosC,hoy());
   const pendCta=(VISTA==="ARS"?pend.cta:pend.ctaU)||{};
@@ -3873,33 +3891,37 @@ function render(soloEstructura){
 
   // Liquidez por cuenta
   if(TAB==="inicio"&&hayCash){
+    const celda=(v,dec,sim)=>{
+      const av=Math.abs(v);
+      const umbral=dec===0?0.5:0.005;
+      if(av<umbral) return `<td>—</td>`;
+      return `<td class="${v<0?"down":""}">${v<0?"−":""}${sim}${fmt(av,dec)}</td>`;
+    };
     html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
       <span class="tot"><b>${(cash<0?"−":"")+money(Math.abs(cash))}</b> · ${fmt(cash/total*100,1)}%</span>
       <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ ajuste</button></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Cuenta</th><th>Disponible</th><th>T + 1</th><th>Ajuste manual</th><th>Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr></thead><tbody>
+      <div class="tbl-scroll"><table><thead>
+      <tr><th rowspan="2" class="l">Cuenta</th><th colspan="3">Disponible</th><th colspan="3">T + 1</th><th rowspan="2">Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr>
+      <tr><th>ARS</th><th>MEP</th><th>CCL</th><th>ARS</th><th>MEP</th><th>CCL</th></tr>
+      </thead><tbody>
       ${cuentas.map(c=>{
-        const t=cashCta(c), pd=cashPendCta(c), aj=ajusteCta(c), disp=t-pd;
-        if(Math.abs(t)<0.5&&Math.abs(pd)<0.5) return "";
+        const t=cashCta(c);
+        const s2=saldos[c]||{};
+        const pesTot=((ultC.ctaPesos||{})[c]||0)+(s2.ars||0);
+        const mepTot=((ultC.ctaMep||{})[c]||0)+(s2.usdMep??s2.usd??0);
+        const cclTot=((ultC.ctaCcl||{})[c]||0)+(s2.usdCcl||0);
+        const pesPend=(pend.ctaPesos||{})[c]||0;
+        const mepPend=(pend.ctaMep||{})[c]||0;
+        const cclPend=(pend.ctaCcl||{})[c]||0;
+        const pesDisp=pesTot-pesPend, mepDisp=mepTot-mepPend, cclDisp=cclTot-cclPend;
+        if(Math.abs(pesTot)<0.5&&Math.abs(mepTot)<0.005&&Math.abs(cclTot)<0.005
+          &&Math.abs(pesPend)<0.5&&Math.abs(mepPend)<0.005&&Math.abs(cclPend)<0.005) return "";
         return `<tr><td class="tk">${c}</td>
-        <td class="${disp<0?"down":""}">${(disp<0?"−":"")+money(Math.abs(disp))}</td>
-        <td class="${pd<0?"down":""}">${Math.abs(pd)<0.5?"—":(pd<0?"−":"+")+money(Math.abs(pd))}</td>
-        <td class="${aj<0?"down":""}">${Math.abs(aj)<0.5?"—":(aj<0?"−":"")+money(Math.abs(aj))}</td>
+        ${celda(pesDisp,0,"$ ")}${celda(mepDisp,2,"US$ ")}${celda(cclDisp,2,"US$ ")}
+        ${celda(pesPend,0,"$ ")}${celda(mepPend,2,"US$ ")}${celda(cclPend,2,"US$ ")}
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
       </tbody></table>
-      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div>
-      <div class="tbl-scroll" style="margin-top:16px"><table><thead><tr><th>Cuenta</th><th>Pesos</th><th>Dólar MEP</th><th>Dólar CCL</th></tr></thead><tbody>
-      ${cuentas.map(c=>{
-        const pes=((ultC.ctaPesos||{})[c]||0)+((saldos[c]||{}).ars||0);
-        const s2=saldos[c]||{};
-        const dm=((ultC.ctaMep||{})[c]||0)+(s2.usdMep??s2.usd??0);
-        const dc=((ultC.ctaCcl||{})[c]||0)+(s2.usdCcl||0);
-        if(Math.abs(pes)<0.5&&Math.abs(dm)<0.005&&Math.abs(dc)<0.005) return "";
-        return `<tr><td class="tk">${c}</td>
-        <td class="${pes<0?"down":""}">${Math.abs(pes)<0.5?"—":(pes<0?"−":"")+"$ "+fmt(Math.abs(pes),0)}</td>
-        <td class="${dm<0?"down":""}">${Math.abs(dm)<0.005?"—":(dm<0?"−":"")+"US$ "+fmt(Math.abs(dm),2)}</td>
-        <td class="${dc<0?"down":""}">${Math.abs(dc)<0.005?"—":(dc<0?"−":"")+"US$ "+fmt(Math.abs(dc),2)}</td></tr>`;}).join("")}
-      </tbody></table>
-      <div class="hint" style="margin-top:10px">Desglose por posición nativa (sin convertir): pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). Son tres saldos reales distintos, no el mismo saldo mirado con otro tipo de cambio — para eso están las cards de arriba, que sí convierten según el selector de moneda.</div></div>`;
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja, en sus tres posiciones nativas — pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). <b>Disponible</b> es lo ya liquidado, usable hoy; <b>T + 1</b> es lo que todavía no está disponible (liquidación T+1 hábil de acciones, CEDEARs y bonos, o capital colocado en una caución hasta su vencimiento) — ya está contado en el NAV, en la columna Total. El ajuste manual del modal "Saldos en cuenta" (para cerrar contra el extracto del bróker cuando falta cargar algún movimiento) va sumado adentro de Disponible y Total.</div></div>`;
   }
 
   // Historial de movimientos
@@ -5002,7 +5024,7 @@ function dispRetiroDe(cuenta,moneda,pool,excluirId){
   const kCta=moneda==="USD"?(esCCL?"ctaCcl":"ctaMep"):"ctaPesos";
   const kSal=esCCL?"usdCcl":"usdMep";
   const hitos=hitosCaja();
-  const ult=hitos[hitos.length-1]||{};
+  const ult=hitoEn(hitos,hoy())||{};
   const pend=cajaALiquidar(hitos,hoy());
   const sal=(DATOS.saldos||{})[cuenta]||{};
   // saldos viejos guardaban un único "usd" sin distinguir pool: se toma como
@@ -5172,13 +5194,13 @@ async function guardarCaucion(){
   const etiqRol=ETIQ_CAUCION[rolTxt];
   const mCapitalIni={id:grupo,fecha,op:colocadora?"retiro":"deposito",tipo:"cash",
     ticker:"CAUCIÓN "+etiqRol+" (capital)".replace("Ó","O"),cuenta,cantidad:1,precio:monto,moneda,mep:mepIni,poolUSD,
-    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc};
+    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc,caucionLeg:"capital_ini"};
   const mCapitalVenc={id:grupo+1,fecha:venc,op:colocadora?"deposito":"retiro",tipo:"cash",
     ticker:"CAUCIÓN "+etiqRol+" (capital vto.)".replace("Ó","O"),cuenta,cantidad:1,precio:monto,moneda,mep:mepVenc,poolUSD,
-    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc};
+    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc,caucionLeg:"capital_venc"};
   const mInteres={id:grupo+2,fecha:venc,op:colocadora?"dividendo":"gasto",tipo:"cash",
     ticker:"CAUCIÓN "+etiqRol+" (interés)".replace("Ó","O"),cuenta,cantidad:1,precio:interes,moneda,mep:mepVenc,poolUSD,
-    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc};
+    grupoCaucion:grupo,caucionRol:rolTxt,caucionTasa:tasa,caucionPlazo:plazo,caucionVenc:venc,caucionLeg:"interes"};
   DATOS.movimientos.push(mCapitalIni,mCapitalVenc,mInteres);
   EDIT_ID=null;
   persistirYSync(); cerrarModales(); cargar();
