@@ -2211,7 +2211,7 @@ function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null;
 function rangoPeriodo(periodo){
   const hoyF=hoy(), anioAct=+hoyF.slice(0,4);
   // "dias" es el calendario real y nominal del período — 1/ene→hoy en YTD,
-  // día 1 del mes→hoy, hoy−7→hoy en semanal — SIEMPRE fijo según la fecha de
+  // día 1 del mes→hoy, lunes de esta semana→hoy en semanal — SIEMPRE fijo según la fecha de
   // hoy, sin importar cuántos snapshots con datos haya en el medio (huecos,
   // días de saldo bajo descartados, o que no se haya abierto la app todos los
   // días). Es la base que usa TNA para anualizar; si se calculara a partir de
@@ -2220,7 +2220,7 @@ function rangoPeriodo(periodo){
   if(periodo==="hoy") return {desde:restarDias(hoyF,1),hasta:hoyF,etiqueta:"Hoy",dias:1,desdeNominal:hoyF};
   if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD",dias:diasEntre(anioAct+"-01-01",hoyF),desdeNominal:anioAct+"-01-01"};
   if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(hoyF.slice(0,8)+"01",hoyF),desdeNominal:hoyF.slice(0,8)+"01"};
-  if(periodo==="semanal") return {desde:restarDias(hoyF,7),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(restarDias(hoyF,7),hoyF),desdeNominal:restarDias(hoyF,7)};
+  if(periodo==="semanal") return {desde:lunesDeSemana(hoyF),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(lunesDeSemana(hoyF),hoyF),desdeNominal:lunesDeSemana(hoyF)};
   if(/^\d{4}$/.test(periodo)){
     const fin=periodo+"-12-31";
     const hastaEf=fin>hoyF?hoyF:fin;
@@ -2738,6 +2738,7 @@ function diagnosticoSerieHtml(serie,pos){
 
 function ymd(d){ return d.toISOString().slice(0,10); }
 function restarDias(f,n){ const d=new Date(f+"T00:00:00Z"); d.setUTCDate(d.getUTCDate()-n); return ymd(d); }
+function lunesDeSemana(f){ const d=new Date(f+"T00:00:00Z"); const back=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-back); return ymd(d); } // lunes de la semana calendario de f (reset los lunes)
 
 /* Métricas de riesgo estándar sobre la serie de retornos.
 
