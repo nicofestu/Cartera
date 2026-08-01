@@ -1214,6 +1214,7 @@ const GRUPOS = [
   {nombre:"ONs corporativas",   tipos:["on"], color:"#A8A8A8"},
   {nombre:"Acciones y CEDEARs", tipos:["accion","cedear"], color:"#6E6E6E"},
   {nombre:"FCI y otros",        tipos:["fci","manual"], color:"#414141"},
+  {nombre:"Cauciones",          tipos:["caucion"], color:"#8A8A8A"},
 ];
 const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 1000 : 1;
 
@@ -1767,10 +1768,21 @@ async function reconstruirHistorialSnapshots(){
     .filter(f=>f>=primeraFecha&&f<=ayer).sort();
   const nuevos=[]; const reparados=[];
   for(const f of fechas){
-    const {posiciones}=derivarPosiciones(null,f);
+    const {posiciones:posicionesMovs}=derivarPosiciones(null,f);
+    // Las cauciones no dependen de historial/*.json (se valúan con la misma
+    // fórmula que en vivo, ver posicionesCaucion), así que un día donde lo
+    // único que hay en cartera es una caución sin vencer también tiene que
+    // generar cierre — antes `if(!posiciones.length) continue` lo salteaba.
+    const posiciones=[...posicionesMovs, ...posicionesCaucion(f)];
     if(!posiciones.length) continue;
     let valARS=0, faltan=[];
     for(const p of posiciones){
+      if(p.tipo==="caucion"){
+        const mepF=p.moneda==="USD"?mepEnFecha(f):1;
+        if(p.moneda==="USD"&&!mepF){ faltan.push("caucion:"+p.grupoCaucion); continue; }
+        valARS+=p.pool==="ARS"?p.valorNativo:p.valorNativo*mepF; // CCL histórico no existe (§8): se aproxima por MEP, igual que el resto de la caja
+        continue;
+      }
       if(p.tipo==="on"){ faltan.push(p.tipo+":"+(p.ticker||p.fondo)); continue; }
       if(p.tipo==="manual"){
         const h=precioManualHistorial(p.ticker,f);
@@ -1942,18 +1954,13 @@ function construirHitosCaja(){
     const a=esUSD?bruto*m.mep:bruto;
     const u=esUSD?bruto:bruto/m.mep;
     let dA=0,dU=0,dN=0; // dN: efecto neto NATIVO (pesos o dólares, según m.moneda) de este movimiento
-    // Caución colocadora: el capital "sale" el día que se coloca y "vuelve" al
-    // vencimiento, pero prestar plata no te hace más pobre ni más rico (solo
-    // el interés lo hace) — así que estas dos patas NO mueven la caja (dA/dU/
-    // dN neutros: el NAV no pega el salto de ida y el de vuelta). apor/ret sí
-    // se llevan igual que siempre (con `a`/`u`, no con dA), para que Modified
-    // Dietz las siga viendo como flujo externo, tal como documenta el bloque
-    // de arriba. Mientras tanto el capital no está disponible: se marca
-    // pendiente más abajo, con el vencimiento PACTADO (días corridos, ver
-    // caucionVenc) en vez del cálculo de settlement hábil de fechaLiqDe — ese
-    // es para liquidación de títulos, no para el plazo de una caución.
-    const capIniColoc=m.grupoCaucion&&m.caucionRol==="colocadora"&&m.caucionLeg==="capital_ini";
-    const capVencColoc=m.grupoCaucion&&m.caucionRol==="colocadora"&&m.caucionLeg==="capital_venc";
+    // Caución: el capital SÍ mueve la caja de verdad, el día que se coloca (o
+    // se toma) y el día que vence — plata que sale o entra de la cuenta es
+    // plata que sale o entra, no hay settlement de por medio. Lo que faltaba
+    // NO era esto: era que mientras la caución está afuera, el capital deja
+    // de estar en la caja pero sigue siendo tuyo (o se lo debés a alguien si
+    // sos tomador) — eso se resuelve modelándolo como una POSICIÓN más de la
+    // cartera (ver posicionesCaucion()), no maquillando la caja.
     if(m.op==="compra"){
       // Math.max(0,…) sobre el mínimo: con caja negativa, Math.min devolvía un
       // número negativo y la compra terminaba SUMANDO efectivo e inflando el
@@ -1964,13 +1971,8 @@ function construirHitosCaja(){
       const nP=esUSD?(esCCL?nC:nM):nA;
       dN=-Math.max(0,Math.min(nP[k],bruto));
     }
-    else if(m.op==="deposito"){
-      dA=capVencColoc?0:a; dU=capVencColoc?0:u; apor+=a; aporU+=u;
-      eventosAporte.push({fecha:m.fecha,usd:u}); dN=capVencColoc?0:bruto;
-    }
-    else if(m.op==="retiro"){
-      dA=capIniColoc?0:-a; dU=capIniColoc?0:-u; ret+=a; retU+=u; dN=capIniColoc?0:-bruto;
-    }
+    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); dN=bruto; }
+    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; dN=-bruto; }
     // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
     // retenciones, impuestos): mueven la caja pero NO son capital que entró o
     // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
@@ -1982,7 +1984,6 @@ function construirHitosCaja(){
     (pool==="A"?nA:pool==="M"?nM:nC)[k]+=dN;
     const fl=fechaLiqDe(m);
     if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,pool,n:dN});
-    if(capIniColoc&&m.caucionVenc>m.fecha) liquidaciones.push({fecha:m.fecha,hasta:m.caucionVenc,cuenta:k,a,pool,n:bruto});
     const caja=Object.values(cA).reduce((s,x)=>s+x,0);
     const cajaU=Object.values(cU).reduce((s,x)=>s+x,0);
     const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU},
@@ -2185,6 +2186,45 @@ function qtyDisponible(tipo,ticker,fondo,cuenta,excluirId){
   const {posiciones}=derivarPosiciones(excluirId);
   const p=posiciones.find(x=>x.tipo===tipo&&x.cuenta===cuenta&&(tipo==="fci"?x.fondo===fondo:x.ticker===ticker));
   return p?p.qty:0;
+}
+
+/* ══════════════ Cauciones: posición sintética ══════════════
+   Mientras una caución colocada no vence, el capital no está en la caja
+   (ver construirHitosCaja) pero sigue siendo tuyo: es un activo, igual que
+   un bono. Una caución TOMADA es lo simétrico: recibiste caja de verdad,
+   pero le debés el capital a alguien — un pasivo, valor negativo. Las dos
+   se modelan igual, con signo opuesto, para que la app sirva tanto para
+   colocar como para tomar caución (ver §1: escalar, no adaptar a un caso).
+
+   El valor se devenga LINEAL, día corrido a día corrido (mismo criterio con
+   el que se pacta el interés), así el NAV no da un salto al vencimiento ni
+   cae mientras la plata está afuera: crece (o, si sos tomador, se hace más
+   negativo) un poco cada día. No depende de ninguna cotización de mercado:
+   es una fórmula, así que vale igual hoy en vivo que reconstruyendo una
+   fecha pasada — ver el uso en cargar() y en reconstruirHistorialSnapshots().
+
+   Deja de listarse en cuanto `fechaEval` alcanza el vencimiento: ahí el
+   capital + interés ya volvieron a la caja de verdad, vía los movimientos
+   de depósito/retiro y renta/gasto que carga guardarCaucion(). */
+function posicionesCaucion(fechaEval){
+  const legs=DATOS.movimientos.filter(m=>m.grupoCaucion
+    &&m.fecha<=fechaEval&&m.caucionVenc>fechaEval
+    &&((m.caucionRol==="colocadora"&&m.op==="retiro")||(m.caucionRol==="tomadora"&&m.op==="deposito")));
+  return legs.map(m=>{
+    const colocadora=m.caucionRol==="colocadora";
+    const plazo=m.caucionPlazo>0?m.caucionPlazo:Math.max(1,difDias(m.fecha,m.caucionVenc));
+    const dias=Math.max(0,Math.min(plazo,difDias(m.fecha,fechaEval)));
+    const interes=Math.round(m.precio*((m.caucionTasa||0)/100)*(dias/365)*100)/100;
+    const signo=colocadora?1:-1; // colocadora: a cobrar (activo); tomadora: a devolver (pasivo)
+    const pool=m.moneda==="USD"?(m.poolUSD==="CCL"?"CCL":"MEP"):"ARS";
+    return {tipo:"caucion",
+      ticker:"CAUCIÓN "+(colocadora?"COLOCADORA":"TOMADORA")+" · vence "+m.caucionVenc.slice(8,10)+"/"+m.caucionVenc.slice(5,7),
+      cuenta:m.cuenta,qty:1,moneda:m.moneda,pool,
+      valorNativo:signo*(m.precio+interes),
+      costARS:signo*(m.moneda==="USD"?m.precio*m.mep:m.precio),
+      costUSD:signo*(m.moneda==="USD"?m.precio:m.precio/m.mep),
+      caucionVenc:m.caucionVenc,caucionTasa:m.caucionTasa,caucionRol:m.caucionRol,grupoCaucion:m.grupoCaucion};
+  });
 }
 
 
@@ -2575,7 +2615,12 @@ async function cargar(){
   const err=document.getElementById("err"); err.style.display="none"; err.innerHTML="";
   document.getElementById("ts").textContent="Actualizando cotizaciones…";
   try{
-    const {posiciones, realARS, realUSD}=derivarPosiciones();
+    const {posiciones:posicionesMovs, realARS, realUSD}=derivarPosiciones();
+    // Las cauciones colocadas/tomadas y sin vencer se suman como una posición
+    // más (ver posicionesCaucion): no tienen cotización de mercado, así que
+    // quedan afuera del pedido de precios de abajo (ningún tipo de EP matchea
+    // "caucion") y se valúan aparte, más adelante en este mismo bloque.
+    const posiciones=[...posicionesMovs, ...posicionesCaucion(hoy())];
     const tipos=[...new Set([...posiciones.map(p=>p.tipo),"cedear"])].filter(t=>EP[t]);
     // Posiciones de FCI con categoría inválida (dato viejo de un import previo
     // a un fix, o editado a mano mal): se excluyen de la consulta en vez de
@@ -2600,6 +2645,21 @@ async function cargar(){
 
     const pos=posiciones.map(p=>{
       let px=null,pxMoneda="ARS",pct=null,fuente="";
+      if(p.tipo==="caucion"){
+        // Sin cotización: el valor sale de la fórmula de devengamiento
+        // (posicionesCaucion), no de un precio de mercado. `p.pool` es el
+        // pool nativo (ARS/MEP/CCL) en el que está denominada la caución;
+        // convMoneda hace el mismo puente por pesos que ya usa la Liquidez.
+        const valARS=convMoneda(p.valorNativo,p.pool,"ARS",MEP,CCL);
+        const valUSD=convMoneda(p.valorNativo,p.pool,"MEP",MEP,CCL);
+        const valCCL=CCL?convMoneda(p.valorNativo,p.pool,"CCL",MEP,CCL):null;
+        return {...p,px:null,pxMoneda:p.moneda,pct:null,
+          fuente:"TNA "+fmt(p.caucionTasa,1)+"%",valARS,valUSD,valCCL,
+          plARS:valARS==null?null:valARS-p.costARS,
+          plUSD:valUSD==null?null:valUSD-p.costUSD,
+          plCCL:valCCL==null?null:valCCL-p.costUSD,
+          varDiaARS:0};
+      }
       if(p.tipo==="manual"){
         const pm=DATOS.preciosManuales[p.ticker];
         if(pm){ px=pm.precio; pxMoneda=pm.moneda; fuente=pm.fecha; }
@@ -3875,13 +3935,15 @@ function render(soloEstructura){
         const precioVista=p.px==null?null:
           VISTA==="ARS"?(p.pxMoneda==="USD"?p.px*FXV:p.px):
           (p.pxMoneda==="ARS"?p.px/FXV:p.px);
-        const precioCell=p.px==null
+        const precioCell=p.tipo==="caucion"
+          ?(p.fuente?`<span style="color:var(--muted);font-size:10px">${p.fuente}</span>`:"—")
+          :p.px==null
           ?(p.tipo==="manual"?`<button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">fijar precio</button>`:"—")
           :`${VISTA==="ARS"?"$ ":"US$ "}${fmt(precioVista,precioVista<1000?2:0)}${p.tipo==="manual"?` <button class="btn mini" onclick="abrirPrecio('${p.ticker.replace(/'/g,"\\'")}')">✎</button>`:""}${p.fuente?` <span style="color:var(--muted);font-size:10px">${p.fuente}</span>`:""}`;
         const pctCartera=V(p)!=null&&total>0?V(p)/total*100:null;
         return `<tr><td class="tk">${nombre}</td>
         <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
-        <td>${fmt(p.qty,p.qty%1?2:0)}</td>
+        <td>${p.tipo==="caucion"?"—":fmt(p.qty,p.qty%1?2:0)}</td>
         <td>${precioCell}</td>
         <td class="${cls(p.pct)}">${p.pct==null?"—":sgn(p.pct)}</td>
         <td>${V(p)==null?"—":money(V(p))}</td>
@@ -3921,7 +3983,7 @@ function render(soloEstructura){
         ${celda(pesPend,0,"$ ")}${celda(mepPend,2,"US$ ")}${celda(cclPend,2,"US$ ")}
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
       </tbody></table>
-      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja, en sus tres posiciones nativas — pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). <b>Disponible</b> es lo ya liquidado, usable hoy; <b>T + 1</b> es lo que todavía no está disponible (liquidación T+1 hábil de acciones, CEDEARs y bonos, o capital colocado en una caución hasta su vencimiento) — ya está contado en el NAV, en la columna Total. El ajuste manual del modal "Saldos en cuenta" (para cerrar contra el extracto del bróker cuando falta cargar algún movimiento) va sumado adentro de Disponible y Total.</div></div>`;
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja, en sus tres posiciones nativas — pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). <b>Disponible</b> es lo ya liquidado, usable hoy; <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV, en la columna Total. El capital colocado o tomado en una caución sin vencer no aparece acá: es una posición más de la cartera (ver la sección Cauciones). El ajuste manual del modal "Saldos en cuenta" (para cerrar contra el extracto del bróker cuando falta cargar algún movimiento) va sumado adentro de Disponible y Total.</div></div>`;
   }
 
   // Historial de movimientos
