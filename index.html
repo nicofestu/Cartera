@@ -1047,6 +1047,11 @@ footer b{color:var(--grey);font-weight:500}
       <div><label id="lbl-precio">Precio unitario</label><input type="number" id="m-precio" step="any" min="0">
         <div class="hint" id="h-precio">Bonos/letras/ONs: c/100 VN · FCI: VCP por 1.000 cp</div></div>
       <div><label>Moneda del precio</label><select id="m-moneda" onchange="monedaChanged()"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+      <div id="f-poolusd" style="display:none"><label>Tipo de dólar</label><select id="m-poolusd">
+          <option value="MEP">Dólar MEP (local)</option>
+          <option value="CCL">Dólar CCL (cable/exterior)</option>
+        </select>
+        <div class="hint">De qué custodia sale o entra la plata: local (se vende/compra al MEP) o exterior (se vende/compra al CCL). Son dos pesos distintos, no una forma de mirar el mismo saldo.</div></div>
       <div class="full" id="f-maxret" style="display:none">
         <div class="maxrow">
           <span class="txt" id="maxret-lbl">—</span>
@@ -1893,18 +1898,37 @@ function fechaLiqDe(m){ return sumarHabiles(m.fecha,plazoLiq(m)); }
    Se lleva la misma cuenta en las dos bases (ARS y USD al MEP de cada
    operación), igual que el resto del motor de rendimiento. Devuelve un hito
    por FECHA: el último estado de cada día. */
+// cA/cU (y apor/aporU/ret/retU) son la base BIMONETARIA de siempre: la MISMA
+// plata valuada en dos unidades (pesos, y su equivalente en dólares al MEP de
+// cada operación) — no dos tenencias reales. Un depósito en pesos también
+// mueve cU (a cuánto equivalían esos pesos en dólares ese día); eso es
+// intencional, es lo que usa el motor de rendimiento, y no se toca acá.
+//
+// Lo nuevo son nA/nM/nC: TRES tenencias nativas de verdad, independientes
+// entre sí — pesos, dólar en custodia local (MEP) y dólar en custodia
+// exterior (CCL) — que solo se mueven con movimientos EN esa moneda/pool
+// (`m.moneda`, y si es USD, `m.poolUSD`; default "MEP" en movimientos viejos,
+// de antes de que existiera la distinción). Comprar un CEDEAR en pesos no
+// toca el dólar CCL, y viceversa: son plata separada de verdad, no la misma
+// plata mirada con otro tipo de cambio. No llevan el tope de "no pagar con
+// lo que no hay" que sí tiene cA/cU (ese tope existe para no inflar el
+// aportado del motor de rendimiento; acá, si da negativo, es señal real de
+// que falta cargar un depósito). Solo las consume la UI de Liquidez, que lee
+// hitosCaja() en vivo — no tocan snapshots guardados ni la reconstrucción
+// histórica.
 function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
-  const cA={}, cU={};
+  const cA={}, cU={}, nA={}, nM={}, nC={};
   let apor=0,aporU=0,ret=0,retU=0;
   const hitos=[], eventosAporte=[], liquidaciones=[];
   for(const m of movs){
     const k=m.cuenta||"—";
-    if(cA[k]==null){ cA[k]=0; cU[k]=0; }
+    if(cA[k]==null){ cA[k]=0; cU[k]=0; nA[k]=0; nM[k]=0; nC[k]=0; }
+    const esUSD=m.moneda==="USD", esCCL=esUSD&&m.poolUSD==="CCL";
     const bruto=m.precio/divisorDe(m.tipo)*m.cantidad;
-    const a=m.moneda==="USD"?bruto*m.mep:bruto;
-    const u=m.moneda==="USD"?bruto:bruto/m.mep;
-    let dA=0,dU=0; // efecto NETO de este movimiento sobre la caja de esa cuenta
+    const a=esUSD?bruto*m.mep:bruto;
+    const u=esUSD?bruto:bruto/m.mep;
+    let dA=0,dU=0,dN=0; // dN: efecto neto NATIVO (pesos o dólares, según m.moneda) de este movimiento
     if(m.op==="compra"){
       // Math.max(0,…) sobre el mínimo: con caja negativa, Math.min devolvía un
       // número negativo y la compra terminaba SUMANDO efectivo e inflando el
@@ -1912,21 +1936,28 @@ function construirHitosCaja(){
       dA=-Math.max(0,Math.min(cA[k],a)); dU=-Math.max(0,Math.min(cU[k],u));
       apor+=a+dA; aporU+=u+dU;
       if(u+dU>1e-9) eventosAporte.push({fecha:m.fecha,usd:u+dU});
+      dN=-bruto;
     }
-    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); }
-    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; }
+    else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); dN=bruto; }
+    else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; dN=-bruto; }
     // Renta cobrada (dividendos, cupones, rentas) y gastos (comisiones,
     // retenciones, impuestos): mueven la caja pero NO son capital que entró o
     // salió de afuera. Son resultado de la cartera. Contarlos como aporte infla
     // el denominador del retorno; contarlos como retiro lo infla al revés.
-    else if(m.op==="gasto"){ dA=-a; dU=-u; }
-    else { dA=a; dU=u; } // venta y dividendo acreditan caja y no son aporte externo
+    else if(m.op==="gasto"){ dA=-a; dU=-u; dN=-bruto; }
+    else { dA=a; dU=u; dN=bruto; } // venta y dividendo acreditan caja y no son aporte externo
     cA[k]+=dA; cU[k]+=dU;
+    const pool=esUSD?(esCCL?"C":"M"):"A";
+    (pool==="A"?nA:pool==="M"?nM:nC)[k]+=dN;
     const fl=fechaLiqDe(m);
-    if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,u:dU});
+    if(fl>m.fecha&&(dA||dU)) liquidaciones.push({fecha:m.fecha,hasta:fl,cuenta:k,a:dA,pool,n:dN});
     const caja=Object.values(cA).reduce((s,x)=>s+x,0);
     const cajaU=Object.values(cU).reduce((s,x)=>s+x,0);
-    const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU}};
+    const snap={fecha:m.fecha,apor,aporU,ret,retU,caja,cajaU,cta:{...cA},ctaU:{...cU},
+      ctaPesos:{...nA},ctaMep:{...nM},ctaCcl:{...nC},
+      pesos:Object.values(nA).reduce((s,x)=>s+x,0),
+      usdMep:Object.values(nM).reduce((s,x)=>s+x,0),
+      usdCcl:Object.values(nC).reduce((s,x)=>s+x,0)};
     const prev=hitos[hitos.length-1];
     if(prev&&prev.fecha===m.fecha) hitos[hitos.length-1]=snap; else hitos.push(snap);
   }
@@ -1956,14 +1987,20 @@ function ajusteManualARS(mep){
 function cajaTotalEnFecha(hitos,fecha,mep){ return cajaEnFecha(hitos,fecha)+ajusteManualARS(mep); }
 // Cuánto de la caja de cada cuenta todavía no liquidó a la fecha `f`. Con
 // signo: una venta de hoy suma, una compra de hoy que se paga mañana resta.
+// `a`/`ctaU`/`tot`/`totU` son la base bimonetaria de siempre (compat); `pesos`
+// /`mep`/`ccl` son el desglose nativo por posición real, para la UI de Liquidez.
 function cajaALiquidar(hitos,f){
-  const cta={},ctaU={}; let tot=0,totU=0;
+  const cta={},ctaU={},ctaPesos={},ctaMep={},ctaCcl={};
+  let tot=0,totU=0,pesos=0,mep=0,ccl=0;
   for(const L of (hitos.liquidaciones||[])){
     if(L.fecha>f||L.hasta<=f) continue;
-    cta[L.cuenta]=(cta[L.cuenta]||0)+L.a; ctaU[L.cuenta]=(ctaU[L.cuenta]||0)+L.u;
-    tot+=L.a; totU+=L.u;
+    cta[L.cuenta]=(cta[L.cuenta]||0)+L.a; tot+=L.a;
+    const u=L.pool==="A"?0:L.n; ctaU[L.cuenta]=(ctaU[L.cuenta]||0)+u; totU+=u;
+    if(L.pool==="A"){ ctaPesos[L.cuenta]=(ctaPesos[L.cuenta]||0)+L.n; pesos+=L.n; }
+    else if(L.pool==="M"){ ctaMep[L.cuenta]=(ctaMep[L.cuenta]||0)+L.n; mep+=L.n; }
+    else { ctaCcl[L.cuenta]=(ctaCcl[L.cuenta]||0)+L.n; ccl+=L.n; }
   }
-  return {cta,ctaU,tot,totU};
+  return {cta,ctaU,ctaPesos,ctaMep,ctaCcl,tot,totU,pesos,mep,ccl};
 }
 
 /* Normaliza los cierres ya guardados a la definición única de caja.
@@ -2051,6 +2088,21 @@ const sgn=n=> (n>0?"+":"")+fmt(n,2)+"%";
 const hoy=()=> new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD local
 async function getJSON(url){ const r=await fetch(url); if(!r.ok) throw new Error(url.split("/").slice(-2).join("/")+" HTTP "+r.status); return r.json(); }
 
+// Convierte un monto nativo de un pool de caja (ARS, dólar MEP o dólar CCL) a
+// la moneda de otro. Puente siempre por pesos: un dólar CCL a "vista MEP" es
+// lo que rendiría venderlo al CCL de hoy y comprar dólar MEP con esos pesos
+// (mismo criterio que ya usa ajusteCta en render() para el ajuste manual).
+// Devuelve null si falta la cotización necesaria (p.ej. sin CCL publicado).
+function convMoneda(monto,origen,destino,MEP,CCL){
+  if(monto==null||!isFinite(monto)) return null;
+  if(origen===destino) return monto;
+  const rate=p=>p==="ARS"?1:p==="MEP"?MEP:CCL;
+  const rOrigen=rate(origen), rDestino=rate(destino);
+  if(!(rOrigen>0)||!(rDestino>0)) return null;
+  if(destino==="ARS") return monto*rOrigen;
+  if(origen==="ARS") return monto/rDestino;
+  return monto*rOrigen/rDestino;
+}
 function setMoneda(m){
   VISTA=m;
   document.getElementById("btn-ars").classList.toggle("active",m==="ARS");
@@ -3194,10 +3246,35 @@ function render(soloEstructura){
       <div class="hero-side"><div class="k">${rendDiaLbl.k}</div><div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
         <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
     </div></div>
-    ${hayCash?`<div class="card"><div class="k">Liquidez · Disponible</div><div class="v ${cashDisp<0?"down":""}">${(cashDisp<0?"−":"")+money(Math.abs(cashDisp))}</div>
-      <div class="d">${fmt(cashDisp/total*100,1)}% del total · ya liquidado</div></div>
-    ${Math.abs(cashPend)>0.5?`<div class="card"><div class="k">Liquidez · T + 1</div><div class="v ${cashPend<0?"down":""}">${(cashPend<0?"−":"")+money(Math.abs(cashPend))}</div>
-      <div class="d">operado, acredita en 24 hs · ya cuenta en el NAV</div></div>`:""}`:""}
+    ${hayCash?(()=>{
+      // Liquidez en 3 posiciones nativas — pesos, dólar MEP (custodia local) y
+      // dólar CCL (custodia exterior) — cada una es plata distinta, con su
+      // propia cotización. Cada card se convierte a la moneda de VISTA con el
+      // mismo puente por pesos que ya usa ajusteCta; "Consolidada" las suma ya
+      // convertidas, así que trae la brecha MEP/CCL adentro del total.
+      const totPesos=cuentas.reduce((s,c)=>s+((ultC.ctaPesos||{})[c]||0)+((saldos[c]||{}).ars||0),0);
+      const totMep=cuentas.reduce((s,c)=>s+((ultC.ctaMep||{})[c]||0)+((saldos[c]||{}).usd||0),0);
+      const totCcl=cuentas.reduce((s,c)=>s+((ultC.ctaCcl||{})[c]||0),0);
+      const pendPesos=cuentas.reduce((s,c)=>s+((pend.ctaPesos||{})[c]||0),0);
+      const pendMep=cuentas.reduce((s,c)=>s+((pend.ctaMep||{})[c]||0),0);
+      const pendCcl=cuentas.reduce((s,c)=>s+((pend.ctaCcl||{})[c]||0),0);
+      const vP=convMoneda(totPesos,"ARS",VISTA,MEP,CCL);
+      const vM=convMoneda(totMep,"MEP",VISTA,MEP,CCL);
+      const vC=convMoneda(totCcl,"CCL",VISTA,MEP,CCL);
+      const partes=[vP,vM,vC].filter(x=>x!=null);
+      const vCons=partes.length?partes.reduce((s,x)=>s+x,0):null;
+      const cardPool=(k,nat,pendNat,pool,v)=>{
+        if(Math.abs(nat)<0.005&&Math.abs(pendNat)<0.005) return "";
+        const pendConv=convMoneda(pendNat,pool,VISTA,MEP,CCL);
+        return `<div class="card"><div class="k">Liquidez · ${k}</div><div class="v ${v<0?"down":""}">${v==null?"—":(v<0?"−":"")+money(Math.abs(v))}</div>
+        <div class="d">${Math.abs(pendNat)>0.005?"incl. "+(pendConv==null?"—":money(Math.abs(pendConv)))+" en T + 1":"ya liquidado"}</div></div>`;
+      };
+      return cardPool("Pesos",totPesos,pendPesos,"ARS",vP)
+        +cardPool("Dólar MEP",totMep,pendMep,"MEP",vM)
+        +cardPool("Dólar CCL",totCcl,pendCcl,"CCL",vC)
+        +`<div class="card"><div class="k">Liquidez · Consolidada</div><div class="v ${vCons<0?"down":""}">${vCons==null?"—":(vCons<0?"−":"")+money(Math.abs(vCons))}</div>
+        <div class="d">${total?fmt((vCons||0)/total*100,1)+"% del total · ":""}pesos + MEP + CCL</div></div>`;
+    })():""}
     <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
       <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
     ${Math.abs(realizado)>0.01?`<div class="card"><div class="k">P&amp;L · Realizado</div>
@@ -3780,7 +3857,19 @@ function render(soloEstructura){
         <td class="${aj<0?"down":""}">${Math.abs(aj)<0.5?"—":(aj<0?"−":"")+money(Math.abs(aj))}</td>
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
       </tbody></table>
-      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div></div>`;
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja. <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV. El <b>ajuste manual</b> es para cerrar contra el extracto del bróker cuando falta cargar algún movimiento.</div>
+      <div class="tbl-scroll" style="margin-top:16px"><table><thead><tr><th>Cuenta</th><th>Pesos</th><th>Dólar MEP</th><th>Dólar CCL</th></tr></thead><tbody>
+      ${cuentas.map(c=>{
+        const pes=((ultC.ctaPesos||{})[c]||0)+((saldos[c]||{}).ars||0);
+        const dm=((ultC.ctaMep||{})[c]||0)+((saldos[c]||{}).usd||0);
+        const dc=((ultC.ctaCcl||{})[c]||0);
+        if(Math.abs(pes)<0.5&&Math.abs(dm)<0.005&&Math.abs(dc)<0.005) return "";
+        return `<tr><td class="tk">${c}</td>
+        <td class="${pes<0?"down":""}">${Math.abs(pes)<0.5?"—":(pes<0?"−":"")+"$ "+fmt(Math.abs(pes),0)}</td>
+        <td class="${dm<0?"down":""}">${Math.abs(dm)<0.005?"—":(dm<0?"−":"")+"US$ "+fmt(Math.abs(dm),2)}</td>
+        <td class="${dc<0?"down":""}">${Math.abs(dc)<0.005?"—":(dc<0?"−":"")+"US$ "+fmt(Math.abs(dc),2)}</td></tr>`;}).join("")}
+      </tbody></table>
+      <div class="hint" style="margin-top:10px">Desglose por posición nativa (sin convertir): pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). Son tres saldos reales distintos, no el mismo saldo mirado con otro tipo de cambio — para eso están las cards de arriba, que sí convierten según el selector de moneda.</div></div>`;
   }
 
   // Historial de movimientos
@@ -4446,14 +4535,16 @@ function abrirMov(id){
     document.getElementById("m-cant").value=ed.cantidad;
     document.getElementById("m-precio").value=ed.precio;
     document.getElementById("m-moneda").value=ed.moneda;
+    document.getElementById("m-poolusd").value=ed.poolUSD||"MEP";
     if(ed.tipo==="fci"){ document.getElementById("m-cat").value=ed.categoria; cargarFondos().then(()=>comboSet("fondo",ed.fondo)); }
     calcTotal();
   } else {
     comboLimpiar("ticker"); comboLimpiar("fondo");
     ["m-cant","m-precio"].forEach(i=>document.getElementById(i).value="");
     document.getElementById("m-moneda").value="ARS";
+    document.getElementById("m-poolusd").value="MEP";
   }
-  refrescarMaxRetiro();
+  monedaChanged();
   document.getElementById("modal-mov").classList.add("open");
 }
 function abrirPrecio(t){
@@ -4473,7 +4564,11 @@ function cuentaChanged(){
   if(esNueva) inp.focus(); else inp.value="";
   refrescarMaxRetiro();
 }
-function monedaChanged(){ refrescarMaxRetiro(); }
+function monedaChanged(){
+  const esUSD=document.getElementById("m-moneda").value==="USD";
+  document.getElementById("f-poolusd").style.display=esUSD?"block":"none";
+  refrescarMaxRetiro();
+}
 function catChanged(){ comboLimpiar("fondo"); cargarFondos(); }
 const OPS_CASH=["deposito","retiro","dividendo","gasto"];
 const ETIQ_CASH={deposito:"DEPÓSITO",retiro:"RETIRO",dividendo:"RENTA",gasto:"GASTO"};
@@ -4566,6 +4661,7 @@ async function guardarMov(){
     cantidad:parseFloat(document.getElementById("m-cant").value),
     precio:parseFloat(document.getElementById("m-precio").value),
     moneda:document.getElementById("m-moneda").value,
+    poolUSD:document.getElementById("m-poolusd").value,
   };
   if(tipo==="fci"){ m.categoria=document.getElementById("m-cat").value; m.fondo=comboValor("fondo").trim(); }
   // Plazo de liquidación explícito. Vacío = el default del tipo (ver plazoLiq).
@@ -4839,25 +4935,28 @@ function cuentaDelForm(){
   const sel=document.getElementById("m-cuenta-sel"); if(!sel) return "";
   return canonizarCta(sel.value==="__nueva__"?document.getElementById("m-cuenta-nueva").value:sel.value);
 }
-function dispRetiroDe(cuenta,moneda,excluirId){
+function dispRetiroDe(cuenta,moneda,pool,excluirId){
   if(!cuenta) return null;
   const mep=(ESTADO&&ESTADO.MEP>0)?ESTADO.MEP:null;
   if(moneda==="USD"&&!mep) return null;   // sin MEP no se puede expresar en USD
+  const esCCL=moneda==="USD"&&pool==="CCL";
+  const kCta=moneda==="USD"?(esCCL?"ctaCcl":"ctaMep"):"ctaPesos";
+  const kSal=esCCL?"usdCcl":"usdMep";
   const hitos=hitosCaja();
   const ult=hitos[hitos.length-1]||{};
   const pend=cajaALiquidar(hitos,hoy());
   const sal=(DATOS.saldos||{})[cuenta]||{};
-  const caja=moneda==="USD"?((ult.ctaU||{})[cuenta]||0):((ult.cta||{})[cuenta]||0);
-  const t1  =moneda==="USD"?((pend.ctaU||{})[cuenta]||0):((pend.cta||{})[cuenta]||0);
-  const aj  =moneda==="USD"?(sal.usd||0)+(mep?(sal.ars||0)/mep:0)
-                           :(sal.ars||0)+(mep?(sal.usd||0)*mep:0);
+  // saldos viejos guardaban un único "usd" sin distinguir pool: se toma como
+  // MEP (era la única plata en dólares que existía antes de esta separación).
+  const salUSD=(sal[kSal]!=null?sal[kSal]:(esCCL?0:(sal.usd||0)));
+  const caja=(ult[kCta]||{})[cuenta]||0;
+  const t1  =(pend[kCta]||{})[cuenta]||0;
+  const aj  =moneda==="USD"?salUSD:(sal.ars||0); // cada pool nativo, sin cruzar moneda
   let disp=caja+aj-t1;
   const prev=excluirId?DATOS.movimientos.find(x=>x.id===excluirId):null;
-  if(prev&&prev.tipo==="cash"&&claveCta(prev.cuenta)===claveCta(cuenta)&&prev.mep>0){
-    const bruto=prev.precio*prev.cantidad;
-    const val=moneda==="USD"?(prev.moneda==="USD"?bruto:bruto/prev.mep)
-                            :(prev.moneda==="USD"?bruto*prev.mep:bruto);
-    disp+=(prev.op==="deposito"||prev.op==="dividendo")?-val:val;
+  if(prev&&prev.tipo==="cash"&&claveCta(prev.cuenta)===claveCta(cuenta)&&prev.moneda===moneda&&(moneda!=="USD"||(prev.poolUSD||"MEP")===pool)){
+    const bruto=prev.precio*prev.cantidad; // ya nativo a esta moneda/pool
+    disp+=(prev.op==="deposito"||prev.op==="dividendo")?-bruto:bruto;
   }
   return disp;
 }
@@ -4868,8 +4967,9 @@ function refrescarMaxRetiro(){
   if(!esRetiro){ MAX_RETIRO=null; return; }
   const lbl=document.getElementById("maxret-lbl"), btn=document.getElementById("maxret-btn");
   const cuenta=cuentaDelForm(), mon=document.getElementById("m-moneda").value;
+  const pool=document.getElementById("m-poolusd").value;
   const sim=mon==="USD"?"US$ ":"$ ";
-  const bruto=dispRetiroDe(cuenta,mon,EDIT_ID);
+  const bruto=dispRetiroDe(cuenta,mon,pool,EDIT_ID);
   // Se trunca a centavos (no se redondea) para no ofrecer un centavo más de lo
   // que hay; el .toFixed intermedio evita que el binario deje 1.234.567,89 en
   // 1.234.567,88. Se guarda ya truncado para que el cartel, el botón y lo que
@@ -4908,6 +5008,7 @@ async function guardarCash(){
     cuenta, cantidad:1,
     precio:parseFloat(document.getElementById("m-precio").value),
     moneda:document.getElementById("m-moneda").value,
+    poolUSD:document.getElementById("m-poolusd").value,
   };
   if(!m.fecha||!cuenta||!(m.precio>0)){ err.textContent="Completá fecha, cuenta y monto."; err.style.display="block"; return; }
   if(m.fecha>hoy()){ err.textContent="La fecha no puede ser futura."; err.style.display="block"; return; }
