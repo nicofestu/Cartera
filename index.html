@@ -478,6 +478,11 @@ select option{background:#0A0C0E;color:var(--white)}
 .perf .d-money{margin-top:7px;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1}
 .perf-note{max-width:880px;margin-top:14px;color:var(--grey-dim);font-size:11px;line-height:1.9}
 .perf-tbl td{padding:13px 12px}
+.cmp-tbl tbody tr.cmp-yo td{font-weight:700;background:rgba(255,255,255,.028)}
+.cmp-tbl .cmp-na{color:var(--grey-dim)}
+.cmp-tbl tfoot td{padding-top:14px;color:var(--grey);font-size:11px;line-height:1.75;font-weight:400;border-top:1px solid var(--hair)}
+.periodo-bar .periodo-hint{color:var(--grey-dim);font-size:11px;line-height:1.5}
+@media(max-width:900px){.periodo-bar .periodo-hint{display:none}}
 .contrib-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
 .contrib-bar{height:7px;min-width:1px;border-radius:99px}
 .contrib-bar.pos{background:var(--up)}
@@ -2194,6 +2199,138 @@ function diasEntre(a,b){ return Math.max(1,Math.round((new Date(b+"T12:00")-new 
 function diasCal(a,b){ return Math.round((new Date(b+"T12:00")-new Date(a+"T12:00"))/864e5); }
 function anualizar(ret,dias){ return dias>=30?(Math.pow(1+ret,365/dias)-1):null; }
 
+/* ══════════════ TIR (XIRR) ══════════════
+   anualizar() eleva un retorno acumulado a 365/días: eso es una tasa efectiva
+   anual (CAGR), y durante mucho tiempo la app la rotuló "TNA equivalente", que
+   es doblemente incorrecto — no es nominal y no sale de una TIR. Peor todavía
+   en histórico, donde el retorno de base era money-weighted: elevarlo a
+   365/días asume que TODA la plata estuvo desde el primer día, y no estuvo.
+
+   La TIR resuelve las dos cosas de una: es la tasa que hace que el valor
+   presente de los flujos (aportes con signo negativo, retiros y valor final
+   con signo positivo) dé cero, así que cada peso pesa por el tiempo que
+   estuvo realmente invertido. Por construcción con base 365 ya es EFECTIVA
+   ANUAL — "TIR" y "TIREA" son el mismo número, por eso se muestra uno solo.
+
+   Se resuelve por bisección y no por Newton-Raphson: Newton diverge cuando
+   hay un aporte grande sobre una cartera chica (la derivada se aplana y el
+   paso se va a −100%), que es exactamente el caso de una cartera que arranca.
+   La bisección es más lenta y no le importa: 200 iteraciones sobre una
+   función de unas pocas decenas de flujos es imperceptible, y no puede
+   divergir mientras haya cambio de signo en el intervalo. */
+function xirr(cf){
+  if(!cf||cf.length<2) return null;
+  const v=cf.map(c=>c.monto);
+  // Sin al menos un flujo de cada signo no hay raíz: no existe tasa que
+  // convierta plata que solo entró en plata que solo salió.
+  if(!v.some(x=>x>1e-9)||!v.some(x=>x<-1e-9)) return null;
+  const f0=cf[0].fecha;
+  const t=cf.map(c=>diasCal(f0,c.fecha)/365);
+  const npv=r=>{
+    const b=1+r;
+    if(b<=1e-9) return NaN;
+    let sum=0;
+    for(let i=0;i<v.length;i++) sum+=v[i]/Math.pow(b,t[i]);
+    return sum;
+  };
+  let lo=-0.9999, hi=1, flo=npv(lo), fhi=npv(hi);
+  if(!isFinite(flo)) return null;
+  // Ensanchar el techo hasta que haya cambio de signo. El tope de 60 duplicaciones
+  // cubre tasas absurdamente altas y corta si la función no cruza nunca.
+  let k=0;
+  while(isFinite(fhi)&&flo*fhi>0&&k<60){ hi=hi*2+1; fhi=npv(hi); k++; }
+  if(!isFinite(fhi)||flo*fhi>0) return null;
+  for(let i=0;i<200;i++){
+    const mid=(lo+hi)/2, fm=npv(mid);
+    if(!isFinite(fm)) return null;
+    if(flo*fm<=0){ hi=mid; fhi=fm; } else { lo=mid; flo=fm; }
+  }
+  const r=(lo+hi)/2;
+  return (isFinite(r)&&r>-0.9999&&r<1e3)?r:null;
+}
+
+/* TIR de una ventana. v0 es el valor al inicio (entra al vector como si lo
+   hubieras aportado ese día), `flujos` son los aportes (+) y retiros (−) NETOS
+   con su fecha tal como los devuelve serieRendimiento().flujosEntre, y v1 el
+   valor al cierre. Ojo con el signo: flujosEntre usa la convención de la
+   cartera (positivo = entró plata) y XIRR la del inversor (positivo = recibiste
+   plata), así que van invertidos.
+
+   Menos de 30 días no se anualiza, misma guarda que anualizar(): una TIR sobre
+   una semana amplifica el ruido todavía más que un CAGR — +2% en cinco días se
+   convierte en +180% anual. */
+function tirDe(v0,d0,flujos,v1,d1){
+  if(v1==null||!isFinite(v1)||!(diasCal(d0,d1)>=30)) return null;
+  const cf=[];
+  if(v0>0) cf.push({fecha:d0,monto:-v0});
+  for(const fl of (flujos||[])) cf.push({fecha:fl.fecha,monto:-fl.monto});
+  cf.push({fecha:d1,monto:v1});
+  cf.sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  return xirr(cf);
+}
+
+/* Valor final de la MISMA secuencia de flujos invertida en un índice: compra
+   unidades a la cotización de cada fecha y las valúa al cierre de la ventana.
+   Se usa para la TIR del benchmark, que necesita un valor terminal en moneda
+   (no un %) para poder pasar por el mismo xirr() que la cartera.
+
+   Se diferencia de mkBench() —el simulador que dibuja la línea punteada del
+   gráfico— en dos cosas: arranca de un valor inicial v0 (mkBench siempre
+   arranca de cero, porque solo mide desde el origen de la cartera) y los
+   retiros VENDEN unidades en vez de ignorarse. Sin eso la TIR del índice se
+   compararía contra un patrimonio del que nunca salió plata mientras que la
+   de la cartera sí, y la diferencia sería puro artefacto. */
+function simIndice(hist,fechas,nivelHoyFn,v0,d0,flujos,d1){
+  const ars=VISTA==="ARS", hoyF=hoy();
+  const pxEn=f=>{
+    const n=(f>=hoyF?(nivelHoyFn()??nivelEn(hist,fechas,f)):nivelEn(hist,fechas,f));
+    if(!(n>0)) return null;
+    if(!ars) return n;
+    const m=(f>=hoyF?((ESTADO&&ESTADO.MEP)||mepEnFecha(f)):mepEnFecha(f));
+    return m>0?n*m:null;
+  };
+  const p0=pxEn(d0); if(!p0) return null;
+  let u=v0>0?v0/p0:0;
+  for(const fl of (flujos||[])){
+    const p=pxEn(fl.fecha);
+    if(!p) return null;
+    u+=fl.monto/p;
+  }
+  const pf=pxEn(d1); if(!pf) return null;
+  const val=u*pf;
+  return isFinite(val)?val:null;
+}
+
+/* Tabla comparativa cartera vs. índices. Reemplaza las cards sueltas
+   "vs. SPY +7,1%", que eran ambiguas por construcción: ese número era una
+   RESTA de porcentajes y se leía como un retorno, y encima no decía si el
+   porcentaje era acumulado o anualizado. Con un encabezado de columna la
+   unidad se declara una sola vez y la duda desaparece; las diferencias van en
+   puntos porcentuales (pp), que es lo que son. */
+function tablaComparativa(filas,moneda){
+  const na='<span class="cmp-na">—</span>';
+  const pct=x=>x==null?na:`<span class="${cls(x)}">${sgn(x*100)}</span>`;
+  const plata=x=>x==null?na:`<span class="${cls(x)}">${signoMoney(x)}</span>`;
+  const pp=(a,b)=>(a==null||b==null)?na:`<span class="${cls(a-b)}">${(a-b>=0?"+":"−")+fmt(Math.abs((a-b)*100),1)} pp</span>`;
+  const base=filas[0];
+  const cuerpo=filas.map((f,i)=>`<tr${i===0?' class="cmp-yo"':""}>
+      <td class="l">${f.nombre}</td>
+      <td>${pct(f.ret)}</td>
+      <td>${pct(f.tir)}</td>
+      <td>${plata(f.gan)}</td>
+      <td>${i===0?na:pp(base.ret,f.ret)}</td>
+      <td>${i===0?na:pp(base.tir,f.tir)}</td>
+    </tr>`).join("");
+  return `<div class="tbl-scroll"><table class="perf-tbl cmp-tbl"><thead><tr>
+      <th class="l">Comparativa</th><th>Retorno total</th><th>TIR anual</th><th>Resultado</th>
+      <th>Dif. retorno</th><th>Dif. TIR</th>
+    </tr></thead><tbody>${cuerpo}</tbody>
+    <tfoot><tr><td colspan="6" class="l"><b>Retorno total</b>: acumulado del período, sin anualizar.
+      <b>TIR anual</b>: tasa efectiva anual (TIREA), pondera cuándo entró cada peso.
+      Diferencias en puntos porcentuales sobre tu cartera. Todo en ${moneda}.</td></tr></tfoot>
+    </table></div>`;
+}
+
 /* ══════════════ Selector de período (pestaña Rendimientos) ══════════════
    Un solo menú controla qué ventana de tiempo miran TODAS las cards de
    arriba: histórico completo (como siempre), un año calendario puntual, YTD,
@@ -2627,7 +2764,12 @@ function retornoEntre(serie,desde,hasta,diasNominal){
   // data real (aviso de hueco, "período efectivo").
   return {ret:c-1,sp:haySp?csp-1:null,ndx:haySp?cndx-1:null,
     dias:diasNominal!=null?diasNominal:diasEntre(desde,hasta),desde:desdeR,hasta:hastaR,
-    diasReales:Math.max(1,diasEntre(desdeR,hastaR)),gan};
+    diasReales:Math.max(1,diasEntre(desdeR,hastaR)),gan,
+    // Extremos en moneda del tramo medido: son el primer y el último flujo del
+    // vector que necesita la TIR (valor inicial como aporte, valor final como
+    // rescate). Salen de acá y no de un recálculo aparte para que la TIR mida
+    // EXACTAMENTE la misma ventana que el retorno time-weighted de al lado.
+    v0:tramo[0].v0, v1:tramo[tramo.length-1].v};
 }
 
 /* ══════════════ Variación del día: FUENTE ÚNICA ══════════════
@@ -2843,8 +2985,16 @@ function seccionRiesgo(rango){
   }
   const cardsR=[
     card("Volatilidad anual",fmt(m.vol*100,1)+"%","desvío por rueda, anualizado"),
-    card("Retorno anualizado",m.retAnual==null?"—":sgn(m.retAnual*100),
-      `sobre ${m.dias} días de calendario`,m.retAnual==null?"":cls(m.retAnual)),
+    // "Retorno anualizado" vivía acá y no correspondía: es una medida de
+    // rendimiento, no de riesgo, y competía con la TIR de arriba mostrando dos
+    // tasas anuales distintas para la misma ventana. El cálculo se conserva
+    // (retAnual sigue alimentando Sharpe y Sortino); lo que se muestra ahora es
+    // el EXCESO sobre la tasa libre, que es literalmente el numerador de esos
+    // ratios y hasta ahora solo aparecía enterrado en el texto explicativo.
+    card("Exceso sobre tasa libre",m.excAnual==null?"—":sgn(m.excAnual*100),
+      m.conRF?`por encima de ${m.tasaNombre} (${fmt(m.rfAnual*100,1)}% anual) · numerador de Sharpe y Sortino`
+             :"tasa libre 0: falta historial/tasas.json",
+      m.excAnual==null?"":cls(m.excAnual)),
     card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
       m.conRF?`exceso sobre la tasa libre (${fmt(m.rfAnual*100,1)}% anual) por unidad de riesgo`
              :"retorno por unidad de riesgo · tasa libre 0",
@@ -3095,7 +3245,8 @@ function render(soloEstructura){
       <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
       <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
       ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
-    </select></div>`;
+    </select>
+      <span class="periodo-hint">Los retornos son <b>acumulados del período</b>, sin anualizar. La <b>TIR</b> es la única tasa anual (efectiva).</span></div>`;
   }
 
   // ══ Gráfico de rendimiento acumulado ══ (se arma aparte en chartHtml y se
@@ -3275,7 +3426,7 @@ function render(soloEstructura){
   // ══ RENDIMIENTOS ══ (cardsPerf/tablaHtml/notaHtml se usan más abajo, en
   // "Retorno por activo" y en los disclaimers ocultos — de ahí que estén
   // declarados afuera del if, en vez de adentro como antes)
-  let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
+  let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="", cmpHtml="";
   if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
     if(PERIODO==="todo"||ytdEsHistorico){
       // Camino de siempre: retorno money-weighted sobre el capital aportado
@@ -3290,12 +3441,57 @@ function render(soloEstructura){
         const invTot=met.reduce((s,p)=>s+(p.costoM>0?p.costoM:0),0);
         const srT=serieRendimiento();
         const baseCap=srT&&srT.aporte>0?srT.aporte:invTot;
-        const retTot=baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0;
-        const benchTot=srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null;
-        const benchNdx=srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null;
         const fPrim=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
         const diasTot=diasEntre(fPrim,hoy());
-        const tnaTot=anualizar(retTot,diasTot);
+        // ── Histórico también mide TIME-WEIGHTED ──────────────────────────
+        // Antes acá el retorno era money-weighted (valor + retirado) / aportado
+        // − 1 mientras que los períodos usaban la serie diaria encadenada, los
+        // dos bajo el mismo rótulo genérico y sin decir cuál era cuál: dos
+        // pantallas del mismo dato que no se podían comparar entre sí. Con los
+        // dos caminos en time-weighted, "Retorno total" significa lo mismo en
+        // toda la app, y el efecto del timing de los aportes —lo único que
+        // aportaba el criterio viejo— pasa a la TIR, que es su lugar correcto.
+        const rTot=retornoEntre(serieT,fPrim,hoy(),diasTot);
+        const twOk=!!rTot;
+        // Respaldo money-weighted para una cartera nueva, sin dos cierres que
+        // encadenar. Es preferible un número medido con otra definición —y
+        // rotulado como tal— que un "—" en la card principal.
+        const retTot=twOk?rTot.ret:(baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0);
+        // La ganancia en plata NO se toca: valor + retirado − aportado es un
+        // hecho verificable contra el extracto del bróker, independiente del
+        // método con que se exprese el porcentaje.
+        const ganTot=totalBase+(srT?.retirado||0)-baseCap;
+        // Cuánto del historial cubre de verdad la serie diaria. Si arranca
+        // bastante después de la primera compra, el TWR se está perdiendo ese
+        // tramo inicial y hay que avisarlo — es el mismo criterio que el aviso
+        // de "período desalineado" del otro camino.
+        const twParcial=twOk&&diasEntre(fPrim,rTot.desde)>7;
+        // Flujos de TODO el historial. flujosEntre es exclusivo en `desde`, así
+        // que hay que arrancar un día antes de la primera compra o el aporte
+        // inicial queda afuera del vector.
+        const flujosTot=srT?srT.flujosEntre(restarDias(fPrim,1),hoy()):[];
+        const netoTot=flujosTot.reduce((sum,f)=>sum+f.monto,0);
+        // El valor terminal es el NAV a secas, SIN sumarle lo retirado: cada
+        // retiro ya entró al vector como flujo positivo en su propia fecha.
+        // Sumarlo otra vez acá lo contaría dos veces y dispararía la TIR.
+        const tirTot=srT?tirDe(0,fPrim,flujosTot,totalBase,hoy()):null;
+        // Índices sobre la misma ventana efectiva que el TWR de la cartera y
+        // con la misma fuente que dibuja la línea punteada del gráfico. Si no
+        // hay serie diaria se cae al simulador money-weighted de siempre, que
+        // es el criterio consistente con el respaldo de retTot.
+        const benchTot=twOk?(benchSP(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
+                           :(srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null);
+        const benchNdx=twOk?(benchNDX(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
+                           :(srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null);
+        const vSP=srT?simIndice(SP500_HIST,SP500_FECHAS,sp500Hoy,0,fPrim,flujosTot,hoy()):null;
+        const vNDX=srT?simIndice(NDX_HIST,NDX_FECHAS,ndxHoy,0,fPrim,flujosTot,hoy()):null;
+        cmpHtml=tablaComparativa([
+          {nombre:"Tu cartera",ret:retTot,tir:tirTot,gan:ganTot},
+          {nombre:"SPY (CEDEAR)",ret:benchTot==null?null:benchTot,
+            tir:vSP==null?null:tirDe(0,fPrim,flujosTot,vSP,hoy()),gan:vSP==null?null:vSP-netoTot},
+          {nombre:"QQQ (CEDEAR)",ret:benchNdx==null?null:benchNdx,
+            tir:vNDX==null?null:tirDe(0,fPrim,flujosTot,vNDX,hoy()),gan:vNDX==null?null:vNDX-netoTot},
+        ],tituloMoneda);
         met.forEach(p=>{ p.contrib=(baseCap>0&&p.ret!=null)?(p.valM-p.costoM)/baseCap:null; });
         // Mejor/peor solo entre las medibles: si no, "peor posición" termina
         // siendo una fila sin retorno calculable.
@@ -3306,17 +3502,13 @@ function render(soloEstructura){
         cardsPerf=[
           `<div class="perf hero"><div class="k">${ytdEsHistorico?"Retorno total · YTD = histórico":"Retorno total"}</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
-            <div class="d-money ${cls(retTot)}">${signoMoney(totalBase+(srT?.retirado||0)-baseCap)}</div>
-            <div class="d">sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
-          `<div class="perf"><div class="k">TNA equivalente</div>
-            <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
-            <div class="d">anualizado · ${diasTot}d</div></div>`,
-          benchTot!=null?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
-            <div class="v ${cls(retTot-benchTot)}">${sgn((retTot-benchTot)*100)}</div>
-            <div class="d">benchmark ${sgn(benchTot*100)} · ${signoMoney(baseCap*benchTot)} con tus mismos aportes</div></div>`:null,
-          benchNdx!=null?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
-            <div class="v ${cls(retTot-benchNdx)}">${sgn((retTot-benchNdx)*100)}</div>
-            <div class="d">benchmark ${sgn(benchNdx*100)} · ${signoMoney(baseCap*benchNdx)} con tus mismos aportes</div></div>`:null,
+            <div class="d-money ${cls(ganTot)}">${signoMoney(ganTot)}</div>
+            <div class="d">${twOk?"time-weighted":"sobre lo aportado (sin serie diaria)"} · acumulado, sin anualizar · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
+          `<div class="perf"><div class="k">TIR anual</div>
+            <div class="v ${cls(tirTot)}">${tirTot==null?"—":sgn(tirTot*100)}</div>
+            <div class="d">${tirTot==null
+              ?"necesita al menos 30 días de historial y un aporte registrado"
+              :`efectiva anual (TIREA) · ${diasTot}d · pondera cuándo entró cada peso`}</div></div>`,
           `<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(baseCap)}</div>
             <div class="d">plata que entró de afuera</div></div>`,
@@ -3330,7 +3522,10 @@ function render(soloEstructura){
             <div class="v ${cls(realTot)}">${signoMoney(realTot)}</div>
             <div class="d">ventas cerradas</div></div>`:null,
         ];
-        metaHtml=`<span>${diasTot} días · desde ${fPrim} (inicio de la cartera)${ytdEsHistorico?` <span style="color:var(--grey)">(pediste YTD, pero es igual a Histórico completo: la cartera arrancó después del 1/1)</span>`:""}</span>`;
+        metaHtml=`<span>${diasTot} días · desde ${fPrim} (inicio de la cartera)`
+          +(twParcial?` <span style="color:var(--amber)">(los cierres diarios recién arrancan el ${rTot.desde}: el retorno time-weighted no cubre el tramo anterior — la TIR sí, porque sale de los movimientos)</span>`:"")
+          +(ytdEsHistorico?` <span style="color:var(--grey)">(pediste YTD, pero es igual a Histórico completo: la cartera arrancó después del 1/1)</span>`:"")
+          +`</span>`;
         tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
             <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
@@ -3350,7 +3545,9 @@ function render(soloEstructura){
               <span>${sgn(p.contrib*100)}</span></div>`
               :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("");})()}
           </tbody></table></div>`;
-        notaHtml=`<div class="perf-note">${ytdEsHistorico?`<b>Elegiste YTD, pero tu cartera arrancó el ${fPrim}</b> — después del 1/1 de este año — así que no hay nada anterior que medir: YTD y "Histórico completo" son exactamente la misma ventana y el mismo cálculo. Por eso todos los números de esta pantalla (retorno, TNA, comparación vs. índices, mejor/peor posición, tabla) son los del historial completo.<br><br>`:""}<b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
+        notaHtml=`<div class="perf-note">${ytdEsHistorico?`<b>Elegiste YTD, pero tu cartera arrancó el ${fPrim}</b> — después del 1/1 de este año — así que no hay nada anterior que medir: YTD y "Histórico completo" son exactamente la misma ventana y el mismo cálculo. Por eso todos los números de esta pantalla (retorno, TNA, comparación vs. índices, mejor/peor posición, tabla) son los del historial completo.<br><br>`:""}<b>Retorno total</b> = retorno <b>time-weighted</b>: se encadenan los retornos de cada tramo diario descontando la plata que entró o salió, así un depósito no se confunde con una ganancia. Mide cómo se comportó lo que elegiste, independientemente de cuánto capital había puesto en cada momento.<br>
+          <b>TIR anual</b> = la tasa efectiva anual que iguala el valor presente de todos tus flujos (aportes con signo negativo, retiros y valor actual con signo positivo). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso: si aportaste fuerte justo antes de una caída, el retorno total puede ser positivo y la TIR bajar igual. Los dos números describen la misma cartera y responden preguntas distintas — cómo rindieron los activos, y cómo rindió tu plata.<br>
+          El <b>resultado en plata</b> sigue siendo el hecho verificable contra el extracto: valor actual + retirado − aportado. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. SPY (CEDEAR)</b> y <b>vs. QQQ (CEDEAR)</b>: simulan tus mismos aportes (fechas y montos) comprando el CEDEAR, medido por su cotización en dólares en BYMA (especie D, con la C de respaldo)${BENCH_DIV_OK?" y con los dividendos del ETF reinvertidos en la fecha ex":", <b>sin</b> dividendos: falta historial/dividendos.json, así que es retorno de precio"}. Donde el CEDEAR no tiene cobertura se empalma la variación del índice oficial. <b>No coincide con el índice del noticiero</b>: mide el instrumento que se puede comprar acá, con su propio horario y su error de seguimiento. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
@@ -3363,7 +3560,6 @@ function render(soloEstructura){
         const srT=serieRendimiento();
         const a0=srT?srT.aporteEn(rango.desde):null, a1=srT?srT.aporteEn(rango.hasta):null;
         const aportePer=(a0&&a1)?(a1.ap-a0.ap):null;
-        const tnaPer=anualizar(r.ret,r.dias);
         // Mejor/peor posición miden EXACTAMENTE la misma ventana que "Retorno
         // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
         // serie diaria arranca más tarde que el período nominal por un hueco
@@ -3395,22 +3591,42 @@ function render(soloEstructura){
         // benchmark a moneda con el mismo capital que tuvo tu cartera — no es
         // exacto en compounding con flujos grandes en el medio, es la misma
         // aproximación simple-return que ya usa "vs. índice" en Histórico.
-        const baseEfPer=(r.ret&&Math.abs(r.ret)>1e-9)?r.gan/r.ret:null;
+        // ── TIR de la ventana ─────────────────────────────────────────────
+        // Reemplaza a la vieja "TNA equivalente", que no era ni TNA ni salía de
+        // una TIR: era anualizar(r.ret) sobre los días NOMINALES del período.
+        // La TIR mide la ventana EFECTIVA (r.desde → r.hasta, donde hay
+        // cierres de verdad) y arranca del NAV inicial como si lo hubieras
+        // aportado ese día, así que el time-weighted de al lado y ella hablan
+        // exactamente del mismo tramo. Que difieran no es un error: el TWR mide
+        // cómo se comportaron los activos y la TIR cómo rindió tu plata dada la
+        // secuencia de aportes.
+        const flujosPer=srT?srT.flujosEntre(r.desde,r.hasta):[];
+        const tirPer=tirDe(r.v0,r.desde,flujosPer,r.v1,r.hasta);
+        const netoPer=flujosPer.reduce((sum,f)=>sum+f.monto,0);
+        // El mismo NAV inicial y los mismos flujos, pero comprando el índice.
+        const vSPp=simIndice(SP500_HIST,SP500_FECHAS,sp500Hoy,r.v0,r.desde,flujosPer,r.hasta);
+        const vNDXp=simIndice(NDX_HIST,NDX_FECHAS,ndxHoy,r.v0,r.desde,flujosPer,r.hasta);
+        const invPer=(r.v0||0)+netoPer; // capital puesto: lo que había + lo que entró neto
+        cmpHtml=tablaComparativa([
+          {nombre:"Tu cartera",ret:r.ret,tir:tirPer,gan:r.gan},
+          {nombre:"SPY (CEDEAR)",ret:bSP?bSP.ret:null,
+            tir:vSPp==null?null:tirDe(r.v0,r.desde,flujosPer,vSPp,r.hasta),
+            gan:vSPp==null?null:vSPp-invPer},
+          {nombre:"QQQ (CEDEAR)",ret:bNDX?bNDX.ret:null,
+            tir:vNDXp==null?null:tirDe(r.v0,r.desde,flujosPer,vNDXp,r.hasta),
+            gan:vNDXp==null?null:vNDXp-invPer},
+        ],monedaLbl);
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
             <div class="d-money ${cls(r.gan)}">${signoMoney(r.gan)}</div>
-            <div class="d">time-weighted · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
-          `<div class="perf"><div class="k">TNA equivalente</div>
-            <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
-            <div class="d">anualizado · ${r.dias}d nominales</div></div>`,
-          bSP?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
-            <div class="v ${cls(r.ret-bSP.ret)}">${sgn((r.ret-bSP.ret)*100)}</div>
-            <div class="d">benchmark ${sgn(bSP.ret*100)} en el período${baseEfPer!=null?" · "+signoMoney(baseEfPer*bSP.ret)+" con tu mismo capital":""}</div></div>`:null,
-          bNDX?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
-            <div class="v ${cls(r.ret-bNDX.ret)}">${sgn((r.ret-bNDX.ret)*100)}</div>
-            <div class="d">benchmark ${sgn(bNDX.ret*100)} en el período${baseEfPer!=null?" · "+signoMoney(baseEfPer*bNDX.ret)+" con tu mismo capital":""}</div></div>`:null,
+            <div class="d">time-weighted · acumulado, sin anualizar · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
+          `<div class="perf"><div class="k">TIR anual</div>
+            <div class="v ${cls(tirPer)}">${tirPer==null?"—":sgn(tirPer*100)}</div>
+            <div class="d">${tirPer==null
+              ?`el período mide ${r.diasReales} día${r.diasReales>1?"s":""}: por debajo de 30 anualizar amplifica el ruido`
+              :`efectiva anual (TIREA) · ${r.diasReales}d efectivos · pondera cuándo entró cada peso`}</div></div>`,
           aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(aportePer)}</div>
             <div class="d">entró durante el período</div></div>`:null,
@@ -3458,12 +3674,14 @@ function render(soloEstructura){
         }
         notaHtml=`<div class="perf-note">${desalineado?`<b>Ojo:</b> pediste ${rango.desdeNominal||rango.desde} → ${rango.hasta},
           pero los cierres diarios disponibles arrancan en <b>${r.desde}</b> y terminan en <b>${r.hasta}</b>.
-          TODO lo que se muestra acá (retorno del período, TNA, mejor/peor posición, comparación vs. índices y el
-          gráfico) mide esa ventana efectiva de ${r.diasReales} día${r.diasReales>1?"s":""}, no la nominal — la única
-          excepción es la TNA, que anualiza sobre los ${r.dias} días de calendario del período pedido. La serie solo
+          TODO lo que se muestra acá (retorno del período, TIR, mejor/peor posición, comparación vs. índices y el
+          gráfico) mide esa ventana efectiva de ${r.diasReales} día${r.diasReales>1?"s":""}, no la nominal. La serie solo
           registra los días en que abriste la app o en que el historial público cubre todas tus posiciones; se cierra
           solo a medida que ese historial avance.<br><br>`:""}Retorno <b>time-weighted</b>, en ${monedaLbl}: cada día se descuenta el dinero que entró o
-          salió, así un depósito no se confunde con una ganancia. El cuadro por activo y mejor/peor posición se
+          salió, así un depósito no se confunde con una ganancia. Es un <b>acumulado del período, sin anualizar</b>.
+          La <b>TIR anual</b> de al lado es otra cosa: una tasa efectiva anual que arranca del valor de la cartera al
+          inicio del tramo y pondera la fecha de cada aporte y retiro. Si la TIR supera al time-weighted anualizado,
+          tus aportes cayeron en buen momento; si queda por debajo, el timing jugó en contra. El cuadro por activo y mejor/peor posición se
           miden desde el arranque efectivo del período (o desde tu primera compra de esa posición, si es más
           tarde), también en ${monedaLbl} y no contra tu costo de compra original. El cuadro lista <b>todas</b> las
           posiciones en cartera: las que no se pueden medir en esta ventana aparecen igual, con "—" en Retorno y el
@@ -3480,6 +3698,11 @@ function render(soloEstructura){
     html+=cardsPerf
       ? filasGrid(cardsPerf,"perf-grid",4)
       : `<div class="chart-warn">No hay datos suficientes todavía para calcular ${rango.etiqueta.toLowerCase()}.</div>`;
+    // La comparativa contra los índices va inmediatamente debajo de las cards,
+    // como tabla y no como cards sueltas: el encabezado de columna declara la
+    // unidad una sola vez y evita que "+7,1%" se lea como un retorno cuando en
+    // realidad es una resta de porcentajes.
+    if(cmpHtml) html+=cmpHtml;
   }
   // 2) Métricas de riesgo, después de los cuadros de rendimiento. Depende
   // solo de los snapshots diarios (no de tener posiciones abiertas): se
