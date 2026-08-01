@@ -3198,20 +3198,35 @@ function metricasRiesgo(serie){
   // la misma estandarización (si no, un tramo de 20 días pesaría de más).
   const pares=obs.filter(o=>o.rsp!=null&&o.rsp>-1)
     .map(o=>({p:o.u,b:Math.log(1+o.rsp)/Math.sqrt(o.ruedas)}));
-  let beta=null,correl=null;
+  let beta=null,correl=null,alpha=null;
   if(pares.length>=20){
     const mp=pares.reduce((a,o)=>a+o.p,0)/pares.length, mb=pares.reduce((a,o)=>a+o.b,0)/pares.length;
     let cov=0,varb=0,varp=0;
     for(const o of pares){ cov+=(o.p-mp)*(o.b-mb); varb+=(o.b-mb)**2; varp+=(o.p-mp)**2; }
     if(varb>0) beta=cov/varb;
     if(varb>0&&varp>0) correl=cov/Math.sqrt(varb*varp);
+    // Alfa de Jensen, anualizado: cuánto rindió la cartera por encima de lo
+    // que el CAPM predice a partir del beta y el exceso del benchmark, sobre
+    // la MISMA tasa libre de riesgo que ya se usó para excAnual. Se calcula
+    // sobre el subconjunto de tramos que tienen dato de S&P (el mismo que
+    // arma "pares"), encadenando retorno y tasa como en retAnual/rfAnual.
+    if(beta!=null){
+      const obsBench=obs.filter(o=>o.rsp!=null&&o.rsp>-1);
+      const diasBench=obsBench.reduce((s,o)=>s+o.dCal,0);
+      const acumBench=obsBench.reduce((a,o)=>a*(1+o.rsp),1);
+      const retAnualBench=(acumBench>0&&diasBench>0)?Math.pow(acumBench,CAL/diasBench)-1:null;
+      const acumRFBench=obsBench.reduce((a,o)=>a*o.fRF,1);
+      const rfAnualBench=(conRF&&diasBench>0)?Math.pow(acumRFBench,CAL/diasBench)-1:0;
+      const excAnualBench=(retAnualBench==null)?null:retAnualBench-rfAnualBench;
+      if(excAnual!=null&&excAnualBench!=null) alpha=excAnual-beta*excAnualBench;
+    }
   }
   const huecos=obs.filter(o=>o.dCal>=5).length;
   return {n,dias:diasTot,huecos,vol,retAnual,conRF,rfAnual,excAnual,cobRF,
     tasaNombre:tasa.nombre,
     sharpe:(vol>0&&excAnual!=null)?excAnual/vol:null,
     sortino:(dd>0&&excAnual!=null)?excAnual/dd:null,
-    mdd,beta,correl,paresBench:pares.length};
+    mdd,beta,correl,alpha,paresBench:pares.length};
 }
 
 // Bloque de UI: Riesgo, scoped al mismo período que eligió el usuario arriba.
@@ -3264,6 +3279,9 @@ function seccionRiesgo(rango){
     m.correl==null
       ? card("Correlación S&amp;P","—","sin datos suficientes")
       : card("Correlación S&amp;P",fmt(m.correl,2),"1 = se mueven igual, 0 = sin relación"),
+    m.alpha==null
+      ? card("Alfa vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
+      : card("Alfa vs S&amp;P",sgn(m.alpha*100),"exceso anual sobre lo esperado por el beta (CAPM)",cls(m.alpha)),
   ];
   const cardsHtml=filasGrid(cardsR,"perf-grid",4);
   const hintHtml=`<div class="hint" style="margin-top:12px;line-height:1.9">
