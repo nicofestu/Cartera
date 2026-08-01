@@ -475,6 +475,7 @@ select option{background:#0A0C0E;color:var(--white)}
 .perf{position:relative;padding:21px;border-radius:var(--r)}
 .perf .v{font-size:20px;font-weight:600;line-height:1;letter-spacing:-.01em}
 .perf.hero .v{font-size:28px;font-weight:700}
+.perf .d-money{margin-top:7px;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1}
 .perf-note{max-width:880px;margin-top:14px;color:var(--grey-dim);font-size:11px;line-height:1.9}
 .perf-tbl td{padding:13px 12px}
 .contrib-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
@@ -3255,15 +3256,12 @@ function render(soloEstructura){
         t0,span,mn,rg,W,H,pl,pt,pb};
     }
   }
-  // Ensamblado: columna izquierda (selector de período + rendimiento de hoy,
-  // bien visible) y columna derecha más angosta con el gráfico.
+  // Ensamblado: columna izquierda (selector de período) y columna derecha
+  // más angosta con el gráfico. La card de rendimiento de hoy ya no se
+  // repite acá: queda solo en Inicio, que es donde siempre está visible.
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
     html+=`<div class="rend-top">
-      <div class="rend-left">${periodoBarHtml}
-        <div class="card rend-hoy"><div class="k">${rendDiaLbl.k}</div>
-          <div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
-          <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
-      </div>
+      <div class="rend-left">${periodoBarHtml}</div>
       <div class="rend-right">${chartHtml}</div>
     </div>`;
   }
@@ -3300,16 +3298,17 @@ function render(soloEstructura){
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno total</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
-            <div class="d">${signoMoney(totalBase+(srT?.retirado||0)-baseCap)} sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
+            <div class="d-money ${cls(retTot)}">${signoMoney(totalBase+(srT?.retirado||0)-baseCap)}</div>
+            <div class="d">sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
             <div class="d">anualizado · ${diasTot}d</div></div>`,
           benchTot!=null?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
             <div class="v ${cls(retTot-benchTot)}">${sgn((retTot-benchTot)*100)}</div>
-            <div class="d">benchmark ${sgn(benchTot*100)} con tus mismos aportes</div></div>`:null,
+            <div class="d">benchmark ${sgn(benchTot*100)} · ${signoMoney(baseCap*benchTot)} con tus mismos aportes</div></div>`:null,
           benchNdx!=null?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
             <div class="v ${cls(retTot-benchNdx)}">${sgn((retTot-benchNdx)*100)}</div>
-            <div class="d">benchmark ${sgn(benchNdx*100)} con tus mismos aportes</div></div>`:null,
+            <div class="d">benchmark ${sgn(benchNdx*100)} · ${signoMoney(baseCap*benchNdx)} con tus mismos aportes</div></div>`:null,
           `<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(baseCap)}</div>
             <div class="d">plata que entró de afuera</div></div>`,
@@ -3382,20 +3381,28 @@ function render(soloEstructura){
         // bajando, sobre el mismo período.
         const bSP=benchSP(r.desde,r.hasta,srT?srT.hitos:null);
         const bNDX=benchNDX(r.desde,r.hasta,srT?srT.hitos:null);
+        // Capital medio efectivo del tramo: el mismo que produjo r.gan a la
+        // tasa r.ret (r.gan = Σ base_día×retorno_día, r.ret = producto de los
+        // retornos diarios encadenados). Se usa para traducir el % del
+        // benchmark a moneda con el mismo capital que tuvo tu cartera — no es
+        // exacto en compounding con flujos grandes en el medio, es la misma
+        // aproximación simple-return que ya usa "vs. índice" en Histórico.
+        const baseEfPer=(r.ret&&Math.abs(r.ret)>1e-9)?r.gan/r.ret:null;
 
         cardsPerf=[
           `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
-            <div class="d">${signoMoney(r.gan)} · time-weighted · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
+            <div class="d-money ${cls(r.gan)}">${signoMoney(r.gan)}</div>
+            <div class="d">time-weighted · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
             <div class="d">anualizado · ${r.dias}d nominales</div></div>`,
           bSP?`<div class="perf"><div class="k">vs. SPY (CEDEAR)</div>
             <div class="v ${cls(r.ret-bSP.ret)}">${sgn((r.ret-bSP.ret)*100)}</div>
-            <div class="d">benchmark ${sgn(bSP.ret*100)} en el período</div></div>`:null,
+            <div class="d">benchmark ${sgn(bSP.ret*100)} en el período${baseEfPer!=null?" · "+signoMoney(baseEfPer*bSP.ret)+" con tu mismo capital":""}</div></div>`:null,
           bNDX?`<div class="perf"><div class="k">vs. QQQ (CEDEAR)</div>
             <div class="v ${cls(r.ret-bNDX.ret)}">${sgn((r.ret-bNDX.ret)*100)}</div>
-            <div class="d">benchmark ${sgn(bNDX.ret*100)} en el período</div></div>`:null,
+            <div class="d">benchmark ${sgn(bNDX.ret*100)} en el período${baseEfPer!=null?" · "+signoMoney(baseEfPer*bNDX.ret)+" con tu mismo capital":""}</div></div>`:null,
           aportePer!=null?`<div class="perf"><div class="k">Capital aportado</div>
             <div class="v">${money(aportePer)}</div>
             <div class="d">entró durante el período</div></div>`:null,
