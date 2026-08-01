@@ -3073,13 +3073,21 @@ function render(soloEstructura){
   // controla tanto el gráfico de abajo como las cards de rendimiento.
   // Va en la columna izquierda, junto con el rendimiento de hoy; el gráfico
   // queda más chico, a la derecha (ver ensamblado de .rend-top más abajo).
-  let rango=null, serieT=null, periodoBarHtml="";
+  let rango=null, serieT=null, periodoBarHtml="", fPrimGlobal=null, ytdEsHistorico=false;
   if(TAB==="rendimientos"&&DATOS.movimientos.length){
     const anioActual=hoy().slice(0,4);
     const aniosDisp=[...new Set((DATOS.snapshots||[]).map(s=>s.fecha.slice(0,4)))]
       .filter(a=>a!==anioActual).sort().reverse();
     rango=rangoPeriodo(PERIODO);
     serieT=serieDiaria(); // ya descarta días con menos de US$100 de NAV
+    // Si la cartera arrancó DESPUÉS del 1/1 de este año, "YTD" y "Histórico
+    // completo" cubren exactamente el mismo historial — no tiene sentido
+    // medirlos con dos métodos distintos (time-weighted por un lado,
+    // money-weighted por otro) y mostrar dos números que no coinciden para
+    // la misma ventana. En ese caso YTD se resuelve con el mismo camino que
+    // "todo" (ver más abajo), y se aclara en pantalla.
+    fPrimGlobal=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
+    ytdEsHistorico=PERIODO==="ytd"&&fPrimGlobal>(anioActual+"-01-01");
     periodoBarHtml=`<div class="periodo-bar"><span class="periodo-lbl">Período</span>
       <select id="sel-periodo" onchange="setPeriodo(this.value)">
       <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
@@ -3108,7 +3116,7 @@ function render(soloEstructura){
       <div class="chart-warn">No se puede calcular el rendimiento porque ${sinPx.length===1?"una posición no tiene":sinPx.length+" posiciones no tienen"} precio:
       <b>${sinPx.map(p=>p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker).join(", ")}</b>.
       Revisá que el tipo de instrumento sea el correcto (editando el movimiento) o cargá un precio manual.</div></div>`;
-  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&PERIODO==="todo"){
+  } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&(PERIODO==="todo"||ytdEsHistorico)){
     const retHoy=(totalBase+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
     const pts=sr.puntos.filter(p=>p.fecha!==hoy());
     pts.push({fecha:hoy(),ret:retHoy});
@@ -3147,7 +3155,7 @@ function render(soloEstructura){
     // Escala Y: 4 niveles
     const ticks=[mn,mn+rg/3,mn+2*rg/3,mx].map(v=>({v,y:py(v)}));
     chartHtml+=`<div class="chart-card" id="rend-chart-card">
-      <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}</div>
+      <div class="chart-head"><div class="k">Rendimiento acumulado · ${tituloMoneda}${ytdEsHistorico?" · YTD = histórico completo":""}</div>
         <div class="chart-key">
           <span><i class="ln nav"></i>Cartera <b class="${cls(retHoy)}">${sgn(retHoy*100)}</b></span>
           ${benchHoy!=null?`<span><i class="ln spy"></i>SPY (CEDEAR) <b style="color:var(--grey)">${sgn(benchHoy*100)}</b></span>`:""}
@@ -3271,11 +3279,13 @@ function render(soloEstructura){
   if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
     let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="";
 
-    if(PERIODO==="todo"){
+    if(PERIODO==="todo"||ytdEsHistorico){
       // Camino de siempre: retorno money-weighted sobre el capital aportado
       // total, con la tabla detallada por posición desde su primera compra.
       // Se listan TODAS las posiciones; las que no se pueden medir van al
       // final con el motivo escrito (antes se filtraban y desaparecían).
+      // Se entra también acá cuando PERIODO==="ytd" pero la cartera arrancó
+      // después del 1/1: ver ytdEsHistorico más arriba.
       const met=metricasPorPosicion(pos).sort(ordenPorRet);
       const metMed=met.filter(p=>p.ret!=null);
       if(met.length){
@@ -3296,10 +3306,10 @@ function render(soloEstructura){
         const monedaLblTot=tituloMoneda;
 
         cardsPerf=[
-          `<div class="perf hero"><div class="k">Retorno total</div>
+          `<div class="perf hero"><div class="k">${ytdEsHistorico?"Retorno total · YTD = histórico":"Retorno total"}</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
             <div class="d-money ${cls(retTot)}">${signoMoney(totalBase+(srT?.retirado||0)-baseCap)}</div>
-            <div class="d">sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot}</div></div>`,
+            <div class="d">sobre lo aportado${srT?.retirado>1?" · retiros incluidos":""} · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
           `<div class="perf"><div class="k">TNA equivalente</div>
             <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
             <div class="d">anualizado · ${diasTot}d</div></div>`,
@@ -3322,7 +3332,7 @@ function render(soloEstructura){
             <div class="v ${cls(realTot)}">${signoMoney(realTot)}</div>
             <div class="d">ventas cerradas</div></div>`:null,
         ];
-        metaHtml=`<span>${diasTot} días · desde ${fPrim}</span>`;
+        metaHtml=`<span>${diasTot} días · desde ${fPrim} (inicio de la cartera)${ytdEsHistorico?` <span style="color:var(--grey)">(pediste YTD, pero es igual a Histórico completo: la cartera arrancó después del 1/1)</span>`:""}</span>`;
         tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
             <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
@@ -3342,7 +3352,7 @@ function render(soloEstructura){
               <span>${sgn(p.contrib*100)}</span></div>`
               :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("");})()}
           </tbody></table></div>`;
-        notaHtml=`<div class="perf-note"><b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
+        notaHtml=`<div class="perf-note">${ytdEsHistorico?`<b>Elegiste YTD, pero tu cartera arrancó el ${fPrim}</b> — después del 1/1 de este año — así que no hay nada anterior que medir: YTD y "Histórico completo" son exactamente la misma ventana y el mismo cálculo. Por eso todos los números de esta pantalla (retorno, TNA, comparación vs. índices, mejor/peor posición, tabla) son los del historial completo.<br><br>`:""}<b>Retorno total</b> = (valor actual de la cartera + liquidez) / capital aportado − 1. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. SPY (CEDEAR)</b> y <b>vs. QQQ (CEDEAR)</b>: simulan tus mismos aportes (fechas y montos) comprando el CEDEAR, medido por su cotización en dólares en BYMA (especie D, con la C de respaldo)${BENCH_DIV_OK?" y con los dividendos del ETF reinvertidos en la fecha ex":", <b>sin</b> dividendos: falta historial/dividendos.json, así que es retorno de precio"}. Donde el CEDEAR no tiene cobertura se empalma la variación del índice oficial. <b>No coincide con el índice del noticiero</b>: mide el instrumento que se puede comprar acá, con su propio horario y su error de seguimiento. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
