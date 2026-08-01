@@ -1910,12 +1910,16 @@ function fechaLiqDe(m){ return sumarHabiles(m.fecha,plazoLiq(m)); }
 // (`m.moneda`, y si es USD, `m.poolUSD`; default "MEP" en movimientos viejos,
 // de antes de que existiera la distinción). Comprar un CEDEAR en pesos no
 // toca el dólar CCL, y viceversa: son plata separada de verdad, no la misma
-// plata mirada con otro tipo de cambio. No llevan el tope de "no pagar con
-// lo que no hay" que sí tiene cA/cU (ese tope existe para no inflar el
-// aportado del motor de rendimiento; acá, si da negativo, es señal real de
-// que falta cargar un depósito). Solo las consume la UI de Liquidez, que lee
-// hitosCaja() en vivo — no tocan snapshots guardados ni la reconstrucción
-// histórica.
+// plata mirada con otro tipo de cambio. Una compra SÍ lleva el mismo tope que
+// cA/cU ("no pagar con lo que no hay": si la cuenta no tiene cargado el
+// depósito o la transferencia que financió la compra, no se muestra la
+// posición en rojo por un agujero de carga — se tapa en 0, igual que ya hace
+// el resto de la app). Retiro y gasto NO tienen tope, a propósito, igual que
+// cA/cU: ahí un negativo sí es información real (se retiró más de lo
+// cargado). El tope es solo contable para esta UI: no toca apor/aporU, que
+// siguen siendo el a/u bimonetario de siempre. Solo las consume la UI de
+// Liquidez, que lee hitosCaja() en vivo — no tocan snapshots guardados ni la
+// reconstrucción histórica.
 function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
   const cA={}, cU={}, nA={}, nM={}, nC={};
@@ -1936,7 +1940,8 @@ function construirHitosCaja(){
       dA=-Math.max(0,Math.min(cA[k],a)); dU=-Math.max(0,Math.min(cU[k],u));
       apor+=a+dA; aporU+=u+dU;
       if(u+dU>1e-9) eventosAporte.push({fecha:m.fecha,usd:u+dU});
-      dN=-bruto;
+      const nP=esUSD?(esCCL?nC:nM):nA;
+      dN=-Math.max(0,Math.min(nP[k],bruto));
     }
     else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); dN=bruto; }
     else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; dN=-bruto; }
