@@ -1221,7 +1221,7 @@ const GRUPOS = [
 const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 1000 : 1;
 
 /* ══════════════ Estado y persistencia ══════════════ */
-let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}};
+let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}, ctasImportadas:{}};
 let VISTA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
 /* VISTA: "ARS" | "MEP" | "CCL" — moneda de valuación para Inicio/Rendimientos/
    Movimientos y Mercado. En Mercado, ARS usa la especie base, USD MEP la D y
@@ -1964,14 +1964,30 @@ function construirHitosCaja(){
     // sos tomador) — eso se resuelve modelándolo como una POSICIÓN más de la
     // cartera (ver posicionesCaucion()), no maquillando la caja.
     if(m.op==="compra"){
-      // Math.max(0,…) sobre el mínimo: con caja negativa, Math.min devolvía un
-      // número negativo y la compra terminaba SUMANDO efectivo e inflando el
-      // aportado en la misma cantidad. No se puede pagar con plata que no hay.
-      dA=-Math.max(0,Math.min(cA[k],a)); dU=-Math.max(0,Math.min(cU[k],u));
+      // El tope existe para las cuentas cargadas A MANO: ahí una compra sin
+      // caja suficiente casi siempre es una compra cuyo fondeo quedó sin
+      // registrar, y taparla en 0 evita mostrar la posición en rojo. El
+      // Math.max(0,…) sobre el mínimo además arregla un bug real: con caja
+      // negativa, Math.min devolvía un número negativo y la compra terminaba
+      // SUMANDO efectivo.
+      //
+      // Pero en una cuenta cuyo historial entró COMPLETO desde el extracto del
+      // bróker no hay agujero que tapar, y el tope pasa a mentir: los brókers
+      // liquidan a T+1 y dejan comprar contra un rescate que acredita al día
+      // siguiente, así que la caja queda transitoriamente negativa a propósito.
+      // Cada una de esas compras se contaba como APORTE NUEVO. En la cartera
+      // de prueba (Cocos, 2,5 años) eran 11 compras que inventaban 1.008.083
+      // ARS y 938,96 USD de capital y hundían el rendimiento en la misma
+      // proporción. Con el tope desactivado la caja cierra exacta en cero.
+      const libre=DATOS.ctasImportadas?.[k];
+      if(libre){ dA=-a; dU=-u; dN=-bruto; }
+      else{
+        dA=-Math.max(0,Math.min(cA[k],a)); dU=-Math.max(0,Math.min(cU[k],u));
+        const nP=esUSD?(esCCL?nC:nM):nA;
+        dN=-Math.max(0,Math.min(nP[k],bruto));
+      }
       apor+=a+dA; aporU+=u+dU;
       if(u+dU>1e-9) eventosAporte.push({fecha:m.fecha,usd:u+dU});
-      const nP=esUSD?(esCCL?nC:nM):nA;
-      dN=-Math.max(0,Math.min(nP[k],bruto));
     }
     else if(m.op==="deposito"){ dA=a; dU=u; apor+=a; aporU+=u; eventosAporte.push({fecha:m.fecha,usd:u}); dN=bruto; }
     else if(m.op==="retiro"){ dA=-a; dU=-u; ret+=a; retU+=u; dN=-bruto; }
@@ -2116,7 +2132,7 @@ function persistirYSync(){
 }
 function restaurar(){
   if(!hayStorage) return;
-  try{ const d = localStorage.getItem(LS_KEY); if(d) DATOS = {movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...JSON.parse(d)}; }catch(e){}
+  try{ const d = localStorage.getItem(LS_KEY); if(d) DATOS = {movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...JSON.parse(d)}; }catch(e){}
 }
 
 /* ══════════════ Utilidades ══════════════ */
@@ -2774,6 +2790,16 @@ async function cargar(){
       } else if(p.tipo==="fci"){
         const r=precios["fci:"+p.categoria]?.[p.fondo];
         if(r){ px=r.vcp; fuente=r.fecha; }
+        else {
+          // CAFCI no lista todos los fondos (p.ej. "Cocos Pesos Plus" no está
+          // en ninguna de las cuatro categorías). Sin esto la posición queda
+          // sin precio y sale del patrimonio entera. El importador deja
+          // sembrado el último valor de cuotaparte que trae el propio extracto
+          // del bróker; se usa como respaldo y se muestra su fecha, que puede
+          // ser vieja, para que se vea que no es un precio de hoy.
+          const pm=DATOS.preciosManuales[p.ticker];
+          if(pm){ px=pm.precio; pxMoneda=pm.moneda||"ARS"; fuente=pm.fecha+" (extracto)"; }
+        }
       } else {
         const r=precios[p.tipo]?.[p.ticker];
         if(r){
@@ -5112,7 +5138,7 @@ async function conectarSync(){
       if(nLocal>0&&nRemoto>0&&!confirm(`El gist tiene ${nRemoto} movimientos y este dispositivo tiene ${nLocal}.\n\nAl conectar se cargan los datos de la nube y se reemplazan los locales.\n\n¿Continuar?`)){
         SYNC=null; btn.disabled=false; btn.textContent="Conectar"; return;
       }
-      if(nRemoto>0){ DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...remoto}; persistir(); }
+      if(nRemoto>0){ DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...remoto}; persistir(); }
       SYNC.rev=remoto.rev||0;
     } else {
       const g=await apiGist("POST","",{description:"Cartera — datos de seguimiento",public:false,
@@ -5173,7 +5199,7 @@ async function bajarNube(manual){
     const remoto=JSON.parse(f.truncated?await (await fetch(f.raw_url)).text():f.content);
     const nR=(remoto.movimientos||[]).length, nL=DATOS.movimientos.length;
     if(manual&&nL>0&&!confirm(`Traer ${nR} movimientos de la nube y reemplazar los ${nL} de este dispositivo?`)) return;
-    DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...remoto};
+    DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...remoto};
     SYNC.rev=remoto.rev||0; SYNC.ultimo=new Date().toISOString(); SYNC.error=false;
     guardarSync(); persistir(); normalizarCajaSnapshots(true); purgarSnapshots();
     pintarSync(); cargar();
@@ -5473,12 +5499,12 @@ const IMPORTADORES={
   cocos:{nombre:"Cocos",formato:"csv",multiple:true,parser:parseCocosMovimientos},
 };
 let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[], IMP_ARCHIVOS=[], IMP_DUPLICADOS=0;
-let IMP_APERTURA=null;
+let IMP_APERTURA=null, IMP_PRECIOS_FCI={};
 
 function abrirImportBroker(){
   const sel=document.getElementById("imp-broker");
   sel.innerHTML=Object.entries(IMPORTADORES).map(([k,v])=>`<option value="${k}">${v.nombre}</option>`).join("");
-  IMP_CANDIDATOS=[]; IMP_OMITIDOS=[]; IMP_REVISAR=[]; IMP_ARCHIVOS=[]; IMP_DUPLICADOS=0; IMP_APERTURA=null;
+  IMP_CANDIDATOS=[]; IMP_OMITIDOS=[]; IMP_REVISAR=[]; IMP_ARCHIVOS=[]; IMP_DUPLICADOS=0; IMP_APERTURA=null; IMP_PRECIOS_FCI={};
   document.getElementById("imp-paso1").style.display="block";
   document.getElementById("imp-paso2").style.display="none";
   const btn=document.getElementById("imp-confirmar");
@@ -5522,7 +5548,7 @@ async function onFileImportBroker(ev){
     const cfg=IMPORTADORES[brokerId];
     if(!cfg) throw new Error("seleccioná un bróker");
     const archivos=cfg.multiple?seleccionados:[seleccionados[0]];
-    const candidatos=[], omitidos=[], revisar=[];
+    const candidatos=[], omitidos=[], revisar=[]; let preciosFci={};
     for(const f of archivos){
       let resultado;
       try{
@@ -5540,6 +5566,8 @@ async function onFileImportBroker(ev){
       candidatos.push(...resultado.candidatos);
       omitidos.push(...resultado.omitidos);
       revisar.push(...resultado.revisar);
+      for(const [tk,px] of Object.entries(resultado.preciosFci||{}))
+        if(!preciosFci[tk]||preciosFci[tk].fecha<px.fecha) preciosFci[tk]=px;
     }
 
     // Los tickets de Cocos son estables y únicos. Se usan para evitar tanto
@@ -5571,6 +5599,7 @@ async function onFileImportBroker(ev){
     const ctaImp=canonizarCta(IMPORTADORES[brokerId].nombre.toUpperCase());
     const yaHayCuenta=DATOS.movimientos.some(m=>m.cuenta===ctaImp);
     IMP_APERTURA=(IMP_DUPLICADOS||yaHayCuenta)?null:detectarApertura([...IMP_CANDIDATOS,...IMP_REVISAR]);
+    IMP_PRECIOS_FCI=preciosFci;
     renderPreviewImport();
   }catch(e){
     err.textContent="No se pudo leer el archivo: "+e.message;
@@ -5653,7 +5682,7 @@ function clasificarTickerPuente(simbolo){
 // cauciones y ajustes contables. Estos últimos se informan como omitidos para
 // que no dupliquen caja ni inventen posiciones. ──
 function parseCocosMovimientos(rows){
-  const candidatos=[], omitidos=[], revisar=[];
+  const candidatos=[], omitidos=[], revisar=[], ultimoVcp={};
   if(!Array.isArray(rows)||!rows.length) throw new Error("el CSV no contiene movimientos");
   const requeridas=["nroTicket","fechaEjecucion","tipoOperacion","instrumento","moneda","cantidad","precio","total"];
   const presentes=new Set(Object.keys(rows[0]||{}));
@@ -5795,6 +5824,11 @@ function parseCocosMovimientos(rows){
         cantidad:Math.abs(cant),precio,moneda,origen:opRaw,importId};
       if(estimado) itFci.estimado=estimado;
       candidatos.push(itFci);
+      // El valor de cuotaparte más reciente que trae el extracto, por si CAFCI
+      // no lista el fondo (ver la rama `fci` de render()). Solo de las filas
+      // con cantidad real: las estimadas usan un precio prestado de otra fecha.
+      if(ticker&&!estimado&&(!ultimoVcp[ticker]||ultimoVcp[ticker].fecha<fecha))
+        ultimoVcp[ticker]={precio,fecha,moneda,fondo};
       continue;
     }
 
@@ -5895,7 +5929,7 @@ function parseCocosMovimientos(rows){
     }
     omitidos.push({fecha,op:opRaw,ticker,motivo:"patrón no reconocido"});
   }
-  return {candidatos,omitidos,revisar};
+  return {candidatos,omitidos,revisar,preciosFci:ultimoVcp};
 }
 
 // ── Parser Puente: extracto PDF de "Cuenta → Movimientos". El PDF trae 3
@@ -6312,11 +6346,24 @@ function detectarApertura(items){
     for(const k of Object.keys(saldo)) if(saldo[k]<(minimo[k]==null?0:minimo[k])) minimo[k]=saldo[k];
   }
 
+  // La caja NO se infiere. El mínimo corrido sirve para una tenencia (no se
+  // pueden vender papeles que no se tienen) pero no para el efectivo: en Cocos
+  // la cuenta en pesos es de tránsito —todo se barre al FCI— y el bróker deja
+  // pagar contra un rescate que liquida al día siguiente. En la cartera de
+  // prueba el saldo vuelve a ~0 todos los fines de mes durante 2 años y medio,
+  // pero el mínimo corrido marcaba −1.322.124 (pagos del 05/01/2026
+  // financiados por un rescate del 06/01). Tomar eso como saldo inicial metía
+  // capital fantasma e inflaba el aportado en la misma cantidad. Lo que sí se
+  // hace es informar el residuo para que se cargue en "Saldos en cuenta".
   const TOL=1e-6, posiciones=[], caja=[];
   for(const k of Object.keys(minimo)){
     const falta=-minimo[k];
+    if(k.startsWith("cash|")){
+      const resto=saldo[k];
+      if(resto<-TOL) caja.push({moneda:k.slice(5),importe:-resto});
+      continue;
+    }
     if(falta<=TOL) continue;
-    if(k.startsWith("cash|")){ caja.push({moneda:k.slice(5),importe:falta}); continue; }
     const ref=primero[k];
     if(!ref) continue;
     posiciones.push({clave:k,tipo:ref.tipo,ticker:ref.ticker,fondo:ref.fondo,
@@ -6335,6 +6382,8 @@ function movimientosApertura(ap,cuenta){
   if(!ap) return [];
   const yaCargado=new Set(DATOS.movimientos.map(m=>m.importId).filter(Boolean));
   const movs=[], porMoneda={};
+  // Saldo inicial + lo que hace falta para pagar las compras de apertura de
+  // abajo (si no, con el tope activo se toparían contra una caja en cero).
   for(const c of ap.caja) porMoneda[c.moneda]=(porMoneda[c.moneda]||0)+c.importe;
   for(const p of ap.posiciones){
     if(!(p.precio>0)||!(p.cantidad>0)) continue;
@@ -6392,8 +6441,7 @@ function renderPreviewImport(){
   if(ap){
     const filas=[
       ...ap.caja.map((c,i)=>`<div class="imp-row">
-        <span>${ap.fecha}</span><span class="tk">Caja ${c.moneda}</span>
-        <span>—</span>
+        <span>${ap.fecha}</span><span class="tk">Caja ${c.moneda}</span><span>—</span>
         <span><input type="number" step="any" value="${Math.round(c.importe*100)/100}"
           onchange="IMP_APERTURA.caja[${i}].importe=Math.max(0,+this.value||0)" style="width:100%"></span>
         <span class="hint">saldo inicial</span></div>`),
@@ -6414,7 +6462,11 @@ function renderPreviewImport(){
         posición preexistente.<br>
         Las <b>cantidades</b> salen solas y son exactas. Los <b>precios</b> son el costo de entrada
         de tu serie — solo los sabés vos. Se propone el primer precio que aparece en el extracto;
-        editá los que estén marcados en rojo. Si preferís no cargar nada, borrá los importes.</div>
+        editá los que estén marcados en rojo. Si preferís no cargar una posición, poné precio 0.</div>
+      ${ap.caja.length?`<div class="hint" style="margin:0 0 8px">
+        El <b>saldo inicial</b> propuesto es lo que le falta al extracto para cerrar en cero: si arrancaras
+        de nada, la caja terminaría en ${ap.caja.map(c=>`${c.moneda} ${fmt(-c.importe,2)}`).join(" y ")},
+        que es imposible. Puede incluir una liquidación pendiente del último día del archivo.</div>`:""}
       <div class="imp-scroll"><div class="imp-row head">
         <span>Fecha</span><span>Especie</span><span>Cant.</span><span>Precio / importe</span><span></span></div>
       ${filas}</div>`;
@@ -6450,8 +6502,21 @@ async function resolverCategoriaFci(nombreFondo){
       catch(e){ FCI_CAT_CACHE[c]=[]; }
     }));
   }
+  // Los brókers y CAFCI escriben el MISMO fondo distinto. Cocos exporta
+  // "COCOS RENDIMIENTO CL. A $ ESC" y CAFCI lo llama "Cocos Rendimiento -
+  // Clase A": con el normalizador viejo (que solo sacaba la palabra "CLASE")
+  // quedaban "COCOSRENDIMIENTOCLAESC" y "COCOSRENDIMIENTOA", que no coinciden
+  // ni exacto ni por substring. Resultado: NINGÚN fondo de Cocos encontraba
+  // precio y la posición quedaba sin valuar — en la cartera de prueba, el 77%
+  // del patrimonio. Ahora se sacan también las abreviaturas de clase ("CL."),
+  // las marcas de escritural y el símbolo de moneda, y "U$S"/"USD" se lleva a
+  // "DOLARES", que es como los nombra CAFCI.
   const norm=s=>(s||"").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
-    .replace(/CLASE/g," ").replace(/[^A-Z0-9]/g,"");
+    .replace(/\bCLASE\b|\bCL\b/g," ")
+    .replace(/\bESCRITURAL\b|\bESCRIT\b|\bESC\b/g," ")
+    .replace(/U\$S|\bUSD\b|\bDOLAR\b/g,"DOLARES")
+    .replace(/\bFCI\b|\bCUOT\b/g," ")
+    .replace(/[^A-Z0-9]/g,"");
   const objetivo=norm(nombreFondo);
   if(!objetivo) return null;
   for(const [cat,lista] of Object.entries(FCI_CAT_CACHE)){
@@ -6524,12 +6589,31 @@ async function confirmarImportBroker(){
     }
     cargados++;
   }
+  // La cuenta pasa a considerarse de historial completo: sus compras dejan de
+  // toparse contra la caja disponible (ver construirHitosCaja). Solo se marca
+  // si se cargó la apertura, que es lo que garantiza que la serie arranque con
+  // el saldo y las tenencias que ya existían antes del extracto.
+  if(IMP_APERTURA){
+    DATOS.ctasImportadas=DATOS.ctasImportadas||{};
+    DATOS.ctasImportadas[cuenta]={broker:document.getElementById("imp-broker").value,
+      desde:IMP_APERTURA.primera,cargado:hoy()};
+  }
+
+  // Respaldo de precio para los FCI: no pisa nada cargado a mano ni compite
+  // con CAFCI (render() lo consulta solo si el fondo no aparece en el listado).
+  let sembrados=0;
+  for(const [tk,px] of Object.entries(IMP_PRECIOS_FCI||{})){
+    if(DATOS.preciosManuales[tk]) continue;
+    DATOS.preciosManuales[tk]={precio:px.precio,moneda:px.moneda||"ARS",fecha:px.fecha};
+    sembrados++;
+  }
   persistirYSync();
   cerrarModales();
   cargar();
   alert(`Se cargaron ${cargados} movimientos`+
     `${sinMep?` (${sinMep} sin MEP de esa fecha — se usó 1 como referencia, editalos a mano si hace falta)`:""}`+
-    `${sinCategoria?` (${sinCategoria} fondo(s) sin categoría reconocida — revisá "Editar" en Movimientos y corregí la categoría a mano)`:""}.`);
+    `${sinCategoria?` (${sinCategoria} fondo(s) sin categoría reconocida — revisá "Editar" en Movimientos y corregí la categoría a mano)`:""}`+
+    `${sembrados?` Se guardó el último valor de cuotaparte del extracto como precio de respaldo de ${sembrados} fondo(s), por si no cotizan en el listado público.`:""}.`);
 }
 
 function importar(ev){
@@ -6540,7 +6624,7 @@ function importar(ev){
       const d=JSON.parse(r.result);
       if(!Array.isArray(d.movimientos)) throw new Error("formato inválido");
       if(!confirm("Importar "+d.movimientos.length+" movimientos reemplazando los datos actuales ("+DATOS.movimientos.length+" movimientos)?")) return;
-      DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},...d};
+      DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...d};
       persistirYSync(); cargar();
     }catch(e){ alert("No se pudo importar: "+e.message); }
   };
