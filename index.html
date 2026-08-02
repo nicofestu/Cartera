@@ -2136,6 +2136,23 @@ function normalizarCajaSnapshots(sync){
   if(n){ if(sync) persistirYSync(); else persistir(); }
   return n>0;
 }
+/* Borra los cierres diarios guardados. Es destructivo y no se puede deshacer
+   —el NAV de un día pasado no se puede reconstruir sin los precios de ese día—
+   pero es la única salida cuando la serie quedó contaminada: el retorno
+   time-weighted se apoya entera en ella. Todo lo demás (movimientos, saldos,
+   posiciones, TIR, resultado realizado) es independiente y queda intacto. */
+function reiniciarCierres(){
+  const n=(DATOS.snapshots||[]).length;
+  if(!n){ alert("No hay cierres diarios guardados."); return; }
+  if(!confirm(`¿Borrar los ${n} cierre(s) diarios guardados?\n\n`+
+    `El retorno time-weighted se va a reconstruir a partir de los próximos días. `+
+    `No se puede deshacer: el NAV de un día pasado no se recupera.\n\n`+
+    `Los movimientos, los saldos y la TIR NO se tocan.`)) return;
+  DATOS.snapshots=[];
+  persistirYSync();
+  cerrarModales();
+  cargar();
+}
 function purgarSnapshots(){
   // Descarta cierres registrados con posiciones sin precio (NAV subvaluado).
   // Se detectan porque quedan muy por debajo del capital VIGENTE (aportado −
@@ -3059,9 +3076,24 @@ function serieDiaria(){
     // Se descarta el tramo en vez de encadenar un número sin sentido, y se
     // deja registrado para poder avisarlo en el diagnóstico.
     const flujoBruto=flujos.reduce((sum,fl)=>sum+Math.abs(fl.monto),0);
-    if(flujoBruto>8*base){ inestables.push({fecha:cur.fecha,desde:prev.fecha,v0,flujoBruto,base}); continue; }
+    if(flujoBruto>8*base){ inestables.push({fecha:cur.fecha,desde:prev.fecha,v0,v1,flujoBruto,base,motivo:"flujo"}); continue; }
     const r=(v1-v0-flujo)/base;
     if(!isFinite(r)) continue;
+    /* Salto de NAV que los flujos NO explican. Un cierre guardado con otra
+       versión del cálculo, una importación repetida que duplicó posiciones o
+       un precio que se cayó dejan un v0 (o un v1) que no tiene nada que ver
+       con la cartera real, y encadenarlo contamina TODO el período: en la
+       cartera de prueba un solo cierre de ~29,6M contra 8,2M reales producía
+       −71,76% y −$21.032.437 sobre 8 días, con las posiciones de esa misma
+       pantalla moviéndose entre 0% y −4%.
+       El umbral es deliberadamente alto (50% en 5 días o menos) para no
+       comerse un derrumbe genuino: una cartera concentrada puede caer 30% en
+       una rueda, pero si además el flujo del tramo no alcanza para explicar
+       la diferencia, el problema es el dato, no el mercado. */
+    if(Math.abs(r)>=0.5&&T<=5&&flujoBruto<Math.abs(v1-v0)*0.5){
+      inestables.push({fecha:cur.fecha,desde:prev.fecha,v0,v1,flujoBruto,base,r,motivo:"salto"});
+      continue;
+    }
     // Índice sobre EXACTAMENTE el mismo tramo, con la fuente única (ver
     // benchPts). Antes acá se leía cur.sp/prev.sp — los niveles intradía
     // congelados en cada snapshot — y por eso el beta de Riesgo y las cards
@@ -3180,11 +3212,26 @@ function diagnosticoSerieHtml(serie,pos){
       rango importado) y el resultado realizado de esa venta se está midiendo contra costo cero — queda inflado.`);
   }
 
-  for(const t of ((serie||[]).inestables||[]).slice(0,4)){
-    items.push(`<b>${t.fecha}</b>: entre el ${t.desde} y ese día pasaron ${money(t.flujoBruto)} de aportes y retiros
-      sobre un capital medio de ${money(t.base)}. El tramo se descartó del retorno time-weighted: con esa
-      proporción el cálculo amplifica cualquier error del NAV y devuelve un porcentaje sin sentido.
-      La TIR no se ve afectada, porque no depende de los cierres diarios.`);
+  const inest=((serie||[]).inestables||[]);
+  for(const t of inest.slice(0,4)){
+    if(t.motivo==="salto"){
+      items.push(`<b>${t.fecha}</b>: el cierre pasó de ${money(t.v0)} a ${money(t.v1)} y los movimientos de esos
+        ${diasEntre(t.desde,t.fecha)} día(s) solo explican ${money(t.flujoBruto)}. Un salto así no es mercado: casi
+        siempre es un cierre guardado con otra versión del cálculo, una importación repetida que duplicó
+        posiciones, o una especie que ese día se quedó sin precio. El tramo se descartó del retorno
+        time-weighted — la TIR no se ve afectada, porque sale de los movimientos y no de los cierres.`);
+    } else {
+      items.push(`<b>${t.fecha}</b>: entre el ${t.desde} y ese día pasaron ${money(t.flujoBruto)} de aportes y retiros
+        sobre un capital medio de ${money(t.base)}. El tramo se descartó del retorno time-weighted: con esa
+        proporción el cálculo amplifica cualquier error del NAV y devuelve un porcentaje sin sentido.
+        La TIR no se ve afectada, porque no depende de los cierres diarios.`);
+    }
+  }
+  if(inest.some(t=>t.motivo==="salto")){
+    items.push(`Si los cierres viejos quedaron inservibles —por ejemplo porque se cargaron los movimientos
+      varias veces, o se guardaron con una versión anterior del cálculo— se pueden borrar y dejar que se
+      reconstruyan solos a partir de mañana. Los movimientos, las posiciones y la TIR no se tocan.
+      <button class="btn mini" style="margin-left:6px" onclick="reiniciarCierres()">Reiniciar cierres diarios</button>`);
   }
 
   const raros=(serie||[]).filter(d=>Math.abs(d.r)>=0.25&&(d.dias||1)<=5)
@@ -4000,7 +4047,13 @@ function render(soloEstructura){
       const r=retornoEntre(serieT,rango.desde,rango.hasta,rango.dias);
       if(r){
         const srT=serieRendimiento();
-        const a0=srT?srT.aporteEn(rango.desde):null, a1=srT?srT.aporteEn(rango.hasta):null;
+        // Sobre r.desde/r.hasta, la ventana que DE VERDAD se está midiendo, no
+        // sobre el rango nominal. Si los cierres arrancan tarde, el rango
+        // nominal mete aportes de meses que el retorno de al lado no cubre: en
+        // la cartera de prueba la card decía "$24.972.126 entró durante el
+        // período" —los depósitos de todo 2026— al lado de un retorno de 8
+        // días en los que no entró un peso.
+        const a0=srT?srT.aporteEn(r.desde):null, a1=srT?srT.aporteEn(r.hasta):null;
         const aportePer=(a0&&a1)?(a1.ap-a0.ap):null;
         // Mejor/peor posición miden EXACTAMENTE la misma ventana que "Retorno
         // del período" (r.desde/r.hasta, no rango.desde/rango.hasta): si la
@@ -4071,10 +4124,15 @@ function render(soloEstructura){
         ],monedaLbl);
 
         cardsPerf=[
-          `<div class="perf hero"><div class="k">Retorno del período</div>
+          (()=>{
+            // Tramos descartados DENTRO de la ventana que se está mostrando.
+            const desc=((serieT||[]).inestables||[]).filter(t=>t.fecha>r.desde&&t.fecha<=r.hasta);
+            return `<div class="perf hero"><div class="k">Retorno del período</div>
             <div class="v ${cls(r.ret)}">${sgn(r.ret*100)}</div>
             <div class="d-money ${cls(r.gan)}">${signoMoney(r.gan)}</div>
-            <div class="d">time-weighted · acumulado, sin anualizar · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}</div></div>`,
+            <div class="d">time-weighted · acumulado, sin anualizar · ${r.diasReales} día${r.diasReales>1?"s":""} · ${monedaLbl}${
+              desc.length?`<br><span style="color:var(--amber)">se descartaron ${desc.length} cierre(s) con saltos que los movimientos no explican — revisá el diagnóstico</span>`:""}</div></div>`;
+          })(),
           `<div class="perf" title="${TIP_ANUALIZADO}"><div class="k">Rendimiento anualizado</div>
             <div class="v ${cls(tnaPer)}">${tnaPer==null?"—":sgn(tnaPer*100)}</div>
             <div class="d">${tnaPer==null
