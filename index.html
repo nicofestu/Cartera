@@ -654,6 +654,7 @@ td .cta-tag{
   text-transform:uppercase;
   letter-spacing:.08em;
 }
+td .tipo-tag{color:var(--amber);border-color:rgba(255,196,107,.3);background:rgba(255,196,107,.07)}
 td .op-c,td .op-v{font-family:var(--din);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.11em}
 td .op-c{color:var(--up)}
 td .op-v{color:var(--down)}
@@ -1222,7 +1223,9 @@ const divisorDe = t => ["bono","letra","on"].includes(t) ? 100 : t==="fci" ? 100
 
 /* ══════════════ Estado y persistencia ══════════════ */
 let DATOS = {movimientos:[], snapshots:[], preciosManuales:{}, saldos:{}, ctasImportadas:{}};
-let VISTA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", PERIODO="todo";
+let VISTA="ARS", ESTADO=null, hayStorage=true, EDIT_ID=null, TAB="inicio", MOV_FILTRO_CTA="", MOV_FILTRO_TIPO="", MOV_FILTRO_DESDE="", MOV_FILTRO_HASTA="", PERIODO="todo";
+// Etiquetas de tipo de activo para movimientos (filtro + tag en la tabla)
+const ETIQ_TIPO_MOV={bono:"Bono",letra:"Letra",on:"ON",accion:"Acción",cedear:"CEDEAR",fci:"FCI",manual:"Manual",cash:"Efectivo"};
 /* VISTA: "ARS" | "MEP" | "CCL" — moneda de valuación para Inicio/Rendimientos/
    Movimientos y Mercado. En Mercado, ARS usa la especie base, USD MEP la D y
    USD CCL la C real o, si Data912 no la publica, un CCL implícito. Los retornos %
@@ -4226,7 +4229,12 @@ function render(soloEstructura){
   // Historial de movimientos
   const movsSinFiltro=[...DATOS.movimientos].sort((a,b)=>b.fecha.localeCompare(a.fecha)||b.id-a.id);
   const cuentasMov=[...new Set(movsSinFiltro.map(m=>m.cuenta))].sort();
-  const movs=MOV_FILTRO_CTA?movsSinFiltro.filter(m=>m.cuenta===MOV_FILTRO_CTA):movsSinFiltro;
+  const tiposMov=[...new Set(movsSinFiltro.map(m=>m.tipo))].sort((a,b)=>(ETIQ_TIPO_MOV[a]||a).localeCompare(ETIQ_TIPO_MOV[b]||b,"es"));
+  const movs=movsSinFiltro.filter(m=>
+    (!MOV_FILTRO_CTA||m.cuenta===MOV_FILTRO_CTA)&&
+    (!MOV_FILTRO_TIPO||m.tipo===MOV_FILTRO_TIPO)&&
+    (!MOV_FILTRO_DESDE||m.fecha>=MOV_FILTRO_DESDE)&&
+    (!MOV_FILTRO_HASTA||m.fecha<=MOV_FILTRO_HASTA));
   if(TAB==="movimientos"&&sr){
     html+=`<div class="cards" style="margin-bottom:24px">
       <div class="card"><div class="k">Capital aportado</div><div class="v">${money(sr.aporte)}</div>
@@ -4237,16 +4245,25 @@ function render(soloEstructura){
         <div class="v ${cls(VISTA==="ARS"?realARS:realUSD)}">${signoMoney(VISTA==="ARS"?realARS:realUSD)}</div><div class="d">ventas cerradas</div></div>`:""}
     </div>`;
   }
+  const hayFiltroMov=MOV_FILTRO_CTA||MOV_FILTRO_TIPO||MOV_FILTRO_DESDE||MOV_FILTRO_HASTA;
   if(TAB==="movimientos") html+=`<div class="section-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Registro de operaciones</h2>
-    <div style="display:flex;align-items:center;gap:10px;margin-left:auto">
+    <div style="display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap">
       <select id="mov-cuenta-filtro" style="width:auto;padding:6px 10px;font-size:12px" onchange="MOV_FILTRO_CTA=this.value;render()">
         <option value="">Todas las cuentas</option>
         ${cuentasMov.map(c=>`<option value="${c}" ${c===MOV_FILTRO_CTA?"selected":""}>${c}</option>`).join("")}
       </select>
+      <select id="mov-tipo-filtro" style="width:auto;padding:6px 10px;font-size:12px" onchange="MOV_FILTRO_TIPO=this.value;render()">
+        <option value="">Todos los tipos</option>
+        ${tiposMov.map(t=>`<option value="${t}" ${t===MOV_FILTRO_TIPO?"selected":""}>${ETIQ_TIPO_MOV[t]||t}</option>`).join("")}
+      </select>
+      <input type="date" id="mov-desde-filtro" value="${MOV_FILTRO_DESDE}" title="Desde" style="width:auto;padding:6px 10px;font-size:12px" onchange="MOV_FILTRO_DESDE=this.value;render()">
+      <span style="color:var(--muted);font-size:12px">→</span>
+      <input type="date" id="mov-hasta-filtro" value="${MOV_FILTRO_HASTA}" title="Hasta" style="width:auto;padding:6px 10px;font-size:12px" onchange="MOV_FILTRO_HASTA=this.value;render()">
+      ${hayFiltroMov?`<button class="btn mini" onclick="MOV_FILTRO_CTA='';MOV_FILTRO_TIPO='';MOV_FILTRO_DESDE='';MOV_FILTRO_HASTA='';render()">Limpiar filtros</button>`:""}
       ${MOV_FILTRO_CTA?`<button class="btn mini danger" onclick="borrarPorCuenta()">Borrar ${movs.length} de ${MOV_FILTRO_CTA}</button>`:""}
       <span style="color:var(--muted);font-size:12px;font-family:var(--mono)">${String(movs.length).padStart(3,"0")} OPS</span>
     </div></div>
-    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>MEP del día</th><th></th></tr></thead><tbody>
+    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Tipo</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>MEP del día</th><th></th></tr></thead><tbody>
     ${movs.map(m=>{
       const nombre=m.grupoCaucion?m.ticker:(m.tipo==="cash"?(ETIQ_CASH[m.op]||String(m.op||"").toUpperCase()):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker);
       const tot=m.precio/divisorDe(m.tipo)*m.cantidad;
@@ -4254,6 +4271,7 @@ function render(soloEstructura){
       return `<tr><td>${m.fecha}</td>
       <td class="l"><span class="${opCls}">${m.op}</span></td>
       <td class="l tk">${nombre}</td>
+      <td class="l"><span class="cta-tag tipo-tag">${m.grupoCaucion?"Caución":(ETIQ_TIPO_MOV[m.tipo]||m.tipo)}</span></td>
       <td class="l"><span class="cta-tag">${m.cuenta}</span></td>
       <td>${m.tipo==="cash"?"—":fmt(m.cantidad,m.cantidad%1?2:0)}</td>
       <td>${m.tipo==="cash"?"—":(m.moneda==="USD"?"US$ ":"$ ")+fmt(m.precio,m.precio<1000?2:0)}</td>
