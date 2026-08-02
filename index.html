@@ -2028,13 +2028,56 @@ function cajaEnFecha(hitos,fecha){ const hh=hitoEn(hitos,fecha); return hh?hh.ca
 // Ajuste manual del modal, en ARS al MEP que corresponda. Es un saldo que no
 // sale de ningún movimiento (saldo inicial previo al primer registro, o algo
 // que quedó sin cargar), así que no tiene fecha: vale para toda la serie.
+/* ══════════════ Saldos declarados ══════════════
+   El modal pide EL SALDO QUE MUESTRA EL BRÓKER, no un ajuste. Es la forma
+   natural de usarlo: mirás la pantalla del bróker, escribís ese número, y la
+   app se encarga de calcular la diferencia contra lo que da por movimientos.
+
+   La ventaja de guardar el saldo y no la diferencia es que el ajuste se
+   RECALCULA SOLO. Con un delta fijo, cada vez que cargabas movimientos nuevos
+   el ajuste viejo quedaba de más y había que volver a corregirlo a mano —y
+   nada avisaba de eso—. Guardando el saldo declarado, cargar el movimiento que
+   faltaba hace que la diferencia se achique sola hasta desaparecer.
+
+   Compatibilidad: las entradas viejas no tienen `real:true` y se siguen
+   interpretando como delta. Se leen como "saldo declarado = delta + derivado",
+   de modo que el ajuste que producen es EXACTAMENTE el de antes (redondea al
+   mismo número) hasta que el usuario abra el modal y guarde, que es cuando
+   pasan al formato nuevo. Un campo vacío es "no lo declaré" y no ajusta nada;
+   un 0 escrito a mano sí es un saldo declarado en cero. */
+function cajaNativaCta(cuenta){
+  const h=hitoEn(hitosCaja(),hoy())||{};
+  return {ars:(h.ctaPesos||{})[cuenta]||0,
+          mep:(h.ctaMep||{})[cuenta]||0,
+          ccl:(h.ctaCcl||{})[cuenta]||0};
+}
+function saldoDeclaradoCta(cuenta){
+  const x=(DATOS.saldos||{})[cuenta]; if(!x) return null;
+  const nz=v=>v==null||v===""?null:(+v||0);
+  if(x.real) return {ars:nz(x.ars),mep:nz(x.usdMep),ccl:nz(x.usdCcl)};
+  // Formato viejo: eran diferencias. Un 0 no era "declaré cero", era "sin ajuste".
+  const d=cajaNativaCta(cuenta);
+  const dl=v=>!v?null:v;
+  const vM=dl(x.usdMep??x.usd??0), vA=dl(x.ars||0), vC=dl(x.usdCcl||0);
+  return {ars:vA==null?null:vA+d.ars, mep:vM==null?null:vM+d.mep, ccl:vC==null?null:vC+d.ccl};
+}
+function ajusteNativoCta(cuenta){
+  const dec=saldoDeclaradoCta(cuenta); if(!dec) return {ars:0,mep:0,ccl:0};
+  const d=cajaNativaCta(cuenta);
+  return {ars:dec.ars==null?0:dec.ars-d.ars,
+          mep:dec.mep==null?0:dec.mep-d.mep,
+          ccl:dec.ccl==null?0:dec.ccl-d.ccl};
+}
 function ajusteManualARS(mep){
-  // El ajuste manual en dólares se lleva al MEP acá adentro también para el
-  // pool CCL: el motor histórico sigue siendo MEP-only a propósito (no hay
-  // serie CCL por fecha, ver la nota de VISTA), así que la brecha CCL no se
-  // puede fechar. La separación real MEP/CCL solo la usa la UI de Liquidez en
-  // vivo (ver ajusteCta en render()), que sí tiene el CCL de hoy.
-  return Object.values(DATOS.saldos||{}).reduce((s,x)=>s+(x.ars||0)+((x.usdMep??x.usd??0)+(x.usdCcl||0))*(mep||0),0);
+  // El ajuste en dólares se lleva al MEP acá adentro también para el pool CCL:
+  // el motor histórico sigue siendo MEP-only a propósito (no hay serie CCL por
+  // fecha, ver la nota de VISTA), así que la brecha CCL no se puede fechar. La
+  // separación real MEP/CCL solo la usa la UI de Liquidez en vivo, que sí
+  // tiene el CCL de hoy.
+  return Object.keys(DATOS.saldos||{}).reduce((s,c)=>{
+    const a=ajusteNativoCta(c);
+    return s+a.ars+(a.mep+a.ccl)*(mep||0);
+  },0);
 }
 // LA definición de liquidez de la app: caja derivada de los movimientos +
 // ajuste manual. La usan el cierre en vivo, la reconstrucción histórica y la
@@ -3472,12 +3515,10 @@ function render(soloEstructura){
   // cada uno convertido a VISTA con su propio tipo de cambio (antes esto solo
   // sabía de "usd" y lo convertía siempre al MEP, aunque fuera plata CCL).
   const ajusteCta=c=>{
-    const s=saldos[c]||{};
-    const usdMep=s.usdMep??s.usd??0, usdCcl=s.usdCcl||0;
-    const vA=convMoneda(s.ars||0,"ARS",VISTA,MEP,CCL)||0;
-    const vM=convMoneda(usdMep,"MEP",VISTA,MEP,CCL)||0;
-    const vC=convMoneda(usdCcl,"CCL",VISTA,MEP,CCL)||0;
-    return vA+vM+vC;
+    const a=ajusteNativoCta(c);
+    return (convMoneda(a.ars,"ARS",VISTA,MEP,CCL)||0)
+          +(convMoneda(a.mep,"MEP",VISTA,MEP,CCL)||0)
+          +(convMoneda(a.ccl,"CCL",VISTA,MEP,CCL)||0);
   };
   const cashCta=c=>(cjCta[c]||0)+ajusteCta(c);
   const cashPendCta=c=>(pendCta[c]||0);
@@ -3488,7 +3529,7 @@ function render(soloEstructura){
   // Mismo total, pero en la base de comparación (idéntico a `total` en ARS y MEP)
   const cashBase=VISTA==="ARS"?cash
     :Object.values(ultC.ctaU||{}).reduce((s,x)=>s+x,0)
-      +cuentas.reduce((s,c)=>{const x=saldos[c]||{}; return s+(x.ars||0)/MEP+(x.usd||0);},0);
+      +cuentas.reduce((s,c)=>{const a=ajusteNativoCta(c); return s+a.ars/MEP+a.mep+a.ccl;},0);
   const totalBase=totalPosB+cashBase;
   const hayCash=Math.abs(cash)>0.5||Object.keys(saldos).length>0;
   const navPrev=window.__navPrev; if(TAB==="inicio") window.__navPrev=total;
@@ -3511,9 +3552,9 @@ function render(soloEstructura){
       // propia cotización. Cada card se convierte a la moneda de VISTA con el
       // mismo puente por pesos que ya usa ajusteCta; "Consolidada" las suma ya
       // convertidas, así que trae la brecha MEP/CCL adentro del total.
-      const totPesos=cuentas.reduce((s,c)=>s+((ultC.ctaPesos||{})[c]||0)+((saldos[c]||{}).ars||0),0);
-      const totMep=cuentas.reduce((s,c)=>{const s2=saldos[c]||{}; return s+((ultC.ctaMep||{})[c]||0)+(s2.usdMep??s2.usd??0);},0);
-      const totCcl=cuentas.reduce((s,c)=>s+((ultC.ctaCcl||{})[c]||0)+((saldos[c]||{}).usdCcl||0),0);
+      const totPesos=cuentas.reduce((s,c)=>s+((ultC.ctaPesos||{})[c]||0)+ajusteNativoCta(c).ars,0);
+      const totMep=cuentas.reduce((s,c)=>s+((ultC.ctaMep||{})[c]||0)+ajusteNativoCta(c).mep,0);
+      const totCcl=cuentas.reduce((s,c)=>s+((ultC.ctaCcl||{})[c]||0)+ajusteNativoCta(c).ccl,0);
       const pendPesos=cuentas.reduce((s,c)=>s+((pend.ctaPesos||{})[c]||0),0);
       const pendMep=cuentas.reduce((s,c)=>s+((pend.ctaMep||{})[c]||0),0);
       const pendCcl=cuentas.reduce((s,c)=>s+((pend.ctaCcl||{})[c]||0),0);
@@ -4164,10 +4205,10 @@ function render(soloEstructura){
       </thead><tbody>
       ${cuentas.map(c=>{
         const t=cashCta(c);
-        const s2=saldos[c]||{};
-        const pesTot=((ultC.ctaPesos||{})[c]||0)+(s2.ars||0);
-        const mepTot=((ultC.ctaMep||{})[c]||0)+(s2.usdMep??s2.usd??0);
-        const cclTot=((ultC.ctaCcl||{})[c]||0)+(s2.usdCcl||0);
+        const aj=ajusteNativoCta(c);
+        const pesTot=((ultC.ctaPesos||{})[c]||0)+aj.ars;
+        const mepTot=((ultC.ctaMep||{})[c]||0)+aj.mep;
+        const cclTot=((ultC.ctaCcl||{})[c]||0)+aj.ccl;
         const pesPend=(pend.ctaPesos||{})[c]||0;
         const mepPend=(pend.ctaMep||{})[c]||0;
         const cclPend=(pend.ctaCcl||{})[c]||0;
@@ -4419,21 +4460,49 @@ async function llenarTickers(){
 }
 
 /* ══════════════ Saldos por cuenta ══════════════ */
-function filaSaldo(nombre,s){
-  // saldos viejos guardaban un único "usd" sin distinguir pool: se muestra
-  // como MEP (era la única plata en dólares que existía antes de la
-  // separación en 3 posiciones).
-  const usdMep=s.usdMep??s.usd??"";
-  return `<div class="f-grid" style="margin-bottom:10px;grid-template-columns:1fr 1fr 1fr 1fr" data-cuenta="${nombre}">
-    <div><label>Cuenta</label><input value="${nombre}" disabled></div>
-    <div><label>Saldo ARS</label><input type="number" step="any" class="s-ars" value="${s.ars??""}" placeholder="0"></div>
-    <div><label>Saldo USD MEP</label><input type="number" step="any" class="s-usd-mep" value="${usdMep}" placeholder="0"></div>
-    <div><label>Saldo USD CCL</label><input type="number" step="any" class="s-usd-ccl" value="${s.usdCcl??""}" placeholder="0"></div>
-  </div>`;
+function filaSaldo(nombre){
+  const dec=saldoDeclaradoCta(nombre)||{ars:null,mep:null,ccl:null};
+  const d=cajaNativaCta(nombre);
+  const v=x=>x==null?"":Math.round(x*100)/100;
+  const esc=nombre.replace(/"/g,"&quot;");
+  return `<div class="f-grid" style="margin-bottom:2px;grid-template-columns:1fr 1fr 1fr 1fr" data-cuenta="${esc}"
+      data-d-ars="${d.ars}" data-d-mep="${d.mep}" data-d-ccl="${d.ccl}">
+    <div><label>Cuenta</label><input value="${esc}" disabled></div>
+    <div><label>Saldo ARS</label><input type="number" step="any" class="s-ars" value="${v(dec.ars)}"
+      placeholder="${fmt(d.ars,2)}" oninput="pintarDifSaldos()"></div>
+    <div><label>Saldo USD MEP</label><input type="number" step="any" class="s-usd-mep" value="${v(dec.mep)}"
+      placeholder="${fmt(d.mep,2)}" oninput="pintarDifSaldos()"></div>
+    <div><label>Saldo USD CCL</label><input type="number" step="any" class="s-usd-ccl" value="${v(dec.ccl)}"
+      placeholder="${fmt(d.ccl,2)}" oninput="pintarDifSaldos()"></div>
+  </div>
+  <div class="hint" data-dif="${esc}" style="margin:0 0 12px"></div>`;
+}
+// Diferencia en vivo entre lo declarado y lo que sale de los movimientos: es
+// exactamente el ajuste que se va a aplicar, así que conviene verlo antes de
+// guardar (un ajuste grande casi siempre es un movimiento sin cargar, no una
+// diferencia real del bróker).
+function pintarDifSaldos(){
+  document.querySelectorAll("#saldos-rows [data-cuenta]").forEach(row=>{
+    const cta=row.dataset.cuenta;
+    const box=document.querySelector(`#saldos-rows [data-dif="${cta.replace(/"/g,'\\"')}"]`);
+    if(!box) return;
+    const partes=[];
+    for(const [cls,dk,lbl] of [[".s-ars","dArs","ARS"],[".s-usd-mep","dMep","USD MEP"],[".s-usd-ccl","dCcl","USD CCL"]]){
+      const txt=row.querySelector(cls).value.trim();
+      if(txt==="") continue;
+      const dif=(+txt||0)-(+row.dataset[dk]||0);
+      if(Math.abs(dif)<0.005) continue;
+      partes.push(`${lbl} ${dif>0?"+":""}${fmt(dif,2)}`);
+    }
+    box.innerHTML=partes.length
+      ?`Ajuste que se aplica: <b>${partes.join(" · ")}</b>`
+      :`<span style="opacity:.6">Sin diferencia contra los movimientos.</span>`;
+  });
 }
 function abrirSaldos(){
   const cuentas=cuentasConocidas();
-  document.getElementById("saldos-rows").innerHTML=cuentas.map(c=>filaSaldo(c,DATOS.saldos[c]||{})).join("");
+  document.getElementById("saldos-rows").innerHTML=cuentas.map(c=>filaSaldo(c)).join("");
+  pintarDifSaldos();
   document.getElementById("s-nueva").value="";
   document.getElementById("r-origen").innerHTML=cuentas.map(c=>`<option value="${c}">${c}</option>`).join("");
   document.getElementById("r-destino").value="";
@@ -4471,16 +4540,19 @@ function agregarCuentaSaldo(){
   if(document.querySelector(`#saldos-rows [data-cuenta="${n.replace(/"/g,'\\"')}"]`)){
     document.getElementById("s-nueva").value=""; return;
   }
-  document.getElementById("saldos-rows").insertAdjacentHTML("beforeend",filaSaldo(n,{}));
+  document.getElementById("saldos-rows").insertAdjacentHTML("beforeend",filaSaldo(n));
   document.getElementById("s-nueva").value="";
+  pintarDifSaldos();
 }
 function guardarSaldos(){
   const nuevo={};
   document.querySelectorAll("#saldos-rows [data-cuenta]").forEach(row=>{
-    const ars=parseFloat(row.querySelector(".s-ars").value)||0;
-    const usdMep=parseFloat(row.querySelector(".s-usd-mep").value)||0;
-    const usdCcl=parseFloat(row.querySelector(".s-usd-ccl").value)||0;
-    if(ars!==0||usdMep!==0||usdCcl!==0) nuevo[row.dataset.cuenta]={ars,usdMep,usdCcl};
+    // Vacío ≠ cero: vacío es "no declaro nada para esta moneda" y no genera
+    // ajuste; un 0 escrito es un saldo declarado en cero, que sí ajusta.
+    const leer=cls=>{ const t=row.querySelector(cls).value.trim(); return t===""?null:(+t||0); };
+    const ars=leer(".s-ars"), usdMep=leer(".s-usd-mep"), usdCcl=leer(".s-usd-ccl");
+    if(ars!=null||usdMep!=null||usdCcl!=null)
+      nuevo[row.dataset.cuenta]={ars,usdMep,usdCcl,real:true};
   });
   DATOS.saldos=nuevo;
   persistirYSync(); cerrarModales();
@@ -5284,13 +5356,10 @@ function dispRetiroDe(cuenta,moneda,pool,excluirId){
   const hitos=hitosCaja();
   const ult=hitoEn(hitos,hoy())||{};
   const pend=cajaALiquidar(hitos,hoy());
-  const sal=(DATOS.saldos||{})[cuenta]||{};
-  // saldos viejos guardaban un único "usd" sin distinguir pool: se toma como
-  // MEP (era la única plata en dólares que existía antes de esta separación).
-  const salUSD=(sal[kSal]!=null?sal[kSal]:(esCCL?0:(sal.usd||0)));
+  const ajN=ajusteNativoCta(cuenta);
   const caja=(ult[kCta]||{})[cuenta]||0;
   const t1  =(pend[kCta]||{})[cuenta]||0;
-  const aj  =moneda==="USD"?salUSD:(sal.ars||0); // cada pool nativo, sin cruzar moneda
+  const aj  =moneda==="USD"?(esCCL?ajN.ccl:ajN.mep):ajN.ars; // cada pool nativo, sin cruzar moneda
   let disp=caja+aj-t1;
   const prev=excluirId?DATOS.movimientos.find(x=>x.id===excluirId):null;
   if(prev&&prev.tipo==="cash"&&claveCta(prev.cuenta)===claveCta(cuenta)&&prev.moneda===moneda&&(moneda!=="USD"||(prev.poolUSD||"MEP")===pool)){
