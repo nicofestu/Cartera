@@ -2192,7 +2192,7 @@ function derivarPosiciones(excluirId,hastaFecha){
       // inflado. Casi siempre es una compra que quedó fuera del rango del
       // import. Se registra para avisarlo en el diagnóstico de la serie.
       if(m.cantidad>p.qty+1e-9) sobreventas.push({nombre:m.tipo==="fci"?(m.fondo||"").split(" - ")[0]:m.ticker,
-        fecha:m.fecha,vendida:m.cantidad,habia:Math.max(0,p.qty)});
+        fecha:m.fecha,vendida:m.cantidad,habia:Math.max(0,p.qty),cuenta:m.cuenta});
       const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
       realARS+=cARS-aARS*m.cantidad; realUSD+=cUSD-aUSD*m.cantidad;
       p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
@@ -6589,14 +6589,36 @@ async function confirmarImportBroker(){
     }
     cargados++;
   }
-  // La cuenta pasa a considerarse de historial completo: sus compras dejan de
-  // toparse contra la caja disponible (ver construirHitosCaja). Solo se marca
-  // si se cargó la apertura, que es lo que garantiza que la serie arranque con
-  // el saldo y las tenencias que ya existían antes del extracto.
-  if(IMP_APERTURA){
-    DATOS.ctasImportadas=DATOS.ctasImportadas||{};
+  // La cuenta pasa a considerarse de historial completo —y solo entonces sus
+  // compras dejan de toparse contra la caja disponible, ver construirHitosCaja—
+  // si al terminar de cargar no queda NINGUNA tenencia vendida en descubierto.
+  //
+  // Ese es el examen que demuestra que no falta historia, y es agnóstico de
+  // CÓMO se consiguió: da igual si el arranque lo aportó la apertura detectada
+  // o movimientos viejos que el usuario cargó a mano antes de importar. Atarlo
+  // a la apertura, como estaba, dejaba afuera justamente el caso de quien se
+  // tomó el trabajo de cargar los años previos: no se generaba apertura (ya
+  // había movimientos en la cuenta), no se marcaba, y el tope seguía inventando
+  // capital igual que antes.
+  invalidarMemo();
+  const svCta=derivarPosiciones().sobreventas.filter(s=>s.cuenta===cuenta);
+  DATOS.ctasImportadas=DATOS.ctasImportadas||{};
+  if(!svCta.length){
     DATOS.ctasImportadas[cuenta]={broker:document.getElementById("imp-broker").value,
-      desde:IMP_APERTURA.primera,cargado:hoy()};
+      desde:(todos[0]||{}).fecha||null,cargado:hoy()};
+  } else delete DATOS.ctasImportadas[cuenta];
+
+  // Que las tenencias cierren no garantiza que la caja también: se puede tener
+  // toda la historia de papeles y que falte un depósito viejo. Sin el tope eso
+  // ya no se disimula —la caja queda en rojo— así que conviene decirlo.
+  invalidarMemo();
+  const ultCaja=hitosCaja().slice(-1)[0];
+  const faltaCaja=[];
+  if(ultCaja&&!svCta.length){
+    const p=(ultCaja.ctaPesos||{})[cuenta]||0, m=(ultCaja.ctaMep||{})[cuenta]||0, c=(ultCaja.ctaCcl||{})[cuenta]||0;
+    if(p<-1) faltaCaja.push(`ARS ${fmt(-p,2)}`);
+    if(m<-1) faltaCaja.push(`USD ${fmt(-m,2)}`);
+    if(c<-1) faltaCaja.push(`USD CCL ${fmt(-c,2)}`);
   }
 
   // Respaldo de precio para los FCI: no pisa nada cargado a mano ni compite
@@ -6613,7 +6635,9 @@ async function confirmarImportBroker(){
   alert(`Se cargaron ${cargados} movimientos`+
     `${sinMep?` (${sinMep} sin MEP de esa fecha — se usó 1 como referencia, editalos a mano si hace falta)`:""}`+
     `${sinCategoria?` (${sinCategoria} fondo(s) sin categoría reconocida — revisá "Editar" en Movimientos y corregí la categoría a mano)`:""}`+
-    `${sembrados?` Se guardó el último valor de cuotaparte del extracto como precio de respaldo de ${sembrados} fondo(s), por si no cotizan en el listado público.`:""}.`);
+    `${sembrados?` Se guardó el último valor de cuotaparte del extracto como precio de respaldo de ${sembrados} fondo(s), por si no cotizan en el listado público.`:""}.`+
+    `${svCta.length?`\n\nOJO: quedaron ${svCta.length} venta(s) de papeles que nunca figuran comprados (${[...new Set(svCta.map(s=>s.nombre))].slice(0,4).join(", ")}). Falta historia anterior al extracto: cargala y el rendimiento se corrige solo.`:""}`+
+    `${faltaCaja.length?`\n\nLa caja de ${cuenta} cierra en rojo por ${faltaCaja.join(" y ")}. Suele ser una liquidación pendiente del último día del archivo, o un depósito viejo sin cargar.`:""}`);
 }
 
 function importar(ev){
