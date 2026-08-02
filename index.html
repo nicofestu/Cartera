@@ -1164,6 +1164,8 @@ footer b{color:var(--grey);font-weight:500}
     <div id="imp-paso2" style="display:none">
       <div id="imp-resumen" style="margin-bottom:14px"></div>
       <div id="imp-revision"></div>
+      <div id="imp-apertura"></div>
+      <div id="imp-avisos" class="hint" style="margin-top:14px;line-height:1.8"></div>
       <div id="imp-omitidos" class="hint" style="margin-top:14px;line-height:1.8"></div>
     </div>
 
@@ -5471,11 +5473,12 @@ const IMPORTADORES={
   cocos:{nombre:"Cocos",formato:"csv",multiple:true,parser:parseCocosMovimientos},
 };
 let IMP_CANDIDATOS=[], IMP_OMITIDOS=[], IMP_REVISAR=[], IMP_ARCHIVOS=[], IMP_DUPLICADOS=0;
+let IMP_APERTURA=null;
 
 function abrirImportBroker(){
   const sel=document.getElementById("imp-broker");
   sel.innerHTML=Object.entries(IMPORTADORES).map(([k,v])=>`<option value="${k}">${v.nombre}</option>`).join("");
-  IMP_CANDIDATOS=[]; IMP_OMITIDOS=[]; IMP_REVISAR=[]; IMP_ARCHIVOS=[]; IMP_DUPLICADOS=0;
+  IMP_CANDIDATOS=[]; IMP_OMITIDOS=[]; IMP_REVISAR=[]; IMP_ARCHIVOS=[]; IMP_DUPLICADOS=0; IMP_APERTURA=null;
   document.getElementById("imp-paso1").style.display="block";
   document.getElementById("imp-paso2").style.display="none";
   const btn=document.getElementById("imp-confirmar");
@@ -5559,6 +5562,15 @@ async function onFileImportBroker(ev){
     IMP_REVISAR=aceptar(revisar);
     IMP_OMITIDOS=omitidos;
     IMP_ARCHIVOS=archivos.map(f=>f.name);
+    // Sobre los candidatos ACEPTADOS: si el año ya estaba cargado, sus filas
+    // no vuelven y la apertura se calcularía sobre un pedazo del historial.
+    // Solo tiene sentido proponer una apertura cuando esta tanda ES el
+    // arranque de la cuenta. Si hubo tickets repetidos (el año ya estaba
+    // cargado) o la cuenta ya tiene movimientos previos, el "descubierto" que
+    // veríamos sería un pedazo del historial, no historia faltante de verdad.
+    const ctaImp=canonizarCta(IMPORTADORES[brokerId].nombre.toUpperCase());
+    const yaHayCuenta=DATOS.movimientos.some(m=>m.cuenta===ctaImp);
+    IMP_APERTURA=(IMP_DUPLICADOS||yaHayCuenta)?null:detectarApertura([...IMP_CANDIDATOS,...IMP_REVISAR]);
     renderPreviewImport();
   }catch(e){
     err.textContent="No se pudo leer el archivo: "+e.message;
@@ -5668,6 +5680,7 @@ function parseCocosMovimientos(rows){
     "lt rep argentina cap $ v29/11/24":"S29N4",
     "bono tesoro $ aj. cer 4% v.14/10/24":"T4X4",
     "bono tesoro $ aj cer 4,25% v13/12/24 cg":"T5X4",
+    "on pampa energia cl.15 $ c.g":"PAMPA15",
   };
   const tickerDe=instrumento=>{
     const m=/\(([^()]+)\)\s*$/.exec(instrumento||"");
@@ -5696,6 +5709,30 @@ function parseCocosMovimientos(rows){
     if(sinClasificar) revisar.push(item); else candidatos.push(item);
   };
 
+  // Precios de FCI observados en el propio extracto, por fondo y fecha, para
+  // poder estimar las cuotapartes de las filas que Cocos exporta con
+  // `cantidad` vacia (ver mas abajo). Se guarda el precio POR 1000, que es la
+  // unidad en la que viene la columna `precio` y la que usa la app.
+  const preciosFci={};
+  for(const r of rows){
+    const op=normalizar(r["tipoOperacion"]);
+    if(!/\bsuscripcion fci\b/.test(op)&&!/\brescate fci\b/.test(op)) continue;
+    const f=fUTC(r["fechaEjecucion"]); if(!f) continue;
+    const cant=aNum(r["cantidad"]);
+    const tot=aNum(r["total"])??aNum(r["montoBruto"]);
+    const px=aNum(r["precio"]);
+    const precio=cant&&tot?Math.abs(tot)/Math.abs(cant)*1000:(px?Math.abs(px):null);
+    if(!precio) continue;
+    const fondo=fondoDe(String(r["instrumento"]??"").trim().replace(/\s+/g," "));
+    if(!fondo) continue;
+    (preciosFci[fondo]||(preciosFci[fondo]=[])).push({fecha:f,precio});
+  }
+  const precioFciCerca=(fondo,fecha)=>{
+    const lista=preciosFci[fondo]; if(!lista||!lista.length) return null;
+    const dias=f=>Math.abs(Date.parse(f+"T00:00:00Z")-Date.parse(fecha+"T00:00:00Z"))/864e5;
+    return lista.slice().sort((a,b)=>dias(a.fecha)-dias(b.fecha))[0];
+  };
+
   for(const r of rows){
     const opRaw=String(r["tipoOperacion"]??"").trim().replace(/\s+/g," ");
     const op=normalizar(opRaw);
@@ -5714,43 +5751,63 @@ function parseCocosMovimientos(rows){
     if(!fecha){ omitidos.push({fecha:String(r["fechaEjecucion"]||"—"),op:opRaw,ticker,motivo:"fecha no reconocida"}); continue; }
     if(!moneda){ omitidos.push({fecha,op:opRaw,ticker,motivo:`moneda no reconocida (${monRaw||"vacía"})`}); continue; }
 
-    // Cocos acredita el dividendo en USD como unidades de "Dólar
-    // estadounidense" y cobra los derechos en ARS dentro de la misma fila.
-    // Son dos efectos económicos diferentes, por eso se separan.
+    // La fila de dividendo en especie cobra los derechos en ARS en su columna
+    // `total` y anuncia los dolares en `cantidad`.
     if(op==="dividendos en especie"){
-      let agregados=0;
-      if(cantidad){
-        candidatos.push({fecha,tipo:"cash",op:"dividendo",cantidad:1,precio:Math.abs(cantidad),
-          moneda:"USD",origen:opRaw,importId:idDe(r,":usd")});
-        agregados++;
-      }
+      // Solo los derechos/comisiones en pesos. Los dolares del dividendo NO se
+      // acreditan aca: llegan en la "Nota De Credito Conversion" posterior
+      // (ver la nota larga mas abajo). Contarlos en las dos filas duplicaba el
+      // dividendo.
       if(importe){
         candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,precio:Math.abs(importe),
           moneda,origen:opRaw+" (derechos)",importId:idDe(r,":derechos")});
-        agregados++;
+      } else if(!cantidad){
+        omitidos.push({fecha,op:opRaw,ticker:"",motivo:"dividendo en especie sin cantidad ni importe"});
       }
-      if(!agregados) omitidos.push({fecha,op:opRaw,ticker:"",motivo:"dividendo en especie sin cantidad ni importe"});
       continue;
     }
 
     // Suscripciones y rescates de FCI, con o sin los sufijos "USD" y "HB".
     if(/\bsuscripcion fci\b/.test(op)||/\brescate fci\b/.test(op)){
       const esRescate=/\brescate fci\b/.test(op);
-      if(!cantidad||!importe&&!precioPizarra){
-        omitidos.push({fecha,op:opRaw,ticker,motivo:"FCI sin cantidad o precio en el CSV — cargar manualmente"}); continue;
-      }
       const fondo=fondoDe(instrumento);
       if(!fondo){ omitidos.push({fecha,op:opRaw,ticker,motivo:"FCI sin nombre identificable"}); continue; }
-      const precio=importe?Math.abs(importe)/Math.abs(cantidad)*1000:Math.abs(precioPizarra);
-      candidatos.push({fecha,tipo:"fci",op:esRescate?"venta":"compra",ticker,fondo,
-        cantidad:Math.abs(cantidad),precio,moneda,origen:opRaw,importId});
+      // Cocos exporta algunas suscripciones/rescates con `cantidad` y `precio`
+      // vacios y solo el importe en pesos. Omitir la fila entera dejaba la
+      // caja inflada por ese importe Y la posicion del fondo en falso rojo
+      // (en la cartera de prueba: 3.205.211 ARS y −306.662 cuotapartes de
+      // COCORMA que parecian historia faltante y no lo eran). Se estiman las
+      // cuotapartes con el precio del MISMO fondo en la fecha mas cercana del
+      // extracto y se avisa, en vez de perder el movimiento.
+      let cant=cantidad, precio=null, estimado=null;
+      if(cantidad&&(importe||precioPizarra)){
+        precio=importe?Math.abs(importe)/Math.abs(cantidad)*1000:Math.abs(precioPizarra);
+      } else if(importe){
+        const ref=precioFciCerca(fondo,fecha);
+        if(!ref){ omitidos.push({fecha,op:opRaw,ticker,motivo:"FCI sin cantidad y sin ningún precio de referencia del fondo"}); continue; }
+        precio=ref.precio;
+        cant=Math.abs(importe)/precio*1000;
+        estimado=`cuotapartes estimadas con el precio del ${ref.fecha} (${fmt(precio,3)} por 1000)`;
+      } else {
+        omitidos.push({fecha,op:opRaw,ticker,motivo:"FCI sin cantidad ni importe — cargar manualmente"}); continue;
+      }
+      const itFci={fecha,tipo:"fci",op:esRescate?"venta":"compra",ticker,fondo,
+        cantidad:Math.abs(cant),precio,moneda,origen:opRaw,importId};
+      if(estimado) itFci.estimado=estimado;
+      candidatos.push(itFci);
       continue;
     }
 
     // Compras y ventas normales, Trading, Prima, MEP y Cable. "MEP/Cable"
     // describe la moneda de liquidación de la especie; no es una fila
     // adicional de conversión.
-    if(/^(compra|venta)( trading| prima| dolar mep| cable)?$/.test(op)){
+    // SENEBI es el segmento de negociacion bilateral de BYMA y "Registracion"
+    // el alta de una operacion pactada afuera: en los dos casos es una compra
+    // o una venta comun, no un asiento interno. Quedaban fuera del patron y
+    // se perdian enteras — en la cartera de prueba, 8 filas Senebi = 5.781.010
+    // ARS y 4.722 USD de caja, ademas de dejar la caja en dolares en rojo
+    // porque el "Orden De Pago Usd" que retiraba ese producto SI se importaba.
+    if(/^(compra|venta)( senebi| registracion)?( trading| prima| dolar mep| cable| ars| usd)?$/.test(op)){
       if(!ticker||!cantidad){
         omitidos.push({fecha,op:opRaw,ticker,motivo:"operación sin ticker o cantidad"}); continue;
       }
@@ -5783,11 +5840,39 @@ function parseCocosMovimientos(rows){
       continue;
     }
 
-    // En 2024 Cocos acreditó varios dividendos CEDEAR únicamente mediante
-    // "Nota De Credito Conversion": no hay otra fila positiva equivalente.
-    // En cambio la variante "Cable" es el eco tardío del DIVIDENDO EN ESPECIE
-    // que ya se reconoció arriba por su cantidad en USD.
-    if(op==="nota de credito conversion"){
+    // "Nota De Credito Conversion" (con o sin "Cable") es la fila que
+    // efectivamente ACREDITA los dolares del dividendo en la cuenta: es la
+    // unica de la pareja que trae importe en la columna `total`, que es el
+    // libro de caja del extracto. La fila "DIVIDENDOS EN ESPECIE" previa solo
+    // ANUNCIA el dividendo (lleva la cantidad en unidades de dolar y en
+    // `total` unicamente la comision en pesos).
+    //
+    // Antes se contaban las dos: la especie por su `cantidad` y la conversion
+    // por su `total`, con lo cual el mismo dividendo entraba dos veces (en la
+    // cartera de prueba: 1,19 el 02/07 + 1,19 el 15/07, y 0,50 el 01/08 +
+    // 0,50 el 14/08). Y a la vez se descartaba la variante "Cable", que en 3
+    // de 4 casos no tenia ninguna especie que le correspondiera: 2,26 USD que
+    // se perdian. Ahora manda el libro de caja y la cuenta cierra exacta.
+    // Debitos genuinos (impuestos, percepciones, ajustes en contra): mueven la
+    // caja de verdad. Caian en la rama de "reclasificacion interna" de abajo,
+    // que esta pensada para las conversiones entre monedas, no para esto.
+    if(/^nota de debito\b/.test(op)||/^nota debito\b/.test(op)){
+      if(!importe){ omitidos.push({fecha,op:opRaw,ticker:"",motivo:"nota de débito con importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"dividendo":"gasto",cantidad:1,
+        precio:Math.abs(importe),moneda,origen:opRaw,importId});
+      continue;
+    }
+
+    // Saldo que entra desde la migracion de otro broker: es plata que llega a
+    // la cuenta, no un asiento interno.
+    if(/^concepto ext migracion\b/.test(op)){
+      if(!importe){ omitidos.push({fecha,op:opRaw,ticker:"",motivo:"migración con importe en cero"}); continue; }
+      candidatos.push({fecha,tipo:"cash",op:importe>=0?"deposito":"retiro",cantidad:1,
+        precio:Math.abs(importe),moneda,origen:opRaw,importId});
+      continue;
+    }
+
+    if(/^nota de credito conversion/.test(op)){
       if(!importe){ omitidos.push({fecha,op:opRaw,ticker:"",motivo:"crédito de conversión con importe en cero"}); continue; }
       candidatos.push({fecha,tipo:"cash",op:"dividendo",cantidad:1,precio:Math.abs(importe),
         moneda,origen:opRaw,importId});
@@ -6171,6 +6256,108 @@ function parseBalanzOrdenes(rows){
   return {candidatos,omitidos,revisar};
 }
 
+/* ══════════════ Apertura: la cartera que el extracto da por existente ══════════════
+   Los brókers exportan movimientos POR AÑO y casi nadie arranca justo el 1 de
+   enero del primer archivo que baja. Entonces las primeras ventas y rescates
+   son de papeles comprados ANTES del rango: la tenencia queda negativa, el
+   costo promedio de esa venta se mide contra 0 (realizado inflado, ver
+   `sobreventas` en derivarPosiciones) y la caja arranca corrida.
+
+   Esto detecta cuánto falta de cada cosa —la cantidad exacta que hace falta
+   para que nada quede jamás en descubierto— y arma un juego de movimientos de
+   APERTURA fechados el día anterior al primero del extracto:
+
+     · un depósito por la caja inicial MÁS el valor de las posiciones, y
+     · una compra por cada posición preexistente.
+
+   Neto: la caja aterriza justo en el saldo inicial, las posiciones quedan
+   sembradas y el capital aportado sube por lo que realmente trajiste el día
+   que arranca tu serie. El rendimiento anterior a esa fecha queda afuera, que
+   es lo correcto: no hay datos para calcularlo.
+
+   La cantidad se deduce sola y es exacta. El PRECIO no: es el costo de
+   entrada de tu track record y solo lo sabe el usuario, así que se propone el
+   primer precio conocido de esa especie en el extracto —que puede ser de
+   mucho después— y se deja editable, bien avisado. */
+function detectarApertura(items){
+  const validos=items.filter(i=>i.fecha);
+  if(!validos.length) return null;
+  const dias=[...new Set(validos.map(i=>i.fecha))].sort();
+  const porDia={};
+  for(const i of validos) (porDia[i.fecha]||(porDia[i.fecha]=[])).push(i);
+
+  const saldo={}, minimo={}, primero={};
+  const precioApp=it=>it.tipo==="fci"?it.precio
+    :(it.precioBruto!=null?it.precioBruto*divisorDe(it.tipo):it.precio);
+  for(const f of dias){
+    for(const it of porDia[f]){
+      const precio=precioApp(it);
+      const bruto=precio/divisorDe(it.tipo)*it.cantidad;
+      // TODO movimiento mueve la caja de SU moneda, no solo los de tipo cash:
+      // una compra de bonos la baja y un rescate de FCI la sube.
+      const kc="cash|"+it.moneda;
+      saldo[kc]=(saldo[kc]||0)+(["compra","retiro","gasto"].includes(it.op)?-bruto:bruto);
+      if(it.tipo==="cash") continue;
+      const k=it.tipo+"|"+(it.tipo==="fci"?it.fondo:it.ticker);
+      saldo[k]=(saldo[k]||0)+(it.op==="compra"?1:-1)*it.cantidad;
+      if(!primero[k]) primero[k]={fecha:it.fecha,precio,moneda:it.moneda,
+        tipo:it.tipo,ticker:it.ticker,fondo:it.fondo};
+    }
+    // Se mide al CIERRE DEL DÍA a propósito. Adentro de una misma jornada el
+    // bróker lista las filas en orden arbitrario, y un MEP (compra del papel
+    // en pesos + venta del MISMO papel en dólares, o un Senebi, o una
+    // Registración) parece transitoriamente una venta en descubierto. Fila a
+    // fila, la cartera de prueba daba 3 falsos positivos (DHS9O, T661O y el
+    // FCI COCORMA) que cierran el día en cero.
+    for(const k of Object.keys(saldo)) if(saldo[k]<(minimo[k]==null?0:minimo[k])) minimo[k]=saldo[k];
+  }
+
+  const TOL=1e-6, posiciones=[], caja=[];
+  for(const k of Object.keys(minimo)){
+    const falta=-minimo[k];
+    if(falta<=TOL) continue;
+    if(k.startsWith("cash|")){ caja.push({moneda:k.slice(5),importe:falta}); continue; }
+    const ref=primero[k];
+    if(!ref) continue;
+    posiciones.push({clave:k,tipo:ref.tipo,ticker:ref.ticker,fondo:ref.fondo,
+      cantidad:falta,precio:ref.precio,moneda:ref.moneda,
+      precioFecha:ref.fecha,precioLejos:ref.fecha>dias[0]});
+  }
+  if(!posiciones.length&&!caja.length) return null;
+  const d=new Date(dias[0]+"T00:00:00Z"); d.setUTCDate(d.getUTCDate()-1);
+  return {fecha:d.toISOString().slice(0,10),primera:dias[0],posiciones,caja};
+}
+
+// Movimientos que materializan la apertura. El depósito lleva la caja inicial
+// MÁS el valor de las posiciones, porque las compras sintéticas que van abajo
+// se lo van a consumir (construirHitosCaja no deja pagar con plata que no hay).
+function movimientosApertura(ap,cuenta){
+  if(!ap) return [];
+  const yaCargado=new Set(DATOS.movimientos.map(m=>m.importId).filter(Boolean));
+  const movs=[], porMoneda={};
+  for(const c of ap.caja) porMoneda[c.moneda]=(porMoneda[c.moneda]||0)+c.importe;
+  for(const p of ap.posiciones){
+    if(!(p.precio>0)||!(p.cantidad>0)) continue;
+    porMoneda[p.moneda]=(porMoneda[p.moneda]||0)+p.precio/divisorDe(p.tipo)*p.cantidad;
+  }
+  for(const [moneda,importe] of Object.entries(porMoneda)){
+    if(!(importe>0)) continue;
+    const idc=`apertura:${cuenta}:cash:${moneda}`;
+    if(yaCargado.has(idc)) continue;
+    movs.push({fecha:ap.fecha,tipo:"cash",op:"deposito",cantidad:1,precio:importe,
+      moneda,origen:"Apertura (saldo previo al extracto)",importId:idc});
+  }
+  for(const p of ap.posiciones){
+    if(!(p.precio>0)||!(p.cantidad>0)) continue;
+    const idp=`apertura:${cuenta}:${p.clave}`;
+    if(yaCargado.has(idp)) continue;
+    movs.push({fecha:ap.fecha,op:"compra",tipo:p.tipo,ticker:p.ticker,fondo:p.fondo,
+      cantidad:p.cantidad,precio:p.precio,moneda:p.moneda,
+      origen:"Apertura (posición previa al extracto)",importId:idp});
+  }
+  return movs;
+}
+
 function renderPreviewImport(){
   document.getElementById("imp-paso1").style.display="none";
   const paso2=document.getElementById("imp-paso2");
@@ -6200,6 +6387,44 @@ function renderPreviewImport(){
           ${tiposSel.map(t=>`<option value="${t}" ${t===r.tipo?"selected":""}>${t}</option>`).join("")}
         </select></div>`).join("")}</div>`;
   } else document.getElementById("imp-revision").innerHTML="";
+
+  const ap=IMP_APERTURA;
+  if(ap){
+    const filas=[
+      ...ap.caja.map((c,i)=>`<div class="imp-row">
+        <span>${ap.fecha}</span><span class="tk">Caja ${c.moneda}</span>
+        <span>—</span>
+        <span><input type="number" step="any" value="${Math.round(c.importe*100)/100}"
+          onchange="IMP_APERTURA.caja[${i}].importe=Math.max(0,+this.value||0)" style="width:100%"></span>
+        <span class="hint">saldo inicial</span></div>`),
+      ...ap.posiciones.map((p,i)=>`<div class="imp-row">
+        <span>${ap.fecha}</span>
+        <span class="tk">${p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker}</span>
+        <span>${fmt(p.cantidad,p.tipo==="fci"?4:0)}</span>
+        <span><input type="number" step="any" value="${Math.round(p.precio*1000)/1000}"
+          onchange="IMP_APERTURA.posiciones[${i}].precio=Math.max(0,+this.value||0)" style="width:100%"></span>
+        <span class="hint" ${p.precioLejos?'style="color:var(--down)"':""}>${
+          p.precioLejos?`precio del ${p.precioFecha} — revisalo`:"precio del extracto"}</span></div>`),
+    ].join("");
+    document.getElementById("imp-apertura").innerHTML=`
+      <div class="hint" style="margin:14px 0 8px">
+        <b>Tu cartera ya existía antes del ${ap.primera}.</b> El extracto vende papeles que nunca
+        muestra comprar, así que falta la historia anterior. Se puede cargar como una
+        <b>apertura</b> al ${ap.fecha}: un depósito por el saldo inicial y una compra por cada
+        posición preexistente.<br>
+        Las <b>cantidades</b> salen solas y son exactas. Los <b>precios</b> son el costo de entrada
+        de tu serie — solo los sabés vos. Se propone el primer precio que aparece en el extracto;
+        editá los que estén marcados en rojo. Si preferís no cargar nada, borrá los importes.</div>
+      <div class="imp-scroll"><div class="imp-row head">
+        <span>Fecha</span><span>Especie</span><span>Cant.</span><span>Precio / importe</span><span></span></div>
+      ${filas}</div>`;
+  } else document.getElementById("imp-apertura").innerHTML="";
+
+  const estimados=[...IMP_CANDIDATOS,...IMP_REVISAR].filter(c=>c.estimado);
+  document.getElementById("imp-avisos").innerHTML=estimados.length
+    ?`<b>${estimados.length} fila(s) con datos estimados:</b><br>`+
+      estimados.map(c=>`· ${c.fecha} — ${c.origen} ${c.fondo||c.ticker||""}: ${c.estimado}`).join("<br>")
+    :"";
 
   if(IMP_OMITIDOS.length){
     const resumenOm={};
@@ -6249,7 +6474,8 @@ async function resolverCategoriaFci(nombreFondo){
 async function confirmarImportBroker(){
   const btn=document.getElementById("imp-confirmar");
   btn.disabled=true; btn.textContent="Cargando…";
-  const todos=[...IMP_CANDIDATOS,...IMP_REVISAR];
+  const cuentaAp=canonizarCta(IMPORTADORES[document.getElementById("imp-broker").value].nombre.toUpperCase());
+  const todos=[...movimientosApertura(IMP_APERTURA,cuentaAp),...IMP_CANDIDATOS,...IMP_REVISAR];
   if(!todos.length){
     btn.disabled=false; btn.textContent="Cargar movimientos";
     alert("No hay movimientos nuevos para cargar.");
