@@ -3027,7 +3027,7 @@ function serieDiaria(){
   const K=VISTA==="ARS"?"ars":"usd"; // idem serieRendimiento: MEP/CCL comparten base dólar
   const snaps=(DATOS.snapshots||[]).filter(s=>s.usd>=NAV_MIN_USD).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
   if(snaps.length<2) return _MEMO[_k]=[];
-  const out=[];
+  const out=[], inestables=[];
   for(let i=1;i<snaps.length;i++){
     const prev=snaps[i-1], cur=snaps[i];
     const v0=prev[K], v1=cur[K];
@@ -3050,6 +3050,16 @@ function serieDiaria(){
     }
     const base=v0+pond;                        // capital medio empleado en el tramo
     if(!(base>0)) continue;
+    // Dietz es ganancia ÷ capital medio empleado. Si por el tramo pasó MUCHA
+    // más plata de la que había en promedio, el denominador se vuelve chico
+    // frente al numerador y cualquier error del NAV —un precio viejo, un
+    // cierre guardado con otra versión del cálculo— se amplifica hasta dar un
+    // retorno delirante. Pasa en cuentas que se usan como cuenta de pagos,
+    // donde los flujos de un día son del orden de la cartera entera.
+    // Se descarta el tramo en vez de encadenar un número sin sentido, y se
+    // deja registrado para poder avisarlo en el diagnóstico.
+    const flujoBruto=flujos.reduce((sum,fl)=>sum+Math.abs(fl.monto),0);
+    if(flujoBruto>8*base){ inestables.push({fecha:cur.fecha,desde:prev.fecha,v0,flujoBruto,base}); continue; }
     const r=(v1-v0-flujo)/base;
     if(!isFinite(r)) continue;
     // Índice sobre EXACTAMENTE el mismo tramo, con la fuente única (ver
@@ -3062,6 +3072,7 @@ function serieDiaria(){
       rsp:bs?bs.ret:null,
       rndx:bn?bn.ret:null});
   }
+  out.inestables=inestables;
   return _MEMO[_k]=out;
 }
 
@@ -3167,6 +3178,13 @@ function diagnosticoSerieHtml(serie,pos){
     items.push(`<b>${s.nombre}</b>: el ${s.fecha} se vendieron ${fmt(s.vendida,s.vendida%1?2:0)} unidades pero la posición
       registrada hasta ese día era ${fmt(s.habia,s.habia%1?2:0)}. Falta la compra previa (probablemente quedó fuera del
       rango importado) y el resultado realizado de esa venta se está midiendo contra costo cero — queda inflado.`);
+  }
+
+  for(const t of ((serie||[]).inestables||[]).slice(0,4)){
+    items.push(`<b>${t.fecha}</b>: entre el ${t.desde} y ese día pasaron ${money(t.flujoBruto)} de aportes y retiros
+      sobre un capital medio de ${money(t.base)}. El tramo se descartó del retorno time-weighted: con esa
+      proporción el cálculo amplifica cualquier error del NAV y devuelve un porcentaje sin sentido.
+      La TIR no se ve afectada, porque no depende de los cierres diarios.`);
   }
 
   const raros=(serie||[]).filter(d=>Math.abs(d.r)>=0.25&&(d.dias||1)<=5)
@@ -3833,10 +3851,22 @@ function render(soloEstructura){
         // aportaba el criterio viejo— pasa a la TIR, que es su lugar correcto.
         const rTot=retornoEntre(serieT,fPrim,hoy(),diasTot);
         const twOk=!!rTot;
+        /* Qué fracción del período pedido cubren DE VERDAD los cierres diarios.
+           Sin esto, una cartera con dos años de movimientos pero una semana de
+           cierres mostraba el retorno de esa semana rotulado "Retorno total ·
+           cartera desde <hace dos años>", al lado de una ganancia en plata que
+           sí abarcaba los dos años: dos ventanas distintas en la misma card, y
+           encima el porcentaje se anualizaba sobre los días del período largo.
+           En la cartera de prueba eso daba −71,54% con +US$ 2.269 ganados.
+           Debajo del umbral se usa el respaldo money-weighted, que cubre todo
+           el historial y es coherente con la plata que se muestra al lado. */
+        const COBERTURA_MIN=0.5;
+        const cobTot=rTot?Math.min(1,rTot.diasReales/Math.max(1,diasTot)):0;
+        const twUsable=twOk&&cobTot>=COBERTURA_MIN;
         // Respaldo money-weighted para una cartera nueva, sin dos cierres que
         // encadenar. Es preferible un número medido con otra definición —y
         // rotulado como tal— que un "—" en la card principal.
-        const retTot=twOk?rTot.ret:(baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0);
+        const retTot=twUsable?rTot.ret:(baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0);
         // La ganancia en plata NO se toca: valor + retirado − aportado es un
         // hecho verificable contra el extracto del bróker, independiente del
         // método con que se exprese el porcentaje.
@@ -3845,7 +3875,7 @@ function render(soloEstructura){
         // bastante después de la primera compra, el TWR se está perdiendo ese
         // tramo inicial y hay que avisarlo — es el mismo criterio que el aviso
         // de "período desalineado" del otro camino.
-        const twParcial=twOk&&diasEntre(fPrim,rTot.desde)>7;
+        const twParcial=twOk&&!twUsable;
         // Flujos de TODO el historial. flujosEntre es exclusivo en `desde`, así
         // que hay que arrancar un día antes de la primera compra o el aporte
         // inicial queda afuera del vector.
@@ -3863,14 +3893,17 @@ function render(soloEstructura){
         // lado de la TIR (que sí pesa el timing de la plata) a propósito: son
         // respuestas a preguntas distintas y pueden diferir mucho si hiciste
         // aportes grandes a mitad de camino.
-        const tnaTot=twOk?anualizar(retTot,diasTot):null;
+        // Anualizar exige que el retorno cubra el período que se dice medir. Con
+        // una semana de cierres sobre dos años, elevar a 365/941 no arregla nada:
+        // proyecta a un año algo que no midió el año.
+        const tnaTot=twUsable?anualizar(retTot,diasTot):null;
         // Índices sobre la misma ventana efectiva que el TWR de la cartera y
         // con la misma fuente que dibuja la línea punteada del gráfico. Si no
         // hay serie diaria se cae al simulador money-weighted de siempre, que
         // es el criterio consistente con el respaldo de retTot.
-        const benchTot=twOk?(benchSP(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
+        const benchTot=twUsable?(benchSP(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
                            :(srT?srT.benchEn(hoy(),ESTADO.MEP,sp500Hoy()):null);
-        const benchNdx=twOk?(benchNDX(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
+        const benchNdx=twUsable?(benchNDX(rTot.desde,rTot.hasta,srT?srT.hitos:null)||{}).ret
                            :(srT?srT.benchNdxEn(hoy(),ESTADO.MEP,ndxHoy()):null);
         const vSP=srT?simIndice(SP500_HIST,SP500_FECHAS,sp500Hoy,0,fPrim,flujosTot,hoy()):null;
         const vNDX=srT?simIndice(NDX_HIST,NDX_FECHAS,ndxHoy,0,fPrim,flujosTot,hoy()):null;
@@ -3901,11 +3934,16 @@ function render(soloEstructura){
           `<div class="perf hero"><div class="k">${ytdEsHistorico?"Retorno total · YTD = histórico":"Retorno total"}</div>
             <div class="v ${cls(retTot)}">${sgn(retTot*100)}</div>
             <div class="d-money ${cls(ganTot)}">${signoMoney(ganTot)}</div>
-            <div class="d">${twOk?"time-weighted":"sobre lo aportado (sin serie diaria)"} · acumulado, sin anualizar · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
+            <div class="d">${twUsable?"time-weighted":"sobre lo aportado — todavía no hay cierres diarios para todo el período"} · acumulado, sin anualizar · ${monedaLblTot} · cartera desde ${fPrim}</div></div>`,
+          (twOk&&!twUsable)?`<div class="perf"><div class="k">Retorno con cierres diarios</div>
+            <div class="v ${cls(rTot.ret)}">${sgn(rTot.ret*100)}</div>
+            <div class="d">time-weighted · solo del ${rTot.desde} a hoy · ${rTot.diasReales} de ${diasTot} días</div></div>`:null,
           `<div class="perf" title="${TIP_ANUALIZADO}"><div class="k">Rendimiento anualizado</div>
             <div class="v ${cls(tnaTot)}">${tnaTot==null?"—":sgn(tnaTot*100)}</div>
             <div class="d">${tnaTot==null
-              ?"necesita al menos 30 días con serie diaria"
+              ?(twOk&&!twUsable
+                ?`los cierres diarios cubren ${rTot.diasReales} de ${diasTot} días: anualizar eso no significa nada`
+                :"necesita al menos 30 días con serie diaria")
               :`retorno total llevado a un año · ${diasTot}d`}</div></div>`,
           `<div class="perf" title="${TIP_TIREA}"><div class="k">TIR anual (TIREA)</div>
             <div class="v ${cls(tirTot)}">${tirTot==null?"—":sgn(tirTot*100)}</div>
@@ -3926,7 +3964,7 @@ function render(soloEstructura){
             <div class="d">ventas cerradas</div></div>`:null,
         ];
         metaHtml=`<span>${diasTot} días · desde ${fPrim} (inicio de la cartera)`
-          +(twParcial?` <span style="color:var(--amber)">(los cierres diarios recién arrancan el ${rTot.desde}: el retorno time-weighted no cubre el tramo anterior — la TIR sí, porque sale de los movimientos)</span>`:"")
+          +(twParcial?` <span style="color:var(--amber)">(los cierres diarios recién arrancan el ${rTot.desde} y cubren ${rTot.diasReales} de ${diasTot} días: el retorno total se calcula sobre lo aportado, no time-weighted — la TIR sí cubre todo, porque sale de los movimientos)</span>`:"")
           +(ytdEsHistorico?` <span style="color:var(--grey)">(pediste YTD, pero es igual a Histórico completo: la cartera arrancó después del 1/1)</span>`:"")
           +`</span>`;
         tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
