@@ -1966,7 +1966,23 @@ function construirHitosCaja(){
     // de estar en la caja pero sigue siendo tuyo (o se lo debés a alguien si
     // sos tomador) — eso se resuelve modelándolo como una POSICIÓN más de la
     // cartera (ver posicionesCaucion()), no maquillando la caja.
-    if(m.op==="compra"){
+    //
+    // Pero el capital de esa caución (leg "capital_ini"/"capital_venc") NO es
+    // un aporte/retiro externo: es el mismo capital que, mientras está
+    // afuera, se cuenta como posición sintética (posicionesCaucion()). Antes
+    // se lo trataba igual que un depósito/retiro real, y eso rompía el
+    // retorno por período: el día del vencimiento, Modified Dietz restaba el
+    // capital que vuelve del numerador como si fuera plata nueva sin
+    // rendimiento, justo cuando la posición sintética dejaba de sumar al
+    // NAV — el resultado era una pérdida fantasma del tamaño del capital (y,
+    // simétricamente, una ganancia fantasma el día que se coloca). El leg
+    // "interes" (op dividendo/gasto) no entra acá: cae en las ramas de abajo,
+    // que ya lo tratan bien (no es aporte/retiro).
+    if(m.grupoCaucion&&(m.caucionLeg==="capital_ini"||m.caucionLeg==="capital_venc")){
+      if(m.op==="deposito"){ dA=a; dU=u; dN=bruto; }
+      else{ dA=-a; dU=-u; dN=-bruto; } // op==="retiro"
+    }
+    else if(m.op==="compra"){
       // El tope existe para las cuentas cargadas A MANO: ahí una compra sin
       // caja suficiente casi siempre es una compra cuyo fondeo quedó sin
       // registrar, y taparla en 0 evita mostrar la posición en rojo. El
