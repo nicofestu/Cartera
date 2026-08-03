@@ -1946,6 +1946,20 @@ function fechaLiqDe(m){ return sumarHabiles(m.fecha,plazoLiq(m)); }
 // siguen siendo el a/u bimonetario de siempre. Solo las consume la UI de
 // Liquidez, que lee hitosCaja() en vivo — no tocan snapshots guardados ni la
 // reconstrucción histórica.
+// Identifica los movimientos que representan CAPITAL de una caución.
+// Las cauciones nuevas traen caucionLeg="capital_ini"/"capital_venc", pero
+// algunos movimientos históricos o sincronizados pueden no tener ese campo.
+// En esos casos, la vinculación a una caución + una operación de depósito o
+// retiro alcanza para reconocer el capital. Dividendos y gastos quedan afuera:
+// son el interés y deben seguir computándose como resultado de la cartera.
+function esCapitalCaucion(m){
+  if(!m) return false;
+  const vinculada=m.grupoCaucion!=null||(m.caucionRol&&m.caucionVenc);
+  if(!vinculada) return false;
+  if(m.caucionLeg==="interes"||m.op==="dividendo"||m.op==="gasto") return false;
+  return m.op==="deposito"||m.op==="retiro";
+}
+
 function construirHitosCaja(){
   const movs=[...DATOS.movimientos].sort(cmpCaja);
   const cA={}, cU={}, nA={}, nM={}, nC={};
@@ -1978,7 +1992,7 @@ function construirHitosCaja(){
     // simétricamente, una ganancia fantasma el día que se coloca). El leg
     // "interes" (op dividendo/gasto) no entra acá: cae en las ramas de abajo,
     // que ya lo tratan bien (no es aporte/retiro).
-    if(m.grupoCaucion&&(m.caucionLeg==="capital_ini"||m.caucionLeg==="capital_venc")){
+    if(esCapitalCaucion(m)){
       if(m.op==="deposito"){ dA=a; dU=u; dN=bruto; }
       else{ dA=-a; dU=-u; dN=-bruto; } // op==="retiro"
     }
