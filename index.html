@@ -2692,6 +2692,21 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
     if(p.px==null)         return {...fila,motivo:"sin precio de hoy"};
     if(p.pxMoneda!=="ARS") return {...fila,motivo:"cotiza en USD: el historial guarda el cierre en pesos"};
     const desdeEf=(entrada&&entrada>desde)?entrada:desde;
+    /* Una posición cuya primera compra es HOY no tiene todavía un cierre
+       válido de entrada: el snapshot/historial del día puede ser la apertura,
+       el cierre anterior o una referencia de pizarra. Medirla contra eso hace
+       que se le adjudique la variación diaria anterior a nuestra operación.
+       En ese caso el único precio de entrada correcto es el costo neto real
+       registrado en el movimiento (precio + comisión), ya incorporado en
+       costARS/costUSD al derivar la posición. */
+    if(entrada===hasta){
+      const costoEntrada=VISTA==="ARS"?p.costARS:p.costUSD;
+      if(!(costoEntrada>0)) return {...fila,desdeEf,motivo:"compra de hoy sin costo efectivo registrado"};
+      const ret=valHoy!=null?valHoy/costoEntrada-1:null;
+      return {...fila,ret,desdeEf,dias:0,tna:null,valDesde:costoEntrada,
+        gan:valHoy!=null?valHoy-costoEntrada:null,
+        motivo:ret==null?"sin precio de hoy":null};
+    }
     const h=precioHistorial(p.tipo,p.ticker,desdeEf);
     if(!h) return {...fila,desdeEf,motivo:`sin cierre archivado de ${p.ticker} (${p.tipo}) al ${desdeEf}`};
     let ret;
