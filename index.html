@@ -68,12 +68,12 @@ body::after{
   background-image:var(--nasa-bg,none);
   background-size:cover;
   background-position:center;
-  filter:brightness(.45) saturate(.65) contrast(.95);
+  filter:brightness(.62) saturate(.82) contrast(1.04);
   opacity:0;
   transition:opacity 1.8s var(--ease);
 }
-body.has-nasa-bg::after{opacity:.22}
-body.has-nasa-bg::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(180deg,rgba(5,5,5,.35),rgba(5,5,5,.6))}
+body.has-nasa-bg::after{opacity:.38}
+body.has-nasa-bg::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(180deg,rgba(5,5,5,.22),rgba(5,5,5,.5))}
 .wrap{max-width:1720px;margin:0 auto;padding:0 28px}
 a{color:var(--cool);text-decoration:none;transition:color .16s var(--ease)}
 a:hover{color:#C8E0FF}
@@ -896,7 +896,7 @@ footer b{color:var(--grey);font-weight:500}
 @media(max-width:700px){
   .wrap{padding:0 14px}
   body{font-size:13px}
-  body.has-nasa-bg::after{opacity:.26}
+  body.has-nasa-bg::after{opacity:.34}
   .status .wrap{height:48px}
   .st-cell{padding:0 14px}
   .st-live{padding-right:15px}
@@ -6976,8 +6976,8 @@ const NASA_TEMAS = {
 
 const NASA_BLACKLIST=["astronaut","cosmonaut","crew member","crew members"," crew ","portrait","spacewalk","extravehicular","eva ","press conference","group photo","photograph beside","poses beside","poses with","poses for","smiling","waves to","walks to","stands beside","stands in front","sits in","sits at","administrator","director of","engineer ","technician","flight controllers","mission control room","selfie","training exercise","suits up","suiting up","students","visit to","tour of","award ceremony","meeting with","spacesuit fitting","handshake","interview with","poses in front","speaks","speaking","addresses","audience","classroom","volunteers","staff photo","team photo","preflight","prelaunch","clean room","festival","environmental test","thermal vacuum","vibration test","being assembled","assembly facility","integration and test","flight spare","engineering model","instrument at nasa","goddard space flight center"];
 // "artist"/"artists" sin \b final: así también atrapa "artist's", "artists" (plural) y "artistic".
-const NASA_NO_FOTO=/\b(diagram|illustration|drawing|render|rendering|artist|artists|artistic|concept|animation|infographic|logo|patch|model|simulation|visualization|maps?|mapping|chart|graphic|mosaic diagram|radar|radargram|topography|topographic|weather report|gravity anomaly|gravity gradient|gravity field)\b/;
-const NASA_NO_TEMA=/\b(nebula|galaxy|galaxies|deep field|telescope|star cluster|constellation|rocket|launch|spacecraft assembly|jupiter|saturn|venus|mercury|uranus|neptune|pluto|asteroid|comet)\b/;
+const NASA_NO_FOTO=/\b(diagram|illustration|drawing|render|rendering|artist|artists|artistic|concept|animation|infographic|logo|patch|model|simulation|visualization|maps?|mapping|chart|graphic|mosaic|composite|collage|radar|radargram|spectr(?:um|al|ograph)|false[- ]color|colorized|topography|topographic|weather report|gravity anomaly|gravity gradient|gravity field)\b/;
+const NASA_NO_TEMA=/\b(nebula|galaxy|galaxies|deep field|telescope|star cluster|constellation|rocket|launch|spacecraft assembly|space station|international space station|jupiter|saturn|venus|mercury|uranus|neptune|pluto|asteroid|comet|sun|solar flare|aurora|eclipse)\b/;
 // Modismo astronómico muy común: "N veces el tamaño de la luna llena" para dar escala de algo
 // que no tiene nada que ver con la Luna (ej. un cúmulo estelar). Si aparece esta frase, no cuenta
 // como mención real de la Luna.
@@ -6994,7 +6994,7 @@ const NASA_TITULO_OPACO=/^[a-z0-9][a-z0-9\-.]{2,}$/i;
 const NASA_TIERRA=/\b(earth|blue marble|terrestrial|orbital sunrise|orbital sunset|earthrise|earth limb|home planet)\b/;
 const NASA_LUNA=/\b(moon|lunar|earthrise|lunar horizon)\b/;
 const NASA_MARTE=/\b(mars|martian|red planet|olympus mons|valles marineris|gale crater|jezero crater|curiosity|perseverance|ingenuity)\b/;
-const NASA_BG_KEY="cartera_nasa_bg_v3";
+const NASA_BG_KEY="cartera_nasa_bg_v4";
 
 function nasaTextoDe(item){
   const d=item.data?.[0]||{};
@@ -7009,7 +7009,7 @@ function nasaTienePersonas(txt){ return NASA_BLACKLIST.some(w=>txt.includes(w));
 // en la bajada de casi cualquier nota sobre Perseverance). Por eso primero
 // se decide solo con el título, y el texto completo queda como respaldo
 // débil para cuando el título no alcanza.
-function nasaCategoria(titulo,txt){
+function nasaCategoria(titulo){
   const decidir=tOriginal=>{
     // Se descarta antes el modismo "N veces el tamaño de la luna llena" para que
     // no cuente como mención real de la Luna (ver NASA_LUNA_COMO_UNIDAD).
@@ -7026,7 +7026,18 @@ function nasaCategoria(titulo,txt){
     if(marte) return "marte";
     return null;
   };
-  return decidir(titulo)||decidir(txt);
+  // La categoría debe estar expresada en el título. No se usa la descripción
+  // como respaldo: allí NASA suele nombrar otros cuerpos o programas de forma
+  // incidental, que era la principal fuente de falsos positivos.
+  return decidir(titulo);
+}
+
+function nasaCategoriaCompatible(buscada,detectada){
+  if(!detectada) return false;
+  if(buscada===detectada) return true;
+  // Earthrise y vistas conjuntas pueden aparecer tanto en búsquedas de Tierra
+  // como de Luna, pero siempre muestran exclusivamente esos dos cuerpos.
+  return detectada==="tierraLuna"&&(buscada==="tierra"||buscada==="luna");
 }
 
 function nasaPesoCategoria(categoria){
@@ -7094,8 +7105,9 @@ async function buscarFondoNasa(){
       return;
     }
 
-    // Se ejecuta una búsqueda por cada familia. La categoría final respeta
-    // aproximadamente la proporción: Tierra 80%, Luna 15%, ambas 5%.
+    // Se ejecuta una búsqueda por cada familia y luego se exige que el título
+    // confirme la misma categoría. La selección final usa los pesos definidos
+    // en nasaPesoCategoria.
     const queries=Object.entries(NASA_TEMAS).map(([categoria,variantes])=>({
       categoria,
       query:variantes[Math.floor(Math.random()*variantes.length)]
@@ -7122,8 +7134,8 @@ async function buscarFondoNasa(){
         if(NASA_NO_TEMA.test(texto)) continue;
         if(NASA_OTRAS_LUNAS.test(texto)) continue;
 
-        const categoria=nasaCategoria(String(d.title||"").toLowerCase(),texto);
-        if(!categoria) continue;
+        const categoria=nasaCategoria(String(d.title||"").toLowerCase());
+        if(!nasaCategoriaCompatible(resultado.categoria,categoria)) continue;
 
         candidatos.push({
           id:d.nasa_id,
