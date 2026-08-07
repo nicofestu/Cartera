@@ -2733,28 +2733,60 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
 // Orden común de los dos cuadros por activo: primero lo que se pudo medir
 // (mejor a peor retorno), y al final lo que no, para que no se mezcle.
 const ordenPorRet=(a,b)=>((a.ret==null)-(b.ret==null))||(b.ret-a.ret);
+// Remarca a precio de mercado del cierre de `fecha` la cantidad que haya en
+// `p.qty` a ese momento (in-place sobre costARS/costUSD). La usan
+// realizadoEnPeriodo() y posicionesCerradasEnPeriodo() para separar, dentro
+// de un resultado "de esta ventana", la ganancia que YA estaba adentro del
+// NAV al arrancar el período (y por lo tanto ya se contó en el retorno de
+// períodos anteriores) de la que se generó realmente durante la ventana.
+// Sin esto, vender esta semana algo comprado hace meses le suma a "esta
+// semana" TODA la ganancia acumulada desde la compra original.
+// Mismo criterio conservador que ya usa metricasPorPosicionEnPeriodo con
+// estos dos tipos: si no hay cierre diario archivado para la especie (FCI —
+// el historial público no tiene serie por fondo; manual/caución — no cotiza
+// en BYMA) se deja el costo de compra tal cual, no se inventa un precio.
+function remarcarAMercado(p,tipo,ident,fecha){
+  if(!p||!(p.qty>1e-9)||tipo==="fci"||tipo==="manual") return;
+  const h=precioHistorial(tipo,ident,fecha);
+  if(!h) return;
+  const mepF=mepHistorial(h.fecha);
+  if(!mepF) return;
+  p.costARS=p.qty*h.precio;
+  p.costUSD=p.qty*h.precio/mepF;
+}
 // Resultado realizado (ventas ya cerradas) que cayó específicamente dentro de
 // (desde,hasta]. Recorre TODO el historial de movimientos para llevar el
-// costo promedio correcto, pero solo suma a la cuenta el resultado de las
-// ventas que caen en la ventana pedida.
+// costo promedio correcto, pero antes de contar cualquier venta remarca a
+// mercado (ver remarcarAMercado) la cantidad que ya tenías al arrancar la
+// ventana, así el resultado de una venta esta semana de algo viejo es lo que
+// pasó ESTA semana (venta − valor al cierre del arranque del período), no la
+// ganancia de toda la vida de la posición.
 function realizadoEnPeriodo(desde,hasta){
   const map={}; let realARS=0, realUSD=0;
-  const movs=[...DATOS.movimientos].filter(m=>m.fecha<=hasta)
+  const movsTodos=[...DATOS.movimientos].filter(m=>m.tipo!=="cash"&&m.fecha<=hasta)
     .sort((a,b)=>a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
-  for(const m of movs){
-    if(m.tipo==="cash") continue;
+  const acumular=(m,contarComoRealizado)=>{
     const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
     const importe=importeNetoDe(m);
     const cARS=m.moneda==="USD"?importe*m.mep:importe;
     const cUSD=m.moneda==="USD"?importe:importe/m.mep;
-    if(!map[key]) map[key]={qty:0,costARS:0,costUSD:0};
+    if(!map[key]) map[key]={qty:0,costARS:0,costUSD:0,tipo:m.tipo,ident:m.tipo==="fci"?m.fondo:m.ticker};
     const p=map[key];
     if(m.op==="compra"){ p.qty+=m.cantidad; p.costARS+=cARS; p.costUSD+=cUSD; }
     else{
       const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
-      if(!desde||(m.fecha>desde&&m.fecha<=hasta)){ realARS+=cARS-aARS*m.cantidad; realUSD+=cUSD-aUSD*m.cantidad; }
+      if(contarComoRealizado){ realARS+=cARS-aARS*m.cantidad; realUSD+=cUSD-aUSD*m.cantidad; }
       p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
     }
+  };
+  if(desde){
+    for(const m of movsTodos.filter(m=>m.fecha<=desde)) acumular(m,false);
+    for(const key in map){ const p=map[key]; remarcarAMercado(p,p.tipo,p.ident,desde); }
+    for(const m of movsTodos.filter(m=>m.fecha>desde)) acumular(m,true);
+  } else {
+    // Histórico completo: no hay "arranque de ventana" que remarcar — el
+    // resultado realizado es el de toda la vida de cada posición cerrada.
+    for(const m of movsTodos) acumular(m,true);
   }
   return {realARS,realUSD};
 }
@@ -2816,11 +2848,11 @@ function metricasPorPosicion(pos){
 function posicionesCerradasEnPeriodo(desde,hasta,existentes){
   const vivas=new Set(existentes.map(p=>p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta));
   const map={};
-  const movs=[...DATOS.movimientos].filter(m=>m.tipo!=="cash"&&m.fecha<=hasta)
+  const movsTodos=[...DATOS.movimientos].filter(m=>m.tipo!=="cash"&&m.fecha<=hasta)
     .sort((a,b)=>a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
-  for(const m of movs){
+  const acumular=(m,contarVenta)=>{
     const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
-    if(vivas.has(key)) continue; // sigue viva hoy: la mide el otro camino, no duplicar
+    if(vivas.has(key)) return; // sigue viva hoy: la mide el otro camino, no duplicar
     const importe=importeNetoDe(m);
     const cARS=m.moneda==="USD"?importe*m.mep:importe;
     const cUSD=m.moneda==="USD"?importe:importe/m.mep;
@@ -2833,13 +2865,24 @@ function posicionesCerradasEnPeriodo(desde,hasta,existentes){
       if(!p.primeraCompra) p.primeraCompra=m.fecha;
     } else {
       const aARS=p.qty>0?p.costARS/p.qty:0, aUSD=p.qty>0?p.costUSD/p.qty:0;
-      if(m.fecha>desde){ // venta DENTRO de la ventana (el filtro de arriba ya garantiza <=hasta)
+      if(contarVenta&&m.fecha>desde){ // venta DENTRO de la ventana
         p.ventaARS+=cARS; p.ventaUSD+=cUSD;
         p.costoVendidoARS+=aARS*m.cantidad; p.costoVendidoUSD+=aUSD*m.cantidad;
         p.ultimaVenta=m.fecha;
       }
       p.qty-=m.cantidad; p.costARS-=aARS*m.cantidad; p.costUSD-=aUSD*m.cantidad;
     }
+  };
+  // Mismo criterio que realizadoEnPeriodo (ver remarcarAMercado): se
+  // reconstruye el costo promedio hasta el arranque de la ventana, se
+  // remarca a precio de mercado de ese cierre la cantidad que quedó viva, y
+  // recién de ahí en más las ventas cuentan como "resultado de este período".
+  if(desde){
+    for(const m of movsTodos.filter(m=>m.fecha<=desde)) acumular(m,false);
+    for(const key in map){ const p=map[key]; remarcarAMercado(p,p.tipo,p.tipo==="fci"?p.fondo:p.ticker,desde); }
+    for(const m of movsTodos.filter(m=>m.fecha>desde)) acumular(m,true);
+  } else {
+    for(const m of movsTodos) acumular(m,true);
   }
   return Object.values(map)
     .filter(p=>Math.abs(p.qty)<1e-6&&p.ultimaVenta) // cerrada a `hasta` Y con venta dentro de la ventana
