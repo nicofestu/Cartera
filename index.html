@@ -2594,6 +2594,13 @@ function simIndice(hist,fechas,nivelHoyFn,v0,d0,flujos,d1){
    unidad se declara una sola vez y la duda desaparece; las diferencias van en
    puntos porcentuales (pp), que es lo que son. */
 function tablaComparativa(filas,moneda){
+  // Se sacó la columna "Retorno total" (punta a punta) de esta tabla: a
+  // diferencia de la TIR, no pondera CUÁNDO entró cada peso, así que compara
+  // cosas que no son comparables cuando hubo aportes escalonados — puede
+  // decir "perdés" contra un índice mientras la TIR (que sí pesa el timing)
+  // dice lo contrario, y esa aparente contradicción es puro ruido para esta
+  // tabla. El "Retorno total" YTD/histórico de la cartera sola sigue
+  // arriba, en su propia card; acá solo queda la comparación money-weighted.
   const na='<span class="cmp-na">—</span>';
   const pct=x=>x==null?na:`<span class="${cls(x)}">${sgn(x*100)}</span>`;
   const plata=x=>x==null?na:`<span class="${cls(x)}">${signoMoney(x)}</span>`;
@@ -2601,18 +2608,16 @@ function tablaComparativa(filas,moneda){
   const base=filas[0];
   const cuerpo=filas.map((f,i)=>`<tr${i===0?' class="cmp-yo"':""}>
       <td class="l">${f.nombre}</td>
-      <td>${pct(f.ret)}</td>
       <td>${pct(f.tir)}</td>
       <td>${plata(f.gan)}</td>
-      <td>${i===0?na:pp(base.ret,f.ret)}</td>
       <td>${i===0?na:pp(base.tir,f.tir)}</td>
     </tr>`).join("");
   return `<div class="tbl-scroll"><table class="perf-tbl cmp-tbl"><thead><tr>
-      <th class="l">Comparativa</th><th>Retorno total</th><th>TIR anual</th><th>Resultado</th>
-      <th>Dif. retorno</th><th>Dif. TIR</th>
+      <th class="l">Comparativa</th><th>TIR anual</th><th>Resultado</th>
+      <th>Dif. TIR</th>
     </tr></thead><tbody>${cuerpo}</tbody>
-    <tfoot><tr><td colspan="6" class="l"><b>Retorno total</b>: acumulado del período, sin anualizar.
-      <b>TIR anual</b>: tasa efectiva anual (TIREA), pondera cuándo entró cada peso.
+    <tfoot><tr><td colspan="4" class="l"><b>TIR anual</b>: tasa efectiva anual (TIREA), pondera cuándo entró cada peso —
+      tu cartera y los índices se comparan con los mismos aportes, en las mismas fechas.
       Diferencias en puntos porcentuales sobre tu cartera. Todo en ${moneda}.</td></tr></tfoot>
     </table></div>`;
 }
