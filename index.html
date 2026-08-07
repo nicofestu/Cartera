@@ -3388,6 +3388,92 @@ function ymd(d){ return d.toISOString().slice(0,10); }
 function restarDias(f,n){ const d=new Date(f+"T00:00:00Z"); d.setUTCDate(d.getUTCDate()-n); return ymd(d); }
 function lunesDeSemana(f){ const d=new Date(f+"T00:00:00Z"); const back=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-back); return ymd(d); } // lunes de la semana calendario de f (reset los lunes)
 
+/* ── Cuántas RUEDAS hay entre dos fechas ───────────────────────────────
+   La volatilidad se estima estandarizando cada tramo por la raíz de su
+   duración, así que "cuánto dura un tramo" tiene que medirse en ruedas de
+   mercado, no en días de calendario. Antes se aproximaba con la constante
+   252/365, que sirve para un hueco largo (donde hábiles y no hábiles se
+   promedian) pero es falsa en los tramos cortos, que son la mayoría:
+
+     · viernes→sábado  = 1 día → 0,69 ruedas, pero el mercado no abrió: son 0.
+       Un cierre guardado un sábado mete en la muestra una observación de
+       retorno ~0 con peso casi completo y hunde la volatilidad estimada.
+     · viernes→lunes   = 3 días → 2,07 ruedas, pero hubo 1 sola rueda de
+       movimiento: la observación se divide por √2,07 y pesa de menos.
+
+   Efecto medido sobre 500 días simulados con volatilidad real 17,46%: con
+   cierres todos los días daba 15,31% (−12%), solo hábiles 17,01% (−3%),
+   hábiles + findes alternos 16,30% (−7%). O sea que abrir más seguido la app
+   bajaba la volatilidad y subía el Sharpe de la misma cartera. Contando
+   ruedas reales el resultado queda en 18,09% en los tres casos.
+
+   Se cuenta contra el calendario que ya está en memoria: SP500_FECHAS (que
+   viene del archivo de bolsar + la extensión por CEDEAR, o sea ruedas BYMA) y,
+   si todavía no cargó, las fechas de historial/AAAA.json. Fuera del rango
+   cubierto —o sin ningún calendario, por ejemplo si falla la red— se cae a
+   contar días de lunes a viernes, que ignora feriados pero es muchísimo mejor
+   que 252/365. */
+function habilesEntre(a,b){ // días de lunes a viernes en (a,b], sin iterar día por día
+  const n=difDias(a,b); if(!(n>0)) return 0;
+  const w0=new Date(Date.parse(a+"T00:00:00Z")).getUTCDay();
+  const sem=Math.floor(n/7); let r=sem*5;
+  for(let i=1;i<=n-sem*7;i++){ const w=(w0+i)%7; if(w>=1&&w<=5) r++; }
+  return r;
+}
+let _CAL_RUEDAS=null, _CAL_REF=null;
+function calRuedas(){
+  const src=(typeof SP500_FECHAS!=="undefined"&&SP500_FECHAS&&SP500_FECHAS.length)?SP500_FECHAS:null;
+  if(src){ _CAL_REF=src; return _CAL_RUEDAS=src; }
+  const h=(typeof HIST_REMOTO!=="undefined"&&HIST_REMOTO&&HIST_REMOTO.precios)?HIST_REMOTO.precios:null;
+  if(!h) return null;
+  if(_CAL_REF===h) return _CAL_RUEDAS;
+  _CAL_REF=h; return _CAL_RUEDAS=Object.keys(h).sort();
+}
+// Índice del último elemento <= f en un array de fechas ordenado, o -1.
+function idxUltFecha(arr,f){
+  let lo=0,hi=arr.length-1,r=-1;
+  while(lo<=hi){ const m=(lo+hi)>>1; if(arr[m]<=f){ r=m; lo=m+1; } else hi=m-1; }
+  return r;
+}
+function ruedasEntre(a,b){
+  if(!a||!b||!(difDias(a,b)>0)) return 0;
+  const cal=calRuedas();
+  if(!cal||!cal.length) return habilesEntre(a,b);
+  const ini=cal[0], fin=cal[cal.length-1];
+  let r=0;
+  const a2=a<ini?ini:a, b2=b<fin?b:fin;
+  if(b2>a2) r+=idxUltFecha(cal,b2)-idxUltFecha(cal,a2);
+  if(a<ini) r+=habilesEntre(a,b<ini?b:ini);   // antes del arranque del calendario
+  if(b>fin) r+=habilesEntre(a>fin?a:fin,b);   // después del último día cargado (ej. hoy)
+  return r;
+}
+
+/* Tramos de CERO ruedas —un cierre guardado un sábado, un domingo o un
+   feriado— no dicen nada sobre el riesgo: el mercado no se movió. Pero sí
+   pueden traer rendimiento real, porque un money market devenga igual. Por eso
+   se FUSIONAN con el tramo siguiente en vez de descartarse: el retorno
+   encadenado no pierde nada y la muestra de volatilidad no se llena de ceros.
+   El benchmark del tramo fusionado es el del tramo con rueda (el de 0 ruedas
+   aporta 0 por construcción). Si el último tramo de la serie no tiene rueda
+   (hoy es sábado) queda al final con ruedas=0 y se excluye solo de la muestra
+   de dispersión, no del encadenamiento. */
+function fusionarTramosSinRueda(serie){
+  const out=[]; let pend=null;
+  for(const d of (serie||[])){
+    if(!isFinite(d.r)||!(d.r>-1)) continue;
+    const dias=Math.max(1,d.dias||1);
+    const t=pend
+      ? {fecha:d.fecha,desde:pend.desde,dias:pend.dias+dias,r:(1+pend.r)*(1+d.r)-1,
+         rsp:d.rsp==null?null:(pend.rsp!=null?(1+pend.rsp)*(1+d.rsp)-1:d.rsp)}
+      : {fecha:d.fecha,desde:d.desde||restarDias(d.fecha,dias),dias,r:d.r,rsp:d.rsp};
+    t.ruedas=ruedasEntre(t.desde,t.fecha);
+    if(t.ruedas<=0){ pend=t; continue; }
+    out.push(t); pend=null;
+  }
+  if(pend) out.push(pend);
+  return out;
+}
+
 /* Métricas de riesgo estándar sobre la serie de retornos.
 
    OJO: los tramos de serieDiaria() NO son todos de un día. Cuando faltan
@@ -3414,22 +3500,28 @@ function metricasRiesgo(serie){
   const RUEDAS=252, CAL=365;
   const tasa=serieTasa();
   const conRF=tasa.pasos.length>0;
-  const obs=(serie||[]).filter(d=>isFinite(d.r)&&d.r>-1).map(d=>{
-    const dCal=Math.max(1,d.dias||1);
-    const ruedas=Math.max(1,dCal*RUEDAS/CAL); // días de calendario -> ruedas equivalentes
-    const x=Math.log(1+d.r);                  // log-retorno del tramo completo
+  const crudos=(serie||[]).filter(d=>isFinite(d.r)&&d.r>-1).length;
+  const tramos=fusionarTramosSinRueda(serie);
+  const obs=tramos.map(t=>{
+    const x=Math.log(1+t.r);                  // log-retorno del tramo completo
     // Lo que habría rendido la tasa libre de riesgo en ESE mismo tramo.
-    const rf=conRF?factorTasa(tasa.pasos,d.desde||restarDias(d.fecha,dCal),d.fecha)
-                  :{f:1,cubiertos:0};
-    return {r:d.r,rsp:d.rsp,dCal,ruedas,fRF:rf.f,cubRF:rf.cubiertos,
-      u:x/Math.sqrt(ruedas),                       // retorno por rueda estandarizado
-      ue:(x-Math.log(rf.f))/Math.sqrt(ruedas)};    // idem, ya neto de la tasa libre
+    const rf=conRF?factorTasa(tasa.pasos,t.desde,t.fecha):{f:1,cubiertos:0};
+    const ru=t.ruedas;
+    return {r:t.r,rsp:t.rsp,dCal:t.dias,ruedas:ru,fRF:rf.f,cubRF:rf.cubiertos,
+      u:ru>0?x/Math.sqrt(ru):null,                       // retorno por rueda estandarizado
+      ue:ru>0?(x-Math.log(rf.f))/Math.sqrt(ru):null};    // idem, ya neto de la tasa libre
   });
   const n=obs.length;
   if(n<2) return null;
-  const us=obs.map(o=>o.u);
-  const media=us.reduce((a,b)=>a+b,0)/n;
-  const sd=Math.sqrt(us.reduce((a,b)=>a+(b-media)**2,0)/(n-1)); // desvío por rueda
+  // Muestra de DISPERSIÓN: solo los tramos que contienen al menos una rueda.
+  // Los de cero (una cola de fin de semana que no se pudo fusionar con nada)
+  // siguen contando para el retorno encadenado, pero no para volatilidad,
+  // Sortino, beta ni correlación, donde solo agregarían un cero.
+  const mu=obs.filter(o=>o.u!=null);
+  if(mu.length<2) return null;
+  const us=mu.map(o=>o.u);
+  const media=us.reduce((a,b)=>a+b,0)/us.length;
+  const sd=Math.sqrt(us.reduce((a,b)=>a+(b-media)**2,0)/(us.length-1)); // desvío por rueda
   const vol=sd*Math.sqrt(RUEDAS);
   const diasTot=obs.reduce((s,o)=>s+o.dCal,0);
   const acum=obs.reduce((a,o)=>a*(1+o.r),1);
@@ -3438,7 +3530,14 @@ function metricasRiesgo(serie){
   // retorno, encadenando los factores tramo a tramo.
   const acumRF=obs.reduce((a,o)=>a*o.fRF,1);
   const rfAnual=(conRF&&diasTot>0)?Math.pow(acumRF,CAL/diasTot)-1:0;
-  const excAnual=(retAnual==null)?null:retAnual-rfAnual;
+  // Exceso GEOMÉTRICO, no la resta de las dos tasas anualizadas. La resta
+  // funciona en dólares (donde la tasa libre es de un dígito) pero en pesos se
+  // va de escala: con la cartera en +95% y la caución en +35%, restar da 60%
+  // de exceso cuando lo que se ganó por encima de haber estado colocado es
+  // 1,951/1,350−1 = 44,6%. Sobre una volatilidad de 30% eso es Sharpe 2,40 vs
+  // 1,78. Además la resta era inconsistente con el denominador del Sortino,
+  // que ya venía midiendo el exceso como diferencia de logaritmos.
+  const excAnual=(retAnual==null)?null:(conRF?(1+retAnual)/(1+rfAnual)-1:retAnual);
   // Qué porción del período tenía tasa cargada. Los días que no, se descuentan
   // a 0 y eso infla el resultado, así que si falta algo hay que decirlo. El
   // tope en 1 es por las dudas: los días cubiertos se cuentan sobre desde→fecha
@@ -3447,15 +3546,22 @@ function metricasRiesgo(serie){
   const cobRF=(conRF&&diasTot>0)?Math.min(1,obs.reduce((s,o)=>s+o.cubRF,0)/diasTot):0;
   // Sortino: el desvío de la baja se mide sobre el retorno EN EXCESO, o sea
   // que el mínimo aceptable pasa a ser la tasa libre de riesgo y no cero.
-  const neg=obs.map(o=>o.ue).filter(u=>u<0);
-  const dd=neg.length?Math.sqrt(neg.reduce((a,b)=>a+b*b,0)/neg.length)*Math.sqrt(RUEDAS):0;
-  // Máxima caída desde un pico, sobre el índice de retorno acumulado
+  // La suma de cuadrados se divide por el TOTAL de observaciones, no por la
+  // cantidad de negativas: dividir por las negativas es otro estadístico (el
+  // desvío de las pérdidas solas), infla el denominador en √(n/negativas) y
+  // subestimaba el Sortino ~30% —y de forma variable, porque el factor depende
+  // de qué proporción del período fue negativa, así que tampoco se podían
+  // comparar dos períodos entre sí.
+  const dd=Math.sqrt(mu.reduce((a,o)=>a+(o.ue<0?o.ue*o.ue:0),0)/mu.length)*Math.sqrt(RUEDAS);
+  // Máxima caída desde un pico, sobre el índice de retorno acumulado. Solo ve
+  // los extremos de cada tramo: un pico y un valle que ocurran DENTRO de un
+  // tramo sin cierre en el medio son invisibles, así que es una cota inferior.
   let pico=1,cum=1,mdd=0;
   for(const o of obs){ cum*=(1+o.r); if(cum>pico) pico=cum; const c=cum/pico-1; if(c<mdd) mdd=c; }
   // Beta y correlación contra el S&P, con los tramos que tienen ambos datos y
   // la misma estandarización (si no, un tramo de 20 días pesaría de más).
-  const pares=obs.filter(o=>o.rsp!=null&&o.rsp>-1)
-    .map(o=>({p:o.u,b:Math.log(1+o.rsp)/Math.sqrt(o.ruedas)}));
+  const conBench=mu.filter(o=>o.rsp!=null&&o.rsp>-1);
+  const pares=conBench.map(o=>({p:o.u,b:Math.log(1+o.rsp)/Math.sqrt(o.ruedas)}));
   let beta=null,correl=null,alpha=null;
   if(pares.length>=20){
     const mp=pares.reduce((a,o)=>a+o.p,0)/pares.length, mb=pares.reduce((a,o)=>a+o.b,0)/pares.length;
@@ -3464,28 +3570,35 @@ function metricasRiesgo(serie){
     if(varb>0) beta=cov/varb;
     if(varb>0&&varp>0) correl=cov/Math.sqrt(varb*varp);
     // Alfa de Jensen, anualizado: cuánto rindió la cartera por encima de lo
-    // que el CAPM predice a partir del beta y el exceso del benchmark, sobre
-    // la MISMA tasa libre de riesgo que ya se usó para excAnual. Se calcula
-    // sobre el subconjunto de tramos que tienen dato de S&P (el mismo que
-    // arma "pares"), encadenando retorno y tasa como en retAnual/rfAnual.
-    if(beta!=null){
-      const obsBench=obs.filter(o=>o.rsp!=null&&o.rsp>-1);
-      const diasBench=obsBench.reduce((s,o)=>s+o.dCal,0);
-      const acumBench=obsBench.reduce((a,o)=>a*(1+o.rsp),1);
-      const retAnualBench=(acumBench>0&&diasBench>0)?Math.pow(acumBench,CAL/diasBench)-1:null;
-      const acumRFBench=obsBench.reduce((a,o)=>a*o.fRF,1);
-      const rfAnualBench=(conRF&&diasBench>0)?Math.pow(acumRFBench,CAL/diasBench)-1:0;
-      const excAnualBench=(retAnualBench==null)?null:retAnualBench-rfAnualBench;
-      if(excAnual!=null&&excAnualBench!=null) alpha=excAnual-beta*excAnualBench;
+    // que el CAPM predice a partir del beta y el exceso del benchmark.
+    // Cartera, benchmark y tasa libre se anualizan los tres sobre EL MISMO
+    // subconjunto de tramos (los que tienen dato de S&P). Antes el benchmark
+    // se medía sobre ese subconjunto pero la cartera entraba con excAnual, que
+    // venía de TODOS los tramos: con cobertura parcial —los tramos anteriores
+    // al arranque del archivo del índice, y los de fin de semana, donde
+    // benchSP no encuentra ninguna rueda— se estaba comparando el rendimiento
+    // de la cartera en un período contra el del índice en otro. Medido sobre
+    // 120 de 200 tramos con benchmark, la diferencia era de 4,3 puntos.
+    if(beta!=null&&conBench.length){
+      const diasB=conBench.reduce((s,o)=>s+o.dCal,0);
+      const anual=f=>(f>0&&diasB>0)?Math.pow(f,CAL/diasB)-1:null;
+      const rP=anual(conBench.reduce((a,o)=>a*(1+o.r),1));
+      const rB=anual(conBench.reduce((a,o)=>a*(1+o.rsp),1));
+      const rfB=anual(conBench.reduce((a,o)=>a*o.fRF,1));
+      const exc=r=>(r==null||rfB==null)?null:(1+r)/(1+rfB)-1;
+      const eP=exc(rP), eB=exc(rB);
+      if(eP!=null&&eB!=null) alpha=eP-beta*eB;
     }
   }
   const huecos=obs.filter(o=>o.dCal>=5).length;
-  return {n,dias:diasTot,huecos,vol,retAnual,conRF,rfAnual,excAnual,cobRF,
+  return {n,nVol:mu.length,fusionados:Math.max(0,crudos-n),dias:diasTot,huecos,
+    vol,retAnual,conRF,rfAnual,excAnual,cobRF,
     tasaNombre:tasa.nombre,
     sharpe:(vol>0&&excAnual!=null)?excAnual/vol:null,
     sortino:(dd>0&&excAnual!=null)?excAnual/dd:null,
     mdd,beta,correl,alpha,paresBench:pares.length};
 }
+
 
 // Bloque de UI: Riesgo, scoped al mismo período que eligió el usuario arriba.
 // Devuelve las piezas de la sección Riesgo por separado (en vez de un solo
@@ -3503,9 +3616,11 @@ function seccionRiesgo(rango){
   const m=metricasRiesgo(serie);
   const MIN_VOL=20, MIN_BETA=20;
   const meta=`${m?.n||0} tramos${m?.dias?` · ${m.dias} días`:""} · ${rango.etiqueta}`;
-  if(!m||m.n<MIN_VOL){
+  // La guarda mira nVol (los tramos que contienen al menos una rueda) y no n:
+  // un cierre guardado un sábado no aporta ninguna observación de riesgo.
+  if(!m||m.nVol<MIN_VOL){
     return {meta,
-      warnHtml:`<div class="chart-warn">Con ${m?.n||0} cierre${m?.n===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
+      warnHtml:`<div class="chart-warn">Con ${m?.nVol||0} cierre${m?.nVol===1?"":"s"} de historial en ${rango.etiqueta.toLowerCase()}
         todavía no tiene sentido estimar volatilidad ni ratios ajustados por riesgo — harían falta al menos
         ${MIN_VOL} para que el número signifique algo y no sea ruido. Probá "Histórico completo" o un período
         más largo, o esperá a que se acumulen más días.</div>`,
@@ -3520,7 +3635,7 @@ function seccionRiesgo(rango){
     // el EXCESO sobre la tasa libre, que es literalmente el numerador de esos
     // ratios y hasta ahora solo aparecía enterrado en el texto explicativo.
     card("Exceso sobre tasa libre",m.excAnual==null?"—":sgn(m.excAnual*100),
-      m.conRF?`por encima de ${m.tasaNombre} (${fmt(m.rfAnual*100,1)}% anual) · numerador de Sharpe y Sortino`
+      m.conRF?`sobre ${m.tasaNombre} (${fmt(m.rfAnual*100,1)}% anual), compuesto · numerador de Sharpe y Sortino`
              :"tasa libre 0: falta historial/tasas.json",
       m.excAnual==null?"":cls(m.excAnual)),
     card("Sharpe",m.sharpe==null?"—":fmt(m.sharpe,2),
@@ -3530,23 +3645,27 @@ function seccionRiesgo(rango){
     card("Sortino",m.sortino==null?"—":fmt(m.sortino,2),
       m.conRF?"idem, solo penaliza lo que quedó abajo de la tasa":"idem, solo penaliza caídas",
       m.sortino==null?"":cls(m.sortino)),
-    card("Máx. caída",fmt(m.mdd*100,1)+"%","peor bajada desde un pico",m.mdd<0?"down":""),
+    card("Máx. caída",fmt(m.mdd*100,1)+"%","peor bajada desde un pico, entre cierres",m.mdd<0?"down":""),
     m.beta==null
-      ? card("Beta vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
+      ? card("Beta vs S&amp;P","—",`necesita ${MIN_BETA} tramos con ambos datos (hay ${m.paresBench})`)
       : card("Beta vs S&amp;P",fmt(m.beta,2),"cuánto se mueve por cada 1% del índice"),
     m.correl==null
       ? card("Correlación S&amp;P","—","sin datos suficientes")
       : card("Correlación S&amp;P",fmt(m.correl,2),"1 = se mueven igual, 0 = sin relación"),
     m.alpha==null
-      ? card("Alfa vs S&amp;P","—",`necesita ${MIN_BETA} días con ambos datos (hay ${m.paresBench})`)
+      ? card("Alfa vs S&amp;P","—",`necesita ${MIN_BETA} tramos con ambos datos (hay ${m.paresBench})`)
       : card("Alfa vs S&amp;P",sgn(m.alpha*100),"exceso anual sobre lo esperado por el beta (CAPM)",cls(m.alpha)),
   ];
   const cardsHtml=filasGrid(cardsR,"perf-grid",4);
   const hintHtml=`<div class="hint" style="margin-top:12px;line-height:1.9">
     Calculado con ${m.n} cierres de ${rango.etiqueta.toLowerCase()}, que cubren ${m.dias} días de calendario, y anualizado a 252 ruedas.
     Los tramos no son todos de un día: cuando falta un cierre en el medio, ese punto abarca varios días y se
-    pondera por su duración en vez de contarse como una rueda${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
-    si no, un fin de semana largo o unos días sin abrir la app inflarían la volatilidad sin que hubiera pasado nada.
+    pondera por las RUEDAS que contiene${m.huecos?` (acá hay ${m.huecos} tramo${m.huecos>1?"s":""} de 5 días o más)`:""} —
+    si no, un fin de semana largo o unos días sin abrir la app moverían la volatilidad sin que hubiera pasado nada.
+    Las ruedas se cuentan contra el calendario real de mercado, no estimando 252/365 sobre los días de calendario:
+    un viernes→lunes son 3 días pero 1 sola rueda.${m.fusionados?` Hay ${m.fusionados} cierre${m.fusionados>1?"s":""} en día sin rueda
+    (sábado, domingo o feriado) que se fusionó con el tramo siguiente: su rendimiento sigue contando, pero no entra
+    como una observación de riesgo en cero.`:""}
     ${m.conRF
       ? `Sharpe y Sortino descuentan la <b>${m.tasaNombre}</b>, que sobre este período equivale a
          <b>${fmt(m.rfAnual*100,1)}%</b> anual: es lo que habría rendido la plata sin correr riesgo, así que lo que
