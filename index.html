@@ -497,6 +497,10 @@ select option{background:#0A0C0E;color:var(--white)}
 .contrib-bar.pos{background:var(--up)}
 .contrib-bar.neg{background:var(--down)}
 .contrib-wrap span{color:var(--grey);font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+.contrib-fila{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--hair-soft);font-size:12.5px}
+.contrib-fila:last-child{border-bottom:0}
+.contrib-fila .cf-tk{color:var(--white);font-family:var(--din);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.contrib-fila b{font-family:var(--mono);font-weight:600}
 
 /* ALLOCATION */
 .alloc{
@@ -677,6 +681,7 @@ td .cta-tag{
   letter-spacing:.08em;
 }
 td .tipo-tag{color:var(--amber);border-color:rgba(255,196,107,.3);background:rgba(255,196,107,.07)}
+td .cartera-tag{color:var(--cool);border-color:rgba(135,188,255,.32);background:rgba(135,188,255,.08)}
 td .op-c,td .op-v{font-family:var(--din);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.11em}
 td .op-c{color:var(--up)}
 td .op-v{color:var(--down)}
@@ -1012,6 +1017,7 @@ footer b{color:var(--grey);font-weight:500}
         <button onclick="closeMore();exportar()">Export</button>
         <button onclick="closeMore();document.getElementById('imp').click()">Import</button>
         <button onclick="closeMore();abrirImportBroker()">Importar operaciones</button>
+        <button onclick="closeMore();abrirAyuda()">Ayuda</button>
       </div>
     </div>
     <input type="file" id="imp" accept=".json" style="display:none" onchange="importar(event)">
@@ -1145,6 +1151,28 @@ footer b{color:var(--grey);font-weight:500}
     <div class="modal-actions">
       <button class="btn" onclick="cerrarModales()">Cancelar</button>
       <button class="btn primary" onclick="guardarPrecio()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Ayuda / Metodología -->
+<div class="modal-bg" id="modal-ayuda">
+  <div class="modal" style="max-width:640px;max-height:82vh;overflow-y:auto">
+    <h3>Ayuda · Metodología</h3>
+    <div id="ayuda-body"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="cerrarModales()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal ficha de activo (Mercado) -->
+<div class="modal-bg" id="modal-ficha">
+  <div class="modal">
+    <h3>Ficha del activo · <span id="fi-ticker" style="color:var(--amber)"></span></h3>
+    <div id="ficha-body"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="cerrarModales()">Cerrar</button>
     </div>
   </div>
 </div>
@@ -2972,6 +3000,30 @@ const ordenConCerradas=(a,b)=>{
   const ga=grupo(a),gb=grupo(b);
   return ga!==gb?ga-gb:(b.ret-a.ret);
 };
+// "Principales contribuidores": top 3 / bottom 3 por contribución (puntos
+// porcentuales sobre el retorno total), reutilizando el mismo campo .contrib
+// que ya calcula y muestra la tabla "Retorno por activo" — no es una métrica
+// nueva, es un resumen de la misma tabla. Recibe metTabla o metPTabla según
+// el período (misma forma en los dos casos).
+function contribuidoresHtml(tabla){
+  if(!tabla||!tabla.length) return "";
+  const medibles=tabla.filter(p=>p.ret!=null&&p.contrib!=null);
+  if(medibles.length<2) return "";
+  const ord=medibles.slice().sort((a,b)=>b.contrib-a.contrib);
+  const top=ord.filter(p=>p.contrib>0).slice(0,3);
+  const bottom=ord.filter(p=>p.contrib<0).slice(-3).reverse();
+  if(!top.length&&!bottom.length) return "";
+  const fila=p=>{
+    const nombre=p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker;
+    return `<div class="contrib-fila"><span class="cf-tk">${nombre}</span><b class="${cls(p.contrib)}">${sgn(p.contrib*100)}</b></div>`;
+  };
+  return `<div class="perf-grid una" style="grid-template-columns:1fr 1fr">
+    <div class="perf"><div class="k">Principales contribuidores</div>
+      ${top.length?top.map(fila).join(""):'<div class="d" style="color:var(--grey-dim)">sin contribuciones positivas en este período</div>'}</div>
+    <div class="perf"><div class="k">Principales detractores</div>
+      ${bottom.length?bottom.map(fila).join(""):'<div class="d" style="color:var(--grey-dim)">sin contribuciones negativas en este período</div>'}</div>
+  </div>`;
+}
 
 /* ══════════════ Carga de precios y valuación ══════════════ */
 async function cargar(){
@@ -3932,6 +3984,7 @@ function render(soloEstructura){
   const cashPend=cuentas.reduce((s,c)=>s+cashPendCta(c),0);
   const cashDisp=cash-cashPend;
   const total=totalPos+cash;
+  ULTIMO_TOTAL_NAV=total; // último NAV conocido, lo usa abrirFicha() para calcular peso
   // Mismo total, pero en la base de comparación (idéntico a `total` en ARS y MEP)
   const cashBase=VISTA==="ARS"?cash
     :Object.values(ultC.ctaU||{}).reduce((s,x)=>s+x,0)
@@ -4213,7 +4266,7 @@ function render(soloEstructura){
   // ══ RENDIMIENTOS ══ (cardsPerf/tablaHtml/notaHtml se usan más abajo, en
   // "Retorno por activo" y en los disclaimers ocultos — de ahí que estén
   // declarados afuera del if, en vez de adentro como antes)
-  let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="", cmpHtml="";
+  let cardsPerf=null, metaHtml="", tablaHtml="", notaHtml="", cmpHtml="", contribTabla=null;
   if(TAB==="rendimientos"&&!sinPx.length&&DATOS.movimientos.length){
     if(PERIODO==="todo"||ytdEsHistorico){
       // Camino de siempre: retorno money-weighted sobre el capital aportado
@@ -4312,6 +4365,7 @@ function render(soloEstructura){
         const cerradasTot=posicionesCerradasEnPeriodo(restarDias(fPrim,1),hoy(),pos);
         cerradasTot.forEach(p=>{ p.contrib=(baseCap>0&&p.gan!=null)?p.gan/baseCap:null; });
         const metTabla=[...met,...cerradasTot].sort(ordenConCerradas);
+        contribTabla=metTabla;
         // Mejor/peor solo entre las medibles y VIVAS: si no, "peor posición"
         // termina siendo una fila sin retorno calculable, y las cerradas no
         // compiten en este ranking (ver ordenConCerradas).
@@ -4413,6 +4467,7 @@ function render(soloEstructura){
         // Ventana EFECTIVA (r.desde/r.hasta), igual criterio que mejor/peor.
         const cerradasP=posicionesCerradasEnPeriodo(r.desde,r.hasta,pos);
         const metPTabla=[...metP,...cerradasP].sort(ordenConCerradas);
+        contribTabla=metPTabla;
         const {realARS:rA,realUSD:rU}=realizadoEnPeriodo(r.desde,r.hasta);
         const realPer=VISTA==="ARS"?rA:rU;
         const monedaLbl=tituloMoneda;
@@ -4565,6 +4620,7 @@ function render(soloEstructura){
     // unidad una sola vez y evita que "+7,1%" se lea como un retorno cuando en
     // realidad es una resta de porcentajes.
     if(cmpHtml) html+=cmpHtml;
+    html+=contribuidoresHtml(contribTabla);
   }
   // 2) Métricas de riesgo, después de los cuadros de rendimiento. Depende
   // solo de los snapshots diarios (no de tener posiciones abiertas): se
@@ -5116,6 +5172,16 @@ function varianteDe(sym,panel){
   return {base,mercado:suf==="D"?"MEP":"CCL"};
 }
 function subOf(s,panel){ return varianteDe(s,panel)?.base||normalizarEspecie(s); }
+// Conecta Mercado con Cartera: qué especies de las que se listan acá ya están
+// en la cartera del usuario. Comparación best-effort por símbolo normalizado
+// (mismo criterio que el resto de Mercado para cruzar paneles) — no participa
+// de ningún cálculo, es solo una marca visual.
+function carteraTickersSet(){
+  if(!ESTADO||!ESTADO.pos) return new Set();
+  return new Set(ESTADO.pos
+    .filter(p=>["accion","cedear","bono","letra","on"].includes(p.tipo)&&p.ticker)
+    .map(p=>normalizarEspecie(p.ticker)));
+}
 function familiaDe(row,panel){
   const base=varianteDe(row.symbol,panel)?.base||normalizarEspecie(row.symbol);
   const raices=[];
@@ -5214,15 +5280,22 @@ function panelMacro(){
   ];
 
   // Bloque local: Merval + las más negociadas del día
+  const filaAcc=r=>{
+    const info=NOMBRE_AR[r.symbol];
+    return mc(info?.n?info.n.split(" ").slice(0,2).join(" "):r.symbol,"$ "+fmt(r.c,r.c<1000?2:0),r.pct_change,chip(r.symbol));
+  };
   const top=accL.slice().sort((a,b)=>(b.v*b.c)-(a.v*a.c)).slice(0,7);
-  const local=[mc("Merval",merv!=null?sgn(merv):null,null,chip("panel líder · proxy"))].concat(
-    top.map(r=>{
-      const info=NOMBRE_AR[r.symbol];
-      return mc(info?.n?info.n.split(" ").slice(0,2).join(" "):r.symbol,"$ "+fmt(r.c,r.c<1000?2:0),r.pct_change,chip(r.symbol));
-    }));
+  const local=[mc("Merval",merv!=null?sgn(merv):null,null,chip("panel líder · proxy"))].concat(top.map(filaAcc));
+
+  // Mayores subas y bajas del día, mismo panel líder que Merval y "más
+  // negociadas" de arriba — ordenado por variación %, no por volumen.
+  const conVar=accL.filter(r=>r.pct_change!=null);
+  const subas=conVar.slice().sort((a,b)=>b.pct_change-a.pct_change).slice(0,5).map(filaAcc);
+  const bajas=conVar.slice().sort((a,b)=>a.pct_change-b.pct_change).slice(0,5).map(filaAcc);
 
   const sec=(t,cards)=>`<div class="macro-sec"><div class="macro-h">${t}</div>${filasGrid(cards,"macro-grid",8)}</div>`;
   return `<div class="macro">${sec("Índices y commodities",global)}${sec("Argentina · Merval y más negociadas",local)}
+    ${subas.length?sec("Mayores subas",subas):""}${bajas.length?sec("Mayores bajas",bajas):""}
     <div class="mkt-foot">Todo en vivo desde los paneles de BYMA (CEDEARs y acciones), los mismos que usa el resto de esta pestaña — sin proveedores externos. Niveles de índices y commodities: precio del CEDEAR × factor de calibración fijo, para expresarlo en escala de índice. Merval: variación ponderada del panel líder, no el índice oficial.</div></div>`;
 }
 
@@ -5292,6 +5365,7 @@ function vistaRV(panel,tipo,F,q){
     ${[["todos","Todos"],["acciones","Acciones"],["etfs","ETFs"]].map(([k,n])=>
       `<button class="chip ${MKT_FILTRO===k?"active":""}" onclick="MKT_FILTRO='${k}';renderMercado()">${n}</button>`).join("")}
   </div>`;
+  const enCartera=carteraTickersSet();
   const filas=vis.map(r=>{
     const info=infoDe(r.symbol)||{};
     const rubro=info.etf?(info.rubro||"ETF"):(info.sector||"—");
@@ -5300,7 +5374,7 @@ function vistaRV(panel,tipo,F,q){
     const dec=VISTA==="ARS"?(pv.c<100?2:0):2;
     const volumen=pv.v&&pv.c?pv.v*pv.c:null;
     return `<tr>
-    <td class="tk">${r.symbol}${tagMoneda(pv)}</td>
+    <td class="tk" style="cursor:pointer" onclick="abrirFicha('${r.symbol}')">${r.symbol}${tagMoneda(pv)}${enCartera.has(normalizarEspecie(r.symbol))?'<span class="cta-tag cartera-tag">en cartera</span>':""}</td>
     <td class="l"><span class="nom-emp">${info.n||"—"}</span></td>
     <td class="l"><span class="sector">${rubro}</span></td>
     <td>${pv.c==null?"—":simbolo+fmt(pv.c,dec)}</td>
@@ -5352,13 +5426,14 @@ function vistaONs(F){
   // D/C —un hecho observable, no una suposición— define la moneda de pago.
   const base=filasCanonicas(MKT.on).filter(r=>/O$/.test(r.symbol)).filter(r=>F(r.symbol));
   if(!base.length) return '<div class="mkt-foot">Sin resultados en ONs.</div>';
+  const enCartera=carteraTickersSet();
   const filas=base.sort((a,b)=>(b.v||0)-(a.v||0)).map(r=>{
     const fam=familiaDe(r,MKT.on);
     const usd=fam.mep||fam.ccl;
     const emisor=emisorDeON(r.symbol);
     const pv=dualPV(r,MKT.on);
     const simbolo=VISTA==="ARS"?"$ ":"US$ ";
-    return `<tr><td class="tk">${r.symbol}${tagMoneda(pv)}</td>
+    return `<tr><td class="tk" style="cursor:pointer" onclick="abrirFicha('${r.symbol}')">${r.symbol}${tagMoneda(pv)}${enCartera.has(normalizarEspecie(r.symbol))?'<span class="cta-tag cartera-tag">en cartera</span>':""}</td>
       <td class="l"><span class="nom-emp">${emisor||"—"}</span></td>
       <td class="l"><span class="sector">${usd?"USD":"ARS"}</span></td>
       <td>${pv.c==null?"—":simbolo+fmt(pv.c,VISTA==="ARS"?(pv.c<1000?2:0):2)}</td>
@@ -5372,11 +5447,12 @@ function vistaONs(F){
 
 function theadBono(){ return `<th>Especie</th><th>Último</th><th>Var %</th><th>Bid / Ask</th>`; }
 function rowsBono(arr,panelOf){
+  const enCartera=carteraTickersSet();
   return arr.map(r=>{
     const pv=dualPV(r,panelOf?panelOf[r.symbol]:null);
     const simbolo=VISTA==="ARS"?"$ ":"US$ ";
     const dec=VISTA==="ARS"?(pv.c<1000?2:0):2;
-    return `<tr><td class="tk">${r.symbol}${tagMoneda(pv)}</td>
+    return `<tr><td class="tk" style="cursor:pointer" onclick="abrirFicha('${r.symbol}')">${r.symbol}${tagMoneda(pv)}${enCartera.has(normalizarEspecie(r.symbol))?'<span class="cta-tag cartera-tag">en cartera</span>':""}</td>
     <td>${pv.c==null?"—":simbolo+fmt(pv.c,dec)}</td>
     <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td>
     <td>${pv.bid?fmt(pv.bid,dec):"—"} / ${pv.ask?fmt(pv.ask,dec):"—"}</td></tr>`;
@@ -5436,6 +5512,105 @@ function abrirPrecio(t){
   document.getElementById("p-precio").value=pm?pm.precio:"";
   document.getElementById("p-moneda").value=pm?pm.moneda:"USD";
   document.getElementById("modal-precio").classList.add("open");
+}
+// Ficha de activo: se abre desde una fila de Mercado. Busca la especie en
+// los paneles ya cargados (mismos helpers que arma cada tabla de Mercado, sin
+// pedir nada nuevo a la red) y, si el usuario la tiene en cartera, cruza los
+// datos de la posición (misma fuente que Inicio: ESTADO.pos). No agrega
+// ningún cálculo nuevo: solo junta en un mismo lugar lo que ya se calcula en
+// otros dos, para conectar Mercado con Cartera.
+let ULTIMO_TOTAL_NAV=null;
+function abrirFicha(symbol){
+  const base=normalizarEspecie(symbol);
+  let panelKey=null, r=null;
+  for(const t of ["accion","cedear","bono","letra","on"]){
+    const panel=MKT&&MKT[t];
+    const f=panel?buscarFila(panel,base):null;
+    if(f){ panelKey=t; r=f; break; }
+  }
+  const panel=panelKey?MKT[panelKey]:null;
+  const pv=(r&&panel)?dualPV(r,panel):null;
+  const simbolo=VISTA==="ARS"?"$ ":"US$ ";
+  const dec=VISTA==="ARS"?(pv&&pv.c<1000?2:0):2;
+  const nombre=panelKey==="cedear"?(COMAFI[base]?.n||null)
+    :panelKey==="accion"?(NOMBRE_AR[base]?.n||null)
+    :(/O$/.test(base)?emisorDeON(base):null);
+  document.getElementById("fi-ticker").textContent=symbol;
+  const fila=(k,v)=>`<div class="sync-row"><span class="lbl">${k}</span><b class="num">${v}</b></div>`;
+  let html=nombre?`<div class="hint" style="margin-top:0;margin-bottom:4px">${nombre}</div>`:"";
+  html+=fila("Precio",pv&&pv.c!=null?simbolo+fmt(pv.c,dec):"—");
+  html+=fila("Variación diaria",pv&&pv.pct!=null?sgn(pv.pct):"—");
+  html+=fila("Bid / Ask",pv?`${pv.bid?fmt(pv.bid,dec):"—"} / ${pv.ask?fmt(pv.ask,dec):"—"}`:"—");
+  const posMatch=(ESTADO&&ESTADO.pos||[]).find(p=>p.ticker&&normalizarEspecie(p.ticker)===base);
+  if(posMatch){
+    const V=VISTA==="ARS"?posMatch.valARS:VISTA==="MEP"?posMatch.valUSD:posMatch.valCCL;
+    const Cost=VISTA==="ARS"?posMatch.costARS:posMatch.costUSD;
+    const Pl=VISTA==="ARS"?posMatch.plARS:posMatch.plUSD;
+    const qty=posMatch.qty;
+    const avgPrice=(qty&&Cost!=null)?Cost/qty:null;
+    const peso=(V!=null&&ULTIMO_TOTAL_NAV>0)?V/ULTIMO_TOTAL_NAV*100:null;
+    html+=fila("Cantidad en cartera",qty!=null?fmt(qty,qty%1?2:0):"—");
+    html+=fila("Precio promedio",avgPrice!=null?simbolo+fmt(avgPrice,avgPrice<1000?2:0):"—");
+    html+=fila("P&amp;L",Pl!=null?signoMoney(Pl):"—");
+    html+=fila("Peso en cartera",peso!=null?fmt(peso,1)+"%":"—");
+  } else {
+    html+=`<div class="hint">No la tenés en tu cartera.</div>`;
+  }
+  document.getElementById("ficha-body").innerHTML=html;
+  document.getElementById("modal-ficha").classList.add("open");
+}
+// Ayuda / Metodología: texto estático (no depende de TAB ni de haber
+// visitado Rendimientos), para sacar las explicaciones largas de las
+// pantallas principales sin perderlas. Mismos conceptos que ya explican
+// TIP_ANUALIZADO/TIP_TIREA y seccionRiesgo(), en un solo lugar centralizado.
+function abrirAyuda(){
+  const sec=(t,html)=>`<div class="lbl" style="margin:18px 0 7px">${t}</div><div class="hint" style="margin-top:0">${html}</div>`;
+  const html=[
+    sec("Precios y cotizaciones",
+      `Acciones, CEDEARs, bonos y letras: BYMA en vivo, vía data912.com. FCI: VCP por 1.000 cuotapartes,
+      cierre previo, vía argentinadatos.com. Bonos, letras y ONs cotizan por precio cada 100 VN.`),
+    sec("Dólares y brecha",
+      `<b>MEP</b> y <b>CCL</b> salen de dolarapi.com — son los tipos de cambio que se usan para valuar la cartera
+      en dólares y para convertir el costo de cada operación. <b>Oficial</b> y <b>Blue</b> son de referencia.
+      <b>Brecha</b> es la diferencia entre el MEP y el Oficial.`),
+    sec("Vistas ARS / USD MEP / USD CCL",
+      `Los <b>montos</b> (NAV, liquidez, valuación, asignación) se muestran en la moneda elegida arriba. Todo lo
+      que se <b>divide</b> por un costo o un aporte —retornos, P&amp;L, contribución— se mide siempre en base
+      ARS/MEP, porque el costo promedio y el capital aportado se llevan en esa base y no existe una serie CCL
+      histórica por movimiento. Por eso los porcentajes de MEP y CCL son idénticos; los montos absolutos no.`),
+    sec("Retorno total vs. TIR",
+      `<b>Retorno total</b> es <b>time-weighted</b>: encadena el retorno de cada tramo diario descontando la
+      plata que entró o salió (método Modified Dietz), así un depósito no se confunde con una ganancia. Mide
+      cómo se comportó lo que elegiste, sin importar cuánto capital había en cada momento.<br><b>TIR anual
+      (TIREA)</b> es la tasa efectiva anual que iguala el valor presente de todos tus flujos (aportes, retiros
+      y valor actual). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso.`),
+    sec("Contribución",
+      `Cuánto aportó cada posición al retorno total de la cartera, en puntos porcentuales. Se calcula sobre la
+      misma base que el retorno (capital aportado o valor de las posiciones en el período, según la ventana).`),
+    sec("Riesgo: Sharpe, Sortino, volatilidad, drawdown, beta",
+      `<b>Volatilidad</b>: desvío estándar de los retornos por rueda, anualizado. <b>Sharpe</b> y <b>Sortino</b>:
+      exceso de retorno sobre la tasa libre de riesgo (cuando hay datos de historial/tasas.json) por unidad de
+      riesgo — Sortino solo penaliza las caídas, Sharpe penaliza toda la dispersión. <b>Máx. caída (drawdown)</b>:
+      la peor baja desde un pico, entre cierres disponibles. <b>Beta</b>: cuánto se mueve la cartera por cada 1%
+      que se mueve el S&amp;P 500. <b>Correlación</b>: 1 = se mueven igual, 0 = sin relación. <b>Alfa</b>: exceso
+      de retorno anual sobre lo esperado por el beta (CAPM). Todo se anualiza a 252 ruedas de mercado, no a días
+      de calendario, y necesita un mínimo de tramos cargados para no ser puro ruido.`),
+    sec("Benchmark: SPY y QQQ",
+      `Se mide con la serie de retornos del CEDEAR (no convertida a "puntos de índice" con un factor calibrado a
+      mano), simulando tus mismos aportes comprando ese CEDEAR. Por eso <b>no coincide exactamente con el índice
+      del noticiero</b>: mide el instrumento que se podría haber comprado acá, con su propio horario y su error
+      de seguimiento cambiario.`),
+    sec("Liquidaciones y costos",
+      `Acciones, CEDEARs y bonos liquidan T+1 hábil: lo vendido hoy no está disponible hasta el siguiente día
+      hábil, aunque ya cuenta en el NAV. Las comisiones se cargan bimonetarias, al MEP del día de cada operación.
+      Las posiciones se valúan por costo promedio ponderado; las ventas realizan P&amp;L contra ese promedio.`),
+    sec("Datos y sincronización",
+      `Los movimientos y snapshots se guardan en este navegador (localStorage). <b>Sync</b> los sincroniza entre
+      dispositivos vía un gist privado de GitHub. <b>Export/Import</b> sirve como respaldo manual adicional.
+      Uso personal: conviene verificar los números contra el extracto del bróker.`),
+  ].join("");
+  document.getElementById("ayuda-body").innerHTML=html;
+  document.getElementById("modal-ayuda").classList.add("open");
 }
 function cerrarModales(){ document.querySelectorAll(".modal-bg").forEach(m=>m.classList.remove("open")); EDIT_ID=null; }
 document.querySelectorAll(".modal-bg").forEach(m=>m.addEventListener("click",e=>{ if(e.target===m) cerrarModales(); }));
