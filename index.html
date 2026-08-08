@@ -2640,8 +2640,15 @@ function rangoPeriodo(periodo){
   // sobre menos días de los que en realidad pasaron y dispararía el número.
   if(periodo==="hoy") return {desde:restarDias(hoyF,1),hasta:hoyF,etiqueta:"Hoy",dias:1,desdeNominal:hoyF};
   if(periodo==="ytd") return {desde:(anioAct-1)+"-12-31",hasta:hoyF,etiqueta:"YTD",dias:diasEntre(anioAct+"-01-01",hoyF),desdeNominal:anioAct+"-01-01"};
-  if(periodo==="mensual") return {desde:hoyF.slice(0,8)+"01",hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(hoyF.slice(0,8)+"01",hoyF),desdeNominal:hoyF.slice(0,8)+"01"};
-  if(periodo==="semanal") return {desde:lunesDeSemana(hoyF),hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(lunesDeSemana(hoyF),hoyF),desdeNominal:lunesDeSemana(hoyF)};
+  // mensual/semanal: "desde" real es el día ANTERIOR al inicio nominal (mismo
+  // criterio que "hoy" e "ytd" arriba), para que el retorno del día 1 del mes
+  // o del lunes quede DENTRO del tramo (retornoEntre filtra fecha>desde). Antes
+  // "desde" era el inicio nominal mismo y eso dejaba ese primer día afuera del
+  // cálculo (retorno, ganancia, mejor/peor posición, capital aportado) sin que
+  // se notara, porque "dias" se recalculaba con el mismo (des)acierto y quedaba
+  // autoconsistente con los tramos realmente sumados.
+  if(periodo==="mensual"){ const ini=hoyF.slice(0,8)+"01",desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
+  if(periodo==="semanal"){ const ini=lunesDeSemana(hoyF),desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
   if(/^\d{4}$/.test(periodo)){
     const fin=periodo+"-12-31";
     const hastaEf=fin>hoyF?hoyF:fin;
