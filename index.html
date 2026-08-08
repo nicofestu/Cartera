@@ -26,6 +26,7 @@
   --surf:linear-gradient(180deg,rgba(20,22,25,.94),rgba(8,9,11,.94));
   --surf-hover:linear-gradient(180deg,rgba(27,30,34,.97),rgba(12,13,15,.97));
   --surf-edge:rgba(255,255,255,.12);
+  --surf-solid:rgba(13,15,18,.97);
   --white:#F4F7FA;
   --grey:#9AA3AE;
   --grey-dim:#626B77;
@@ -655,8 +656,8 @@ th{
 }
 th:first-child,td:first-child{text-align:left;padding-left:4px}
 .tbl-scroll table{background:var(--surf)}
-.tbl-scroll th:first-child,.tbl-scroll td:first-child{position:sticky;left:0;z-index:2;background:var(--surf)}
-.tbl-scroll tbody tr:hover td:first-child{background:var(--surf)}
+.tbl-scroll th:first-child,.tbl-scroll td:first-child{position:sticky;left:0;z-index:2;background:var(--surf-solid)}
+.tbl-scroll tbody tr:hover td:first-child{background:linear-gradient(rgba(255,255,255,.025),rgba(255,255,255,.025)),var(--surf-solid)}
 th.l,td.l{text-align:left}
 td{
   padding:13px 12px;
@@ -2679,14 +2680,14 @@ function tablaComparativa(filas,moneda){
       <td>${plata(f.gan)}</td>
       <td>${i===0?na:pp(base.tir,f.tir)}</td>
     </tr>`).join("");
-  return `<div class="tbl-scroll"><table class="perf-tbl cmp-tbl"><thead><tr>
+  return `<div class="grupo"><div class="tbl-scroll"><table class="perf-tbl cmp-tbl"><thead><tr>
       <th class="l">Comparativa</th><th>TIR anual</th><th>Resultado</th>
       <th>Dif. TIR</th>
     </tr></thead><tbody>${cuerpo}</tbody>
     <tfoot><tr><td colspan="4" class="l"><b>TIR anual</b>: tasa efectiva anual (TIREA), pondera cuándo entró cada peso —
       tu cartera y los índices se comparan con los mismos aportes, en las mismas fechas.
       Diferencias en puntos porcentuales sobre tu cartera. Todo en ${moneda}.</td></tr></tfoot>
-    </table></div>`;
+    </table></div></div>`;
 }
 
 /* ══════════════ Selector de período (pestaña Rendimientos) ══════════════
@@ -4448,7 +4449,7 @@ function render(soloEstructura){
           +(twParcial?` <span style="color:var(--amber)">(los cierres diarios recién arrancan el ${rTot.desde} y cubren ${rTot.diasReales} de ${diasTot} días: el retorno total se calcula sobre lo aportado, no time-weighted — la TIR sí cubre todo, porque sale de los movimientos)</span>`:"")
           +(ytdEsHistorico?` <span style="color:var(--grey)">(pediste YTD, pero es igual a Histórico completo: la cartera arrancó después del 1/1)</span>`:"")
           +`</span>`;
-        tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
+        tablaHtml=`<div class="grupo"><div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
             <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
             <th>Invertido</th><th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
           </tr></thead><tbody>
@@ -4466,7 +4467,7 @@ function render(soloEstructura){
               ?`<div class="contrib-wrap"><div class="contrib-bar ${p.contrib>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
               <span>${sgn(p.contrib*100)}</span></div>`
               :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("");})()}
-          </tbody></table></div>`;
+          </tbody></table></div></div>`;
         notaHtml=`<div class="perf-note">${ytdEsHistorico?`<b>Elegiste YTD, pero tu cartera arrancó el ${fPrim}</b> — después del 1/1 de este año — así que no hay nada anterior que medir: YTD y "Histórico completo" son exactamente la misma ventana y el mismo cálculo. Por eso todos los números de esta pantalla (retorno, TNA, comparación vs. índices, mejor/peor posición, tabla) son los del historial completo.<br><br>`:""}<b>Retorno total</b> = retorno <b>time-weighted</b>: se encadenan los retornos de cada tramo diario descontando la plata que entró o salió, así un depósito no se confunde con una ganancia. Mide cómo se comportó lo que elegiste, independientemente de cuánto capital había puesto en cada momento.<br>
           <b>TIR anual</b> = la tasa efectiva anual que iguala el valor presente de todos tus flujos (aportes con signo negativo, retiros y valor actual con signo positivo). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso: si aportaste fuerte justo antes de una caída, el retorno total puede ser positivo y la TIR bajar igual. Los dos números describen la misma cartera y responden preguntas distintas — cómo rindieron los activos, y cómo rindió tu plata.<br>
           El <b>resultado en plata</b> sigue siendo el hecho verificable contra el extracto: valor actual + retirado − aportado. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
@@ -4605,7 +4606,7 @@ function render(soloEstructura){
           metP.forEach(p=>{ p.contrib=(baseCapP>0&&p.gan!=null)?p.gan/baseCapP:null; });
           cerradasP.forEach(p=>{ p.contrib=(baseCapP>0&&p.gan!=null)?p.gan/baseCapP:null; });
           const maxC=Math.max(...metPTabla.map(x=>Math.abs(x.contrib||0)))||1;
-          tablaHtml=`<div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
+          tablaHtml=`<div class="grupo"><div class="tbl-scroll"><table class="perf-tbl"><thead><tr>
               <th>Especie</th><th class="l">Cuenta</th><th>Desde</th><th>Días</th>
               <th>Valor</th><th>Resultado</th><th>Retorno</th><th class="l" style="width:130px">Contribución</th>
             </tr></thead><tbody>
@@ -4622,7 +4623,7 @@ function render(soloEstructura){
                 ?`<div class="contrib-wrap"><div class="contrib-bar ${(p.contrib||0)>=0?"pos":"neg"}" style="width:${w.toFixed(1)}%"></div>
                 <span>${p.contrib==null?"—":sgn(p.contrib*100)}</span></div>`
                 :`<span style="color:var(--grey);font-size:11px">${p.motivo||"no se puede medir"}</span>`}</td></tr>`;}).join("")}
-            </tbody></table></div>`;
+            </tbody></table></div></div>`;
         }
         notaHtml=`<div class="perf-note">${desalineado?`<b>Ojo:</b> pediste ${rango.desdeNominal||rango.desde} → ${rango.hasta},
           pero los cierres diarios disponibles arrancan en <b>${r.desde}</b> y terminan en <b>${r.hasta}</b>.
@@ -4821,7 +4822,7 @@ function render(soloEstructura){
       ${MOV_FILTRO_CTA?`<button class="btn mini danger" onclick="borrarPorCuenta()">Borrar ${movs.length} de ${MOV_FILTRO_CTA}</button>`:""}
       <span style="color:var(--muted);font-size:12px;font-family:var(--mono)">${String(movs.length).padStart(3,"0")} OPS</span>
     </div></div>
-    <div class="tbl-scroll"><table class="mov-tbl"><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Tipo</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Bruto</th><th>Comisión</th><th>Total neto</th><th>MEP del día</th><th></th></tr></thead><tbody>
+    <div class="grupo"><div class="tbl-scroll"><table class="mov-tbl"><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Tipo</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Bruto</th><th>Comisión</th><th>Total neto</th><th>MEP del día</th><th></th></tr></thead><tbody>
     ${movs.map(m=>{
       const nombre=m.grupoCaucion?m.ticker:(m.tipo==="cash"?(ETIQ_CASH[m.op]||String(m.op||"").toUpperCase()):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker);
       const bruto=importeBrutoDe(m), comision=importeComisionDe(m), tot=importeNetoDe(m);
@@ -4839,7 +4840,7 @@ function render(soloEstructura){
       <td>${fmt(m.mep,1)}</td>
       <td style="white-space:nowrap"><button class="btn mini" onclick="abrirMov(${m.id})">Editar</button>
       <button class="btn mini danger" onclick="borrarMov(${m.id})" title="Eliminar">✕</button></td></tr>`;}).join("")}
-    </tbody></table></div>`;
+    </tbody></table></div></div>`;
 
   cont.innerHTML=html;
   if(TAB==="inicio"&&navPrev!=null&&Math.abs(total-navPrev)>0.5){
@@ -5418,9 +5419,9 @@ function vistaRV(panel,tipo,F,q){
     <td>${pv.c==null?"—":simbolo+fmt(pv.c,dec)}</td>
     <td class="${cls(pv.pct)}">${pv.pct==null?"—":sgn(pv.pct)}</td>
     <td>${volumen?fmt(volumen/1e6,1)+" M":"—"}</td></tr>`;}).join("");
-  return chips+`<div class="tbl-scroll"><table><thead><tr>
+  return chips+`<div class="grupo"><div class="tbl-scroll"><table><thead><tr>
     <th>Especie</th><th class="l">Nombre</th><th class="l">${esCedear?"Sector / Rubro":"Sector"}</th><th>Último</th><th>Var %</th><th>Vol. ${VISTA==="ARS"?"$":"US$"}</th></tr></thead>
-    <tbody>${filas}</tbody></table></div>
+    <tbody>${filas}</tbody></table></div></div>
     <div class="mkt-foot">${q?total+" resultados":"Top "+Math.min(lim,total)+" de "+total+" por volumen"}${esCedear?" · nombre y sector: Comafi":""}</div>`;
 }
 
