@@ -4329,24 +4329,28 @@ function render(soloEstructura){
         // rotulado como tal— que un "—" en la card principal.
         const retTot=twUsable?rTot.ret:(baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0);
         // El ajuste manual de saldos (ver ajusteManualARS / modal "Saldos en
-        // cuenta") ya está adentro de totalBase en TODAS las fechas (vía
-        // cashBase, más arriba) — incluido el primer cierre histórico, que lo
-        // arrastra desde el día 1. Pero NO está adentro de baseCap ("aportado",
-        // que sale de los movimientos tal cual, sin tocarlo). Esa asimetría es
-        // la causa real de que "Retorno total" no coincidiera en plata con
-        // ningún período con ventana (1A, 3M, YTD cuando no es histórico...):
-        // esos encadenan cierres diarios que YA traen el ajuste adentro desde
-        // el arranque, así que se cancela casi solo entre el primer cierre y
-        // el último — acá, en cambio, se restaba una sola vez contra un
-        // aportado que no lo conoce. Restarlo también acá (misma conversión
-        // por VISTA que ya usa cashBase unas líneas arriba) hace que las dos
-        // cuentas coincidan. "Capital aportado" (la card de al lado, más
-        // abajo) NO se toca: esa sigue mostrando la plata que realmente
-        // entró de afuera, tal cual se cargó — el ajuste no es un aporte.
+        // cuenta") entra distinto en cada método: money-weighted lo resta una
+        // sola vez contra un aportado que no lo conoce; time-weighted lo trae
+        // adentro desde el primer cierre y se cancela casi solo contra el
+        // último. Restarlo también del lado money-weighted (ver ajusteBaseCap
+        // abajo) achica la diferencia pero no la cierra del todo: queda un
+        // resto chico porque el primer cierre valúa esa apertura a precio de
+        // CIERRE del día, no al precio de compra, y la fórmula money-weighted
+        // no tiene forma de saberlo. La única manera de que "Todo"/YTD (cuando
+        // YTD es todo el historial) den EXACTAMENTE lo mismo en plata que
+        // cualquier período con ventana (1A, 3M...) — no "parecido", EXACTO —
+        // es que, siempre que haya cierres diarios para encadenar, los dos
+        // usen la MISMA cuenta en vez de dos fórmulas que se acerquen. Por eso
+        // ganTot pasa a ser directamente rTot.gan cuando twUsable, igual que
+        // ya hace retTot con el % un poco más arriba; el money-weighted con el
+        // ajuste queda solo de respaldo para cuando todavía no hay dos cierres
+        // que encadenar (misma lógica de respaldo que ya tiene retTot).
+        // "Capital aportado" (la card de al lado, más abajo) sigue sin tocarse:
+        // muestra la plata que realmente entró, tal cual se cargó.
         const ajusteBaseCap=VISTA==="ARS"
           ?cuentas.reduce((s,c)=>s+ajusteCta(c),0)
           :cuentas.reduce((s,c)=>{const a=ajusteNativoCta(c); return s+a.ars/MEP+a.mep+a.ccl;},0);
-        const ganTot=totalBase+(srT?.retirado||0)-baseCap-ajusteBaseCap;
+        const ganTot=twUsable?rTot.gan:(totalBase+(srT?.retirado||0)-baseCap-ajusteBaseCap);
         // Cuánto del historial cubre de verdad la serie diaria. Si arranca
         // bastante después de la primera compra, el TWR se está perdiendo ese
         // tramo inicial y hay que avisarlo — es el mismo criterio que el aviso
