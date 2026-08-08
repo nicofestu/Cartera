@@ -654,8 +654,9 @@ th{
   white-space:nowrap;
 }
 th:first-child,td:first-child{text-align:left;padding-left:4px}
-.tbl-scroll th:first-child,.tbl-scroll td:first-child{position:sticky;left:0;z-index:2;background:var(--void-soft)}
-.tbl-scroll tbody tr:hover td:first-child{background:var(--void-soft)}
+.tbl-scroll table{background:var(--surf)}
+.tbl-scroll th:first-child,.tbl-scroll td:first-child{position:sticky;left:0;z-index:2;background:var(--surf)}
+.tbl-scroll tbody tr:hover td:first-child{background:var(--surf)}
 th.l,td.l{text-align:left}
 td{
   padding:13px 12px;
@@ -3017,12 +3018,20 @@ function contribuidoresHtml(tabla){
     const nombre=p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker;
     return `<div class="contrib-fila"><span class="cf-tk">${nombre}</span><b class="${cls(p.contrib)}">${sgn(p.contrib*100)}</b></div>`;
   };
+  // Aviso solo cuando hay algo fuera de ±100 pp: la contribución no es el
+  // retorno del activo (que sí está acotado en −100%) — es esa ganancia o
+  // pérdida dividida por el capital APORTADO DE AFUERA, no por lo invertido
+  // en esa posición. Si la posición se financió total o parcialmente con
+  // plata reciclada de otras ventas (rotación interna, que no cuenta como
+  // aporte nuevo), su resultado puede superar el 100% de un capital externo
+  // chico sin que haya ningún error de cálculo.
+  const extremo=[...top,...bottom].some(p=>Math.abs(p.contrib)>1);
   return `<div class="perf-grid una" style="grid-template-columns:1fr 1fr">
     <div class="perf"><div class="k">Principales contribuidores</div>
       ${top.length?top.map(fila).join(""):'<div class="d" style="color:var(--grey-dim)">sin contribuciones positivas en este período</div>'}</div>
     <div class="perf"><div class="k">Principales detractores</div>
       ${bottom.length?bottom.map(fila).join(""):'<div class="d" style="color:var(--grey-dim)">sin contribuciones negativas en este período</div>'}</div>
-  </div>`;
+  </div>${extremo?`<div class="hint" style="margin-top:-6px;margin-bottom:14px">La contribución no es el retorno del activo: es su resultado dividido por el capital que aportaste de afuera (no por lo invertido en esa posición puntual). Con rotación interna entre posiciones — comprar con lo que dejó una venta anterior, sin que eso cuente como aporte nuevo — un solo resultado puede superar el 100% de un capital externo chico. Ver <b>Ayuda</b> para más detalle.</div>`:""}`;
 }
 
 /* ══════════════ Carga de precios y valuación ══════════════ */
@@ -5586,7 +5595,12 @@ function abrirAyuda(){
       y valor actual). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso.`),
     sec("Contribución",
       `Cuánto aportó cada posición al retorno total de la cartera, en puntos porcentuales. Se calcula sobre la
-      misma base que el retorno (capital aportado o valor de las posiciones en el período, según la ventana).`),
+      misma base que el retorno (capital aportado o valor de las posiciones en el período, según la ventana) —
+      <b>no</b> sobre lo invertido en esa posición puntual. Por eso puede superar el 100% en valor absoluto sin
+      que sea un error: si una posición se financió con plata reciclada de otra venta (rotación interna, que no
+      suma aporte nuevo) y salió mal, su pérdida se compara contra un capital externo que puede ser mucho más
+      chico que lo que realmente estuvo en juego en esa posición. El <b>retorno</b> de un activo sí está acotado
+      en −100% (no se puede perder más de lo que costó); la <b>contribución</b> no tiene ese piso.`),
     sec("Riesgo: Sharpe, Sortino, volatilidad, drawdown, beta",
       `<b>Volatilidad</b>: desvío estándar de los retornos por rueda, anualizado. <b>Sharpe</b> y <b>Sortino</b>:
       exceso de retorno sobre la tasa libre de riesgo (cuando hay datos de historial/tasas.json) por unidad de
