@@ -52,7 +52,7 @@ body{
   padding-bottom:78px;
   color:var(--white);
   background:var(--void);
-  font-family:var(--mono);
+  font-family:var(--din);
   font-size:13.5px;
   font-variant-numeric:tabular-nums;
   font-feature-settings:"tnum";
@@ -138,7 +138,7 @@ button{color:inherit}
   letter-spacing:.13em;
   line-height:1;
 }
-.st-cell .v{font-size:12.5px;font-weight:500;line-height:1}
+.st-cell .v{font-family:var(--mono);font-size:12.5px;font-weight:500;line-height:1}
 .st-live .txt{
   font-family:var(--din);
   font-size:10.5px;
@@ -154,7 +154,8 @@ button{color:inherit}
   animation:pulse 2.4s ease-in-out infinite;
 }
 .dot.err{background:var(--down)}
-.st-clock{margin-left:auto;border-right:0;color:var(--grey);padding-right:0}
+.st-push{margin-left:auto;border-right:0;color:var(--grey);padding-right:0}
+.st-secondary{opacity:.62}
 .st-cell .v.sync-ok{color:var(--up)}
 .st-cell .v.sync-warn{color:var(--down)}
 
@@ -428,7 +429,7 @@ select option{background:#0A0C0E;color:var(--white)}
   width:6px;height:6px;border-radius:50%;
   background:#59626D;
 }
-.card .v{font-size:20px;font-weight:600;line-height:1;letter-spacing:-.01em}
+.card .v{font-family:var(--mono);font-size:20px;font-weight:600;line-height:1;letter-spacing:-.01em}
 .card .d,.perf .d{margin-top:9px;color:var(--grey);font-size:11.5px;line-height:1.55}
 .cards{
   display:grid;
@@ -460,6 +461,14 @@ select option{background:#0A0C0E;color:var(--white)}
 .cards .card.hero .hero-side .k{justify-content:flex-end}
 .cards .card.hero .hero-side .v{font-size:20px;font-weight:600;text-shadow:none}
 
+/* Grupo secundario de Inicio: liquidez y cuentas — mismo lenguaje visual,
+   menor peso tipográfico para que no compitan con NAV y P&L. */
+.cards-sec{margin-top:-1px}
+.cards-sec .card{padding:16px 18px}
+.cards-sec .card .k{font-size:9px;margin-bottom:9px}
+.cards-sec .card .v{font-size:15px}
+.cards-sec .card .d{margin-top:6px;font-size:10.5px}
+
 /* PERFORMANCE */
 .perf-grid{
   display:grid;
@@ -473,21 +482,21 @@ select option{background:#0A0C0E;color:var(--white)}
 .perf-grid.una,.perf-grid.top,.perf-grid.bot{border:0;border-radius:0}
 .perf-grid.bot{margin-top:14px;margin-bottom:28px}
 .perf{position:relative;padding:21px;border-radius:var(--r)}
-.perf .v{font-size:20px;font-weight:600;line-height:1;letter-spacing:-.01em}
+.perf .v{font-family:var(--mono);font-size:20px;font-weight:600;line-height:1;letter-spacing:-.01em}
 .perf.hero .v{font-size:28px;font-weight:700}
-.perf .d-money{margin-top:7px;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1}
+.perf .d-money{font-family:var(--mono);margin-top:7px;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1}
 .perf-note{max-width:880px;margin-top:14px;color:var(--grey-dim);font-size:11px;line-height:1.9}
 .perf-tbl td{padding:13px 12px}
 .cmp-tbl tbody tr.cmp-yo td{font-weight:700;background:rgba(255,255,255,.028)}
 .cmp-tbl .cmp-na{color:var(--grey-dim)}
-.cmp-tbl tfoot td{padding-top:14px;color:var(--grey);font-size:11px;line-height:1.75;font-weight:400;border-top:1px solid var(--hair)}
+.cmp-tbl tfoot td{padding-top:14px;color:var(--grey);font-family:var(--din);font-size:11px;line-height:1.75;font-weight:400;border-top:1px solid var(--hair)}
 .periodo-bar .periodo-hint{color:var(--grey-dim);font-size:11px;line-height:1.5}
 @media(max-width:900px){.periodo-bar .periodo-hint{display:none}}
 .contrib-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
 .contrib-bar{height:7px;min-width:1px;border-radius:99px}
 .contrib-bar.pos{background:var(--up)}
 .contrib-bar.neg{background:var(--down)}
-.contrib-wrap span{color:var(--grey);font-size:11.5px;white-space:nowrap}
+.contrib-wrap span{color:var(--grey);font-family:var(--mono);font-size:11.5px;white-space:nowrap}
 
 /* ALLOCATION */
 .alloc{
@@ -517,7 +526,7 @@ select option{background:#0A0C0E;color:var(--white)}
   text-transform:uppercase;
   letter-spacing:.09em;
 }
-.legend b{margin-left:auto;color:var(--white);font-size:12px;font-weight:400}
+.legend b{margin-left:auto;color:var(--white);font-family:var(--mono);font-size:12px;font-weight:400}
 
 /* CHARTS */
 .chart-card{
@@ -528,7 +537,7 @@ select option{background:#0A0C0E;color:var(--white)}
 }
 .chart-card svg{display:block;width:100%;height:210px;margin-top:15px;cursor:crosshair}
 .chart-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.chart-now{font-size:20px;font-weight:600;letter-spacing:-.01em}
+.chart-now{font-family:var(--mono);font-size:20px;font-weight:600;letter-spacing:-.01em}
 .chart-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--grey);font-size:11px;letter-spacing:.05em}
 .chart-yaxis{
   position:absolute;
@@ -539,12 +548,13 @@ select option{background:#0A0C0E;color:var(--white)}
   flex-direction:column;
   justify-content:space-between;
   color:var(--grey-dim);
+  font-family:var(--mono);
   font-size:10px;
   text-align:right;
   pointer-events:none;
 }
 .chart-axis{position:relative;height:16px;margin-top:4px}
-.chart-axis span{position:absolute;transform:translateX(-50%);color:var(--grey-dim);font-size:9.5px;letter-spacing:.06em}
+.chart-axis span{position:absolute;transform:translateX(-50%);color:var(--grey-dim);font-family:var(--mono);font-size:9.5px;letter-spacing:.06em}
 .chart-tooltip{
   display:none;
   position:absolute;
@@ -613,7 +623,7 @@ select option{background:#0A0C0E;color:var(--white)}
   margin-bottom:5px;
   border-bottom:1px solid var(--hair);
 }
-.grupo-h .tot{margin-left:auto;color:var(--grey);font-size:12px}
+.grupo-h .tot{margin-left:auto;color:var(--grey);font-family:var(--mono);font-size:12px}
 .grupo-h .tot b{color:var(--white);font-weight:500}
 .tbl-scroll{overflow-x:auto;padding-bottom:6px;scrollbar-width:thin}
 table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
@@ -631,6 +641,8 @@ th{
   white-space:nowrap;
 }
 th:first-child,td:first-child{text-align:left;padding-left:4px}
+.tbl-scroll th:first-child,.tbl-scroll td:first-child{position:sticky;left:0;z-index:2;background:var(--void-soft)}
+.tbl-scroll tbody tr:hover td:first-child{background:var(--void-soft)}
 th.l,td.l{text-align:left}
 td{
   padding:13px 12px;
@@ -638,10 +650,11 @@ td{
   color:#BEC6CF;
   text-align:right;
   white-space:nowrap;
+  font-family:var(--mono);
 }
 tbody tr{transition:background .14s var(--ease)}
 tbody tr:hover td{color:var(--white);background:rgba(255,255,255,.025)}
-td.tk{color:var(--white);font-family:var(--din);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+td.tk{color:var(--white);font-family:var(--mono);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 td .cta-tag{
   padding:3px 9px;
   border:1px solid var(--hair);
@@ -698,9 +711,9 @@ td .op-v{color:var(--down)}
   letter-spacing:.11em;
   white-space:nowrap;
 }
-.mc-v{margin-bottom:6px;font-size:15px;font-weight:600;line-height:1.1;letter-spacing:-.01em}
+.mc-v{font-family:var(--mono);margin-bottom:6px;font-size:15px;font-weight:600;line-height:1.1;letter-spacing:-.01em}
 .mc-b{display:flex;align-items:center;gap:7px;min-height:15px;flex-wrap:wrap}
-.mc-var{font-size:11.5px;font-weight:500}
+.mc-var{font-family:var(--mono);font-size:11.5px;font-weight:500}
 .mc-chip{
   padding:2px 7px;
   border:1px solid var(--hair);
@@ -921,6 +934,18 @@ footer b{color:var(--grey);font-weight:500}
   th,td{padding:12px 10px}
   .periodo-bar{align-items:stretch;flex-direction:column}
   .periodo-bar select{width:100%;min-width:0}
+  /* Mobile: solo columnas esenciales, no depender únicamente del scroll horizontal.
+     Posiciones: se mantiene Especie/Cantidad/Precio/Var. día/Valuación; se ocultan Cuenta y % Cartera.
+     Movimientos: se mantiene Fecha/Op./Especie/Total neto/acciones; el resto queda accesible al editar. */
+  .postbl th:nth-child(2),.postbl td:nth-child(2),
+  .postbl th:nth-child(7),.postbl td:nth-child(7){display:none}
+  .mov-tbl th:nth-child(4),.mov-tbl td:nth-child(4),
+  .mov-tbl th:nth-child(5),.mov-tbl td:nth-child(5),
+  .mov-tbl th:nth-child(6),.mov-tbl td:nth-child(6),
+  .mov-tbl th:nth-child(7),.mov-tbl td:nth-child(7),
+  .mov-tbl th:nth-child(8),.mov-tbl td:nth-child(8),
+  .mov-tbl th:nth-child(9),.mov-tbl td:nth-child(9),
+  .mov-tbl th:nth-child(11),.mov-tbl td:nth-child(11){display:none}
 }
 @media(max-width:640px){
   .macro-grid{grid-template-columns:repeat(2,1fr)!important}
@@ -942,11 +967,11 @@ footer b{color:var(--grey);font-weight:500}
   <div class="st-live"><span class="dot" id="dot"></span><span class="txt" id="conn">LIVE</span></div>
   <div class="st-cell"><span class="k">MEP</span><span class="v" id="fx-mep">—</span></div>
   <div class="st-cell"><span class="k">CCL</span><span class="v" id="fx-ccl">—</span></div>
-  <div class="st-cell"><span class="k">OFICIAL</span><span class="v" id="fx-oficial">—</span></div>
-  <div class="st-cell"><span class="k">BLUE</span><span class="v" id="fx-blue">—</span></div>
-  <div class="st-cell" id="sy-cell" style="display:none"><span class="k">Sync</span><span class="v" id="sy-badge">—</span></div>
+  <div class="st-cell"><span class="k">Brecha</span><span class="v" id="fx-brecha">—</span></div>
+  <div class="st-cell"><span class="k">Oficial</span><span class="v" id="fx-oficial">—</span></div>
+  <div class="st-cell st-secondary"><span class="k">Blue</span><span class="v" id="fx-blue">—</span></div>
+  <div class="st-cell st-push" id="sy-cell" style="display:none"><span class="k">Sync</span><span class="v" id="sy-badge">—</span></div>
   <div class="st-cell" id="bk-cell" style="display:none"><span class="k">Backup</span><span class="v" id="bk">—</span></div>
-  <div class="st-cell st-clock"><span class="k">LOCAL</span><span class="v" id="clock">—</span></div>
   <span id="fx-ts" style="display:none"></span>
 </div></div>
 
@@ -993,7 +1018,7 @@ footer b{color:var(--grey);font-weight:500}
 <footer>
   Precios: <b>data912.com</b> (BYMA, ~tiempo real) · Dólares: <b>dolarapi.com</b> · FCI: <b>argentinadatos.com</b> (VCP por 1.000 cuotapartes, cierre previo).
   Bonos, letras y ONs por precio c/100 VN. Costos bimonetarios al MEP del día de cada operación. Posiciones por costo promedio ponderado; ventas realizan P&amp;L contra el promedio.
-  Los datos se guardan en este navegador (localStorage) y no se sincronizan entre dispositivos: usá <b>Export/Import</b> para moverlos y como respaldo. Uso personal, verificar contra extracto del broker.
+  Los datos se guardan en este navegador (localStorage). <b>Sync</b> los sincroniza entre dispositivos vía un gist privado de GitHub — el estado y la última sincronización se ven arriba, en la barra de cotizaciones. <b>Export/Import</b> sirve como respaldo manual adicional. Uso personal, verificar contra extracto del broker.
 </footer>
 </div>
 
@@ -3859,6 +3884,12 @@ function render(soloEstructura){
       <div class="hero-side"><div class="k">${rendDiaLbl.k}</div><div class="v ${cls(rendDia.gan)}">${signoMoney(rendDia.gan)}</div>
         <div class="d ${cls(rendDia.gan)}">${rendDiaLbl.d}</div></div>
     </div></div>
+    <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
+      <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
+    ${Math.abs(realizado)>0.01?`<div class="card"><div class="k">P&amp;L · Realizado</div>
+      <div class="v ${cls(realizado)}">${signoMoney(realizado)}</div><div class="d">acumulado</div></div>`:""}
+  </div>
+    <div class="cards cards-sec">
     ${hayCash?(()=>{
       // Liquidez en 3 posiciones nativas — pesos, dólar MEP (custodia local) y
       // dólar CCL (custodia exterior) — cada una es plata distinta, con su
@@ -3888,10 +3919,6 @@ function render(soloEstructura){
         +`<div class="card"><div class="k">Liquidez · Consolidada</div><div class="v ${vCons<0?"down":""}">${vCons==null?"—":(vCons<0?"−":"")+money(Math.abs(vCons))}</div>
         <div class="d">${total?fmt((vCons||0)/total*100,1)+"% del total · ":""}pesos + MEP + CCL</div></div>`;
     })():""}
-    <div class="card"><div class="k">P&amp;L · Unreal</div><div class="v ${cls(pl)}">${signoMoney(pl)}</div>
-      <div class="d ${cls(pl)}">${costo>0?sgn(pl/costo*100)+" sobre costo":""}</div></div>
-    ${Math.abs(realizado)>0.01?`<div class="card"><div class="k">P&amp;L · Realizado</div>
-      <div class="v ${cls(realizado)}">${signoMoney(realizado)}</div><div class="d">acumulado</div></div>`:""}
     ${cuentas.map(c=>{const t=pos.filter(p=>p.cuenta===c).reduce((s,p)=>s+(V(p)||0),0)+cashCta(c);
       return `<div class="card"><div class="k">${c}</div><div class="v">${money(t)}</div><div class="d">${fmt(t/total*100,1)}% del total</div></div>`;}).join("")}
   </div>`;
@@ -4510,7 +4537,7 @@ function render(soloEstructura){
     const tg=rows.reduce((s,p)=>s+(V(p)||0),0);
     html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>${g.nombre}</h2>
       <span class="tot"><b>${money(tg)}</b> · ${fmt(tg/total*100,1)}%</span></div>
-      <div class="tbl-scroll"><table><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>% Cartera</th></tr></thead><tbody>
+      <div class="tbl-scroll"><table class="postbl"><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>% Cartera</th></tr></thead><tbody>
       ${rows.map(p=>{
         const nombre=p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker;
         const precioVista=p.px==null?null:
@@ -4604,7 +4631,7 @@ function render(soloEstructura){
       ${MOV_FILTRO_CTA?`<button class="btn mini danger" onclick="borrarPorCuenta()">Borrar ${movs.length} de ${MOV_FILTRO_CTA}</button>`:""}
       <span style="color:var(--muted);font-size:12px;font-family:var(--mono)">${String(movs.length).padStart(3,"0")} OPS</span>
     </div></div>
-    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Tipo</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Bruto</th><th>Comisión</th><th>Total neto</th><th>MEP del día</th><th></th></tr></thead><tbody>
+    <div class="tbl-scroll"><table class="mov-tbl"><thead><tr><th>Fecha</th><th class="l">Op.</th><th class="l">Especie</th><th class="l">Tipo</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Bruto</th><th>Comisión</th><th>Total neto</th><th>MEP del día</th><th></th></tr></thead><tbody>
     ${movs.map(m=>{
       const nombre=m.grupoCaucion?m.ticker:(m.tipo==="cash"?(ETIQ_CASH[m.op]||String(m.op||"").toUpperCase()):m.tipo==="fci"?m.fondo.split(" - ")[0]:m.ticker);
       const bruto=importeBrutoDe(m), comision=importeComisionDe(m), tot=importeNetoDe(m);
@@ -4637,6 +4664,11 @@ function pintarFX(){
   document.getElementById("fx-ccl").textContent=fmt(fx["contadoconliqui"],1);
   document.getElementById("fx-oficial").textContent=fmt(fx["oficial"],1);
   document.getElementById("fx-blue").textContent=fmt(fx["blue"],1);
+  const elBr=document.getElementById("fx-brecha");
+  if(elBr){
+    const mep=fx["bolsa"], ofi=fx["oficial"];
+    elBr.textContent=(mep>0&&ofi>0)?sgn((mep/ofi-1)*100):"—";
+  }
 }
 function estadoBackup(){
   const cell=document.getElementById("bk-cell"), el=document.getElementById("bk");
@@ -4648,10 +4680,6 @@ function estadoBackup(){
   const nuevos=DATOS.movimientos.filter(m=>m.fecha>ue).length;
   el.textContent=d<=1?"al día":`hace ${d}d`+(nuevos?` · ${nuevos} ops nuevas`:"");
   el.style.color=(d>14||nuevos>0)?"var(--down)":d>7?"var(--white)":"var(--grey)";
-}
-function tick(){
-  const el=document.getElementById("clock");
-  if(el) el.textContent=new Date().toLocaleTimeString("es-AR",{hour12:false});
 }
 function conn(ok){
   const d=document.getElementById("dot"), c=document.getElementById("conn");
@@ -7383,7 +7411,6 @@ cargarBenchmarks(); // en paralelo con todo lo demás; nadie se bloquea esperán
 // de historial sí espera a que termine, para no reconstruir contra
 // DATOS.movimientos que están por ser reemplazados por la nube.
 const syncInicial=SYNC?.gist?bajarNube(false).catch(()=>{}):Promise.resolve();
-tick(); setInterval(tick,1000);
 cargar();
 setInterval(cargar,120000);
 syncInicial.then(reconstruirHistorialSnapshots);
