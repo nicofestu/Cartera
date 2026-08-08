@@ -26,7 +26,6 @@
   --surf:linear-gradient(180deg,rgba(20,22,25,.94),rgba(8,9,11,.94));
   --surf-hover:linear-gradient(180deg,rgba(27,30,34,.97),rgba(12,13,15,.97));
   --surf-edge:rgba(255,255,255,.12);
-  --surf-tbl:linear-gradient(180deg,rgba(16,18,21,.96),rgba(10,11,13,.96));
   --white:#F4F7FA;
   --grey:#9AA3AE;
   --grey-dim:#626B77;
@@ -655,9 +654,13 @@ th{
   white-space:nowrap;
 }
 th:first-child,td:first-child{text-align:left;padding-left:4px}
-.tbl-scroll table{background:var(--surf-tbl)}
-.tbl-scroll th:first-child,.tbl-scroll td:first-child{position:sticky;left:0;z-index:2;background:var(--surf-tbl)}
-.tbl-scroll tbody tr:hover td:first-child{background:linear-gradient(rgba(255,255,255,.025),rgba(255,255,255,.025)),var(--surf-tbl)}
+.tbl-scroll th:first-child,.tbl-scroll td:first-child{
+  position:sticky;left:0;z-index:2;
+  background:rgba(9,10,12,.6);
+  -webkit-backdrop-filter:blur(9px) saturate(120%);
+  backdrop-filter:blur(9px) saturate(120%);
+}
+.tbl-scroll tbody tr:hover td:first-child{background:linear-gradient(rgba(255,255,255,.04),rgba(255,255,255,.04)),rgba(9,10,12,.6)}
 th.l,td.l{text-align:left}
 td{
   padding:13px 12px;
