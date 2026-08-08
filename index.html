@@ -538,6 +538,11 @@ select option{background:#0A0C0E;color:var(--white)}
 .chart-card svg{display:block;width:100%;height:210px;margin-top:15px;cursor:crosshair}
 .chart-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .chart-now{font-family:var(--mono);font-size:20px;font-weight:600;letter-spacing:-.01em}
+/* Gráfico chico de Inicio: mismo lenguaje visual, más compacto y sin
+   interacción (no tiene tooltip ni crosshair, a diferencia del de Rendimientos). */
+.chart-card.mini{padding:18px 20px 14px;margin-bottom:16px}
+.chart-card.mini svg{height:88px;margin-top:10px;cursor:default}
+.chart-card.mini .chart-now{font-size:16px}
 .chart-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--grey);font-size:11px;letter-spacing:.05em}
 .chart-yaxis{
   position:absolute;
@@ -622,9 +627,13 @@ select option{background:#0A0C0E;color:var(--white)}
   padding:0 2px 14px;
   margin-bottom:5px;
   border-bottom:1px solid var(--hair);
+  cursor:pointer;
+  user-select:none;
 }
+.grupo-h:hover h2{color:var(--cool)}
 .grupo-h .tot{margin-left:auto;color:var(--grey);font-family:var(--mono);font-size:12px}
 .grupo-h .tot b{color:var(--white);font-weight:500}
+.grupo-chev{color:var(--grey-dim);font-size:11px;flex-shrink:0}
 .tbl-scroll{overflow-x:auto;padding-bottom:6px;scrollbar-width:thin}
 table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
 th{
@@ -946,6 +955,10 @@ footer b{color:var(--grey);font-weight:500}
   .mov-tbl th:nth-child(8),.mov-tbl td:nth-child(8),
   .mov-tbl th:nth-child(9),.mov-tbl td:nth-child(9),
   .mov-tbl th:nth-child(11),.mov-tbl td:nth-child(11){display:none}
+  /* Consolidada: se mantiene Especie/Valor/Peso/Var. día/P&L; se ocultan Cuenta y Clase
+     (esas dos ya están disponibles en las tablas por clase, más abajo). */
+  .constbl th:nth-child(2),.constbl td:nth-child(2),
+  .constbl th:nth-child(3),.constbl td:nth-child(3){display:none}
 }
 @media(max-width:640px){
   .macro-grid{grid-template-columns:repeat(2,1fr)!important}
@@ -2674,6 +2687,11 @@ function rangoPeriodo(periodo){
   // autoconsistente con los tramos realmente sumados.
   if(periodo==="mensual"){ const ini=hoyF.slice(0,8)+"01",desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"Este mes",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
   if(periodo==="semanal"){ const ini=lunesDeSemana(hoyF),desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"Esta semana",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
+  // Ventanas móviles del segmented control (1M/3M/1A): mismos 30/90/365 días
+  // corridos hasta hoy, con el mismo patrón ini/desde que mensual y semanal.
+  if(periodo==="1m"){ const ini=restarDias(hoyF,29),desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"1M",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
+  if(periodo==="3m"){ const ini=restarDias(hoyF,89),desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"3M",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
+  if(periodo==="1a"){ const ini=restarDias(hoyF,364),desde=restarDias(ini,1); return {desde,hasta:hoyF,etiqueta:"1A",dias:diasEntre(desde,hoyF),desdeNominal:ini}; }
   if(/^\d{4}$/.test(periodo)){
     const fin=periodo+"-12-31";
     const hastaEf=fin>hoyF?hoyF:fin;
@@ -2682,6 +2700,13 @@ function rangoPeriodo(periodo){
   return {desde:null,hasta:hoyF,etiqueta:"Histórico completo"}; // "todo"
 }
 function setPeriodo(v){ PERIODO=v; if(ESTADO) render(); }
+// Colapso de tablas por clase de activo en Inicio (Soberanos/ONs/Acciones/
+// FCI/Cauciones/Liquidez) — solo estado de UI en memoria, no se persiste.
+let GRUPOS_COLAPSADOS=new Set();
+function toggleGrupo(id){
+  if(GRUPOS_COLAPSADOS.has(id)) GRUPOS_COLAPSADOS.delete(id); else GRUPOS_COLAPSADOS.add(id);
+  render();
+}
 
 // Fecha de primera compra por posición (tipo|ticker o fondo|cuenta). Se usa
 // tanto para el ranking "todo" como para el de período, así ninguno de los
@@ -3257,6 +3282,49 @@ function serieDiaria(){
   }
   out.inestables=inestables;
   return _MEMO[_k]=out;
+}
+
+/* ── Gráfico chico de Inicio ──────────────────────────────────────────────
+   Encadena los mismos tramos de serieDiaria() (Modified Dietz, la misma
+   fuente que usa el gráfico grande de Rendimientos) en una curva de retorno
+   acumulado. Deliberadamente NO es el NAV crudo: un depósito movería el NAV
+   sin que eso sea rendimiento, y esta es justamente la distinción que ya
+   resuelve Modified Dietz en el resto de la app. Sin overlay de benchmark,
+   sin tooltip: es una vista rápida de tendencia, no un reemplazo del gráfico
+   completo de Rendimientos. Devuelve null si no hay al menos 2 tramos. */
+function serieMiniInicio(){
+  const serie=serieDiaria();
+  if(!serie||serie.length<2) return null;
+  let acc=1;
+  const pts=[{fecha:serie[0].desde,ret:0}];
+  for(const t of serie){ acc*=(1+t.r); pts.push({fecha:t.fecha,ret:acc-1}); }
+  return pts;
+}
+function graficoMiniHtml(){
+  const pts=serieMiniInicio();
+  if(!pts||pts.length<2) return "";
+  const t0=new Date(pts[0].fecha+"T12:00").getTime(), t1=new Date(pts[pts.length-1].fecha+"T12:00").getTime();
+  const span=Math.max(1,t1-t0);
+  const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
+  const rets=pts.map(p=>p.ret);
+  let mn=Math.min(0,...rets), mx=Math.max(0,...rets);
+  const pad=(mx-mn)*0.12||0.02; mn-=pad; mx+=pad;
+  const rg=(mx-mn)||1;
+  const W=1000,H=110,pl=2,pt=8,pb=8;
+  const px=x=>(pl+x*(W-2*pl)).toFixed(1);
+  const py=y=>(H-pb-(y-mn)/rg*(H-pt-pb)).toFixed(1);
+  const yCero=py(0);
+  const d="M "+pts.map(p=>px(X(p.fecha))+" "+py(p.ret)).join(" L ");
+  const ultimo=pts[pts.length-1].ret, gan=ultimo>=0;
+  const desdeTxt=new Date(pts[0].fecha+"T12:00").toLocaleDateString("es-AR",{day:"2-digit",month:"short"});
+  return `<div class="chart-card mini"><div class="chart-head">
+      <div class="k">Evolución de la cartera</div>
+      <div class="chart-now ${cls(ultimo)}">${sgn(ultimo*100)}<span style="color:var(--grey-dim);font-size:11px;font-weight:400;margin-left:8px">${desdeTxt} → hoy</span></div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <line x1="0" y1="${yCero}" x2="${W}" y2="${yCero}" stroke="var(--hair)" stroke-width="1"/>
+      <path d="${d}" fill="none" stroke="${gan?"var(--up)":"var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    </svg></div>`;
 }
 
 // Encadena los retornos diarios de un tramo (desde exclusivo, hasta inclusive).
@@ -3922,6 +3990,7 @@ function render(soloEstructura){
     ${cuentas.map(c=>{const t=pos.filter(p=>p.cuenta===c).reduce((s,p)=>s+(V(p)||0),0)+cashCta(c);
       return `<div class="card"><div class="k">${c}</div><div class="v">${money(t)}</div><div class="d">${fmt(t/total*100,1)}% del total</div></div>`;}).join("")}
   </div>`;
+    html+=graficoMiniHtml();
   }
 
   // Asignación
@@ -3954,15 +4023,16 @@ function render(soloEstructura){
     // "todo" (ver más abajo), y se aclara en pantalla.
     fPrimGlobal=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
     ytdEsHistorico=PERIODO==="ytd"&&fPrimGlobal>(anioActual+"-01-01");
+    const segmentos=[["hoy","Hoy"],["1m","1M"],["3m","3M"],["ytd","YTD"],["1a","1A"],["todo","Todo"]];
+    const enAnio=/^\d{4}$/.test(PERIODO);
     periodoBarHtml=`<div class="periodo-bar"><span class="periodo-lbl">Período</span>
-      <select id="sel-periodo" onchange="setPeriodo(this.value)">
-      <option value="todo" ${PERIODO==="todo"?"selected":""}>Histórico completo</option>
-      <option value="hoy" ${PERIODO==="hoy"?"selected":""}>Hoy</option>
-      <option value="ytd" ${PERIODO==="ytd"?"selected":""}>YTD</option>
-      <option value="mensual" ${PERIODO==="mensual"?"selected":""}>Este mes</option>
-      <option value="semanal" ${PERIODO==="semanal"?"selected":""}>Esta semana</option>
-      ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
-    </select>
+      <div class="toggle" role="group" aria-label="Período">
+        ${segmentos.map(([v,lbl])=>`<button class="${PERIODO===v?"active":""}" onclick="setPeriodo('${v}')">${lbl}</button>`).join("")}
+      </div>
+      ${aniosDisp.length?`<select id="sel-periodo-anio" aria-label="Años anteriores" onchange="if(this.value)setPeriodo(this.value)">
+        <option value="">${enAnio?PERIODO:"Años anteriores…"}</option>
+        ${aniosDisp.map(a=>`<option value="${a}" ${PERIODO===a?"selected":""}>${a}</option>`).join("")}
+      </select>`:""}
       <span class="periodo-hint">Los retornos son <b>acumulados del período</b>, sin anualizar. La <b>TIR</b> es la única tasa anual (efectiva).</span></div>`;
   }
 
@@ -4530,14 +4600,38 @@ function render(soloEstructura){
     html+=chartHtml;
   }
 
+  // Tabla consolidada de posiciones — cruza todas las clases de activo, para
+  // tener de un vistazo lo que hoy está repartido en las tablas por clase de
+  // más abajo (que siguen existiendo, colapsables, para el detalle por
+  // instrumento). Reutiliza V()/PL()/p.pct ya calculados, no agrega cálculos.
+  if(TAB==="inicio"&&pos.length){
+    const filaGrupo=t=>GRUPOS.find(g=>g.tipos.includes(t))?.nombre||t;
+    const consRows=pos.slice().sort((a,b)=>(V(b)||0)-(V(a)||0));
+    html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Posiciones</h2>
+      <span class="tot">${consRows.length} activo${consRows.length===1?"":"s"}</span></div>
+      <div class="tbl-scroll"><table class="constbl"><thead><tr><th>Especie</th><th class="l">Cuenta</th><th class="l">Clase</th><th>Valor</th><th>Peso</th><th>Var. día</th><th>P&amp;L</th></tr></thead><tbody>
+      ${consRows.map(p=>{
+        const nombre=p.tipo==="fci"?(p.fondo||"").split(" - ")[0]:p.ticker;
+        const v=V(p), peso=v!=null&&total>0?v/total*100:null, plp=PL(p);
+        return `<tr><td class="tk">${nombre}</td>
+        <td class="l"><span class="cta-tag">${p.cuenta}</span></td>
+        <td class="l" style="color:var(--grey-dim);font-size:11px">${filaGrupo(p.tipo)}</td>
+        <td>${v==null?"—":money(v)}</td>
+        <td>${peso==null?"—":fmt(peso,1)+"%"}</td>
+        <td class="${cls(p.pct)}">${p.pct==null?"—":sgn(p.pct)}</td>
+        <td class="${plp!=null?cls(plp):""}">${plp!=null&&v!=null?signoMoney(plp):"—"}</td></tr>`;}).join("")}
+      </tbody></table></div></div>`;
+  }
+
   // Tablas de posiciones
   if(TAB==="inicio") for(const g of GRUPOS){
     const rows=pos.filter(p=>g.tipos.includes(p.tipo)).sort((a,b)=>(V(b)||0)-(V(a)||0));
     if(!rows.length) continue;
     const tg=rows.reduce((s,p)=>s+(V(p)||0),0);
-    html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>${g.nombre}</h2>
-      <span class="tot"><b>${money(tg)}</b> · ${fmt(tg/total*100,1)}%</span></div>
-      <div class="tbl-scroll"><table class="postbl"><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>% Cartera</th></tr></thead><tbody>
+    const gid="g:"+g.nombre, gColapsado=GRUPOS_COLAPSADOS.has(gid);
+    html+=`<div class="grupo"><div class="grupo-h" onclick="toggleGrupo('${gid}')"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>${g.nombre}</h2>
+      <span class="tot"><b>${money(tg)}</b> · ${fmt(tg/total*100,1)}%</span><span class="grupo-chev">${gColapsado?"▸":"▾"}</span></div>
+      ${gColapsado?"":`<div class="tbl-scroll"><table class="postbl"><thead><tr><th>Especie</th><th class="l">Cuenta</th><th>Cantidad</th><th>Precio</th><th>Var. día</th><th>Valuación</th><th>% Cartera</th></tr></thead><tbody>
       ${rows.map(p=>{
         const nombre=p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker;
         const precioVista=p.px==null?null:
@@ -4556,7 +4650,7 @@ function render(soloEstructura){
         <td class="${cls(p.pct)}">${p.pct==null?"—":sgn(p.pct)}</td>
         <td>${V(p)==null?"—":money(V(p))}</td>
         <td>${pctCartera==null?"—":fmt(pctCartera,1)+"%"}</td></tr>`;}).join("")}
-      </tbody></table></div></div>`;
+      </tbody></table></div>`}</div>`;
   }
 
   // Liquidez por cuenta
@@ -4567,10 +4661,12 @@ function render(soloEstructura){
       if(av<umbral) return `<td>—</td>`;
       return `<td class="${v<0?"down":""}">${v<0?"−":""}${sim}${fmt(av,dec)}</td>`;
     };
-    html+=`<div class="grupo"><div class="grupo-h"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
+    const liqColapsado=GRUPOS_COLAPSADOS.has("liquidez");
+    html+=`<div class="grupo"><div class="grupo-h" onclick="toggleGrupo('liquidez')"><span class="idx">${String(++secIdx).padStart(2,"0")}</span><h2>Liquidez</h2>
       <span class="tot"><b>${(cash<0?"−":"")+money(Math.abs(cash))}</b> · ${fmt(cash/total*100,1)}%</span>
-      <button class="btn mini" style="margin-left:14px" onclick="abrirSaldos()">✎ ajuste</button></div>
-      <div class="tbl-scroll"><table><thead>
+      <button class="btn mini" style="margin-left:14px" onclick="event.stopPropagation();abrirSaldos()">✎ ajuste</button>
+      <span class="grupo-chev">${liqColapsado?"▸":"▾"}</span></div>
+      ${liqColapsado?"":`<div class="tbl-scroll"><table><thead>
       <tr><th rowspan="2" class="l">Cuenta</th><th colspan="3">Disponible</th><th colspan="3">T + 1</th><th rowspan="2">Total (${VISTA==="ARS"?"ARS":VISTA==="MEP"?"USD MEP":"USD CCL"})</th></tr>
       <tr><th>ARS</th><th>MEP</th><th>CCL</th><th>ARS</th><th>MEP</th><th>CCL</th></tr>
       </thead><tbody>
@@ -4591,7 +4687,7 @@ function render(soloEstructura){
         ${celda(pesPend,0,"$ ")}${celda(mepPend,2,"US$ ")}${celda(cclPend,2,"US$ ")}
         <td class="${t<0?"down":""}">${(t<0?"−":"")+money(Math.abs(t))}</td></tr>`;}).join("")}
       </tbody></table>
-      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja, en sus tres posiciones nativas — pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). <b>Disponible</b> es lo ya liquidado, usable hoy; <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV, en la columna Total. El capital colocado o tomado en una caución sin vencer no aparece acá: es una posición más de la cartera (ver la sección Cauciones). El ajuste manual del modal "Saldos en cuenta" (para cerrar contra el extracto del bróker cuando falta cargar algún movimiento) va sumado adentro de Disponible y Total.</div></div>`;
+      <div class="hint" style="margin-top:10px">El efectivo se deriva de los movimientos: las ventas y las rentas acreditan, las compras, los gastos y los retiros debitan, y cada cuenta usa solo su propia caja, en sus tres posiciones nativas — pesos, dólar en custodia local (MEP) y dólar en custodia exterior (CCL). <b>Disponible</b> es lo ya liquidado, usable hoy; <b>T + 1</b> es lo operado que todavía no acreditó (T+1 hábil en acciones, CEDEARs y bonos) — ya está contado en el NAV, en la columna Total. El capital colocado o tomado en una caución sin vencer no aparece acá: es una posición más de la cartera (ver la sección Cauciones). El ajuste manual del modal "Saldos en cuenta" (para cerrar contra el extracto del bróker cuando falta cargar algún movimiento) va sumado adentro de Disponible y Total.</div>`}</div>`;
   }
 
   // Historial de movimientos
