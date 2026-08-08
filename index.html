@@ -4328,10 +4328,25 @@ function render(soloEstructura){
         // encadenar. Es preferible un número medido con otra definición —y
         // rotulado como tal— que un "—" en la card principal.
         const retTot=twUsable?rTot.ret:(baseCap>0?(totalBase+(srT?.retirado||0))/baseCap-1:0);
-        // La ganancia en plata NO se toca: valor + retirado − aportado es un
-        // hecho verificable contra el extracto del bróker, independiente del
-        // método con que se exprese el porcentaje.
-        const ganTot=totalBase+(srT?.retirado||0)-baseCap;
+        // El ajuste manual de saldos (ver ajusteManualARS / modal "Saldos en
+        // cuenta") ya está adentro de totalBase en TODAS las fechas (vía
+        // cashBase, más arriba) — incluido el primer cierre histórico, que lo
+        // arrastra desde el día 1. Pero NO está adentro de baseCap ("aportado",
+        // que sale de los movimientos tal cual, sin tocarlo). Esa asimetría es
+        // la causa real de que "Retorno total" no coincidiera en plata con
+        // ningún período con ventana (1A, 3M, YTD cuando no es histórico...):
+        // esos encadenan cierres diarios que YA traen el ajuste adentro desde
+        // el arranque, así que se cancela casi solo entre el primer cierre y
+        // el último — acá, en cambio, se restaba una sola vez contra un
+        // aportado que no lo conoce. Restarlo también acá (misma conversión
+        // por VISTA que ya usa cashBase unas líneas arriba) hace que las dos
+        // cuentas coincidan. "Capital aportado" (la card de al lado, más
+        // abajo) NO se toca: esa sigue mostrando la plata que realmente
+        // entró de afuera, tal cual se cargó — el ajuste no es un aporte.
+        const ajusteBaseCap=VISTA==="ARS"
+          ?cuentas.reduce((s,c)=>s+ajusteCta(c),0)
+          :cuentas.reduce((s,c)=>{const a=ajusteNativoCta(c); return s+a.ars/MEP+a.mep+a.ccl;},0);
+        const ganTot=totalBase+(srT?.retirado||0)-baseCap-ajusteBaseCap;
         // Cuánto del historial cubre de verdad la serie diaria. Si arranca
         // bastante después de la primera compra, el TWR se está perdiendo ese
         // tramo inicial y hay que avisarlo — es el mismo criterio que el aviso
