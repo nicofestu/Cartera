@@ -2842,8 +2842,18 @@ function remarcarAMercado(p,tipo,ident,fecha){
   if(!h) return;
   const mepF=mepHistorial(h.fecha);
   if(!mepF) return;
-  p.costARS=p.qty*h.precio;
-  p.costUSD=p.qty*h.precio/mepF;
+  // BUG corregido: bono/letra/on cotizan cada 100 VN (ver divisorDe/
+  // importeBrutoDe), pero acá se multiplicaba cantidad × precio sin dividir
+  // por ese divisor — inflaba el costo remarcado 100x para esos tres tipos
+  // (fci y manual ya estaban excluidos arriba; accion/cedear tienen
+  // divisor 1, así que a esos nunca los afectó). El costo remarcado quedaba
+  // ~100 veces más alto que el real, y esa diferencia se leía como una
+  // pérdida enorme apenas se vendía la posición dentro del período. Afecta
+  // sólo vistas de período (no "Histórico completo") cuando una posición de
+  // bono/letra/on ya estaba abierta antes del arranque de la ventana.
+  const precioUnit=h.precio/divisorDe(tipo);
+  p.costARS=p.qty*precioUnit;
+  p.costUSD=p.qty*precioUnit/mepF;
 }
 // Resultado realizado (ventas ya cerradas) que cayó específicamente dentro de
 // (desde,hasta]. Recorre TODO el historial de movimientos para llevar el
