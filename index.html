@@ -4095,7 +4095,7 @@ function render(soloEstructura){
     // "todo" (ver más abajo), y se aclara en pantalla.
     fPrimGlobal=[...DATOS.movimientos].sort((a,b)=>a.fecha.localeCompare(b.fecha))[0].fecha;
     ytdEsHistorico=PERIODO==="ytd"&&fPrimGlobal>(anioActual+"-01-01");
-    const segmentos=[["hoy","Hoy"],["1m","1M"],["3m","3M"],["ytd","YTD"],["1a","1A"],["todo","Todo"]];
+    const segmentos=[["hoy","Hoy"],["semanal","Semana"],["1m","1M"],["3m","3M"],["ytd","YTD"],["1a","1A"],["todo","Todo"]];
     const enAnio=/^\d{4}$/.test(PERIODO);
     periodoBarHtml=`<div class="periodo-bar"><span class="periodo-lbl">Período</span>
       <div class="toggle" role="group" aria-label="Período">
