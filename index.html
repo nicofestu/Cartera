@@ -3155,7 +3155,7 @@ async function cargar(){
     const invARS=pos.reduce((s,p)=>s+(p.valARS||0),0);
     const tARS=invARS+cashARS;
     const sinPrecio=pos.filter(p=>p.valARS==null).length;
-    if(pos.length>0&&sinPrecio===0){
+    if(pos.length>0&&sinPrecio===0&&SYNC_PULL_LISTO){
       const f=hoy(), i=DATOS.snapshots.findIndex(s=>s.fecha===f);
       const spH=sp500Hoy(), ndxH=ndxHoy();
       const snap={fecha:f,ars:Math.round(tARS),usd:Math.round(tARS/MEP*100)/100,
@@ -7718,13 +7718,22 @@ restaurar();
 normalizarCajaSnapshots(false);
 purgarSnapshots();
 cargarBenchmarks(); // en paralelo con todo lo demás; nadie se bloquea esperándolo
-// No se espera bajarNube para no demorar el primer render; pero el backfill
-// de historial sí espera a que termine, para no reconstruir contra
-// DATOS.movimientos que están por ser reemplazados por la nube.
+// SYNC_PULL_LISTO en false hasta que termine el primer intento de bajarNube
+// (haya salido bien, mal, o no haya sync configurado). Mientras esté en
+// false, cargar() sigue trayendo precios y pintando la pantalla al toque
+// (no se espera la red del gist para el primer render, a propósito), pero
+// NO captura ni sube el cierre del día — ver el gate en cargar(). Sin esto,
+// ese primer cargar() (que arranca ANTES de saber qué hay en la nube) podía
+// terminar subiendo el DATOS local viejo de este dispositivo, pisando
+// cierres que otro dispositivo ya había corregido — exactamente lo que le
+// pasó al cierre del 31/7. bajarNube ya vuelve a llamar a cargar() cuando
+// termina de bajar (ver esa función), así que el cierre de hoy se termina
+// capturando y subiendo igual, solo que después de saber qué había.
+let SYNC_PULL_LISTO=!SYNC?.gist;
 const syncInicial=SYNC?.gist?bajarNube(false).catch(()=>{}):Promise.resolve();
 cargar();
 setInterval(cargar,120000);
-syncInicial.then(reconstruirHistorialSnapshots);
+syncInicial.then(()=>{ SYNC_PULL_LISTO=true; reconstruirHistorialSnapshots(); cargar(); });
 buscarFondoNasa(); // no bloqueante — la app funciona igual si esto falla
 </script>
 </body>
