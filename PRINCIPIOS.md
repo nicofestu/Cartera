@@ -4,6 +4,11 @@ Documento único. Se lee **antes** de proponer o implementar cualquier cambio.
 Reemplaza a `PRINCIPIOS.md` y `PROYECTO_CARTERA_CONTEXTO_E_INSTRUCCIONES.md`
 como archivos separados: este es el único.
 
+Última revisión: 2026-08-11 (tarde) — hito 2 (Cauciones) marcado ✅ en
+§26; se documenta el snapshot diario vía Vercel Cron Job como mejora
+deliberada sobre Cartera legado (no una copia — ver §26, punto 3), y se
+agrega el manejo de `SUPABASE_SERVICE_ROLE_KEY` a §24.
+
 Última revisión: 2026-08-11 — se agrega §26: objetivo final de cartera-app
 (paridad completa con Cartera) y el plan de hitos para llegar ahí. También
 se sincroniza esta copia con la del repo `nicofestu/Cartera`, que había
@@ -927,6 +932,17 @@ permisos de escritura sobre el repo privado.
 - Después de un uso puntual del token, recordarle al usuario la opción de
   revocarlo desde `Settings → Developer settings → Personal access tokens`,
   igual que se hizo acá.
+- **`SUPABASE_SERVICE_ROLE_KEY` es un secreto de máximo riesgo: se salta
+  Row Level Security por completo, para cualquier tabla, de cualquier
+  usuario.** Mismas reglas que un token de GitHub y una más: además de
+  vivir solo en variables de entorno server-side de Vercel (nunca
+  `NEXT_PUBLIC_*`, nunca en un componente cliente), el código que la usa
+  (`lib/supabase/admin.ts`) tiene que quedar acotado a jobs de sistema sin
+  usuario (hoy, solo `app/api/cron/snapshot`) — nunca usarla para responder
+  una request de un usuario común, ni siquiera "para simplificar" una
+  consulta puntual. Si aparece una segunda razón para necesitarla, se
+  evalúa igual de estricto, no se da por sentado que ya está aprobada
+  porque ya se usa en otro lado.
 
 ---
 
@@ -977,12 +993,34 @@ se confunda con "todavía no llegamos").
    (argentinadatos.com), MEP/CCL (dolarapi.com), NAV total, liquidez por
    pool, P&L no realizado por posición, en `/dashboard/cartera`.
    Simplificaciones declaradas y pendientes de cerrar más adelante: sin
-   cauciones, sin factor de ratio de CEDEAR, caja sin liquidación T+n ni
-   saldos declarados (ver hito 5 más abajo).
-2. **Cauciones** — pendiente. Alta colocadora/tomadora, las 3 patas
-   sintéticas ligadas por `grupo_caucion` (la tabla `movimientos` ya las
-   prevé), interés devengado sumado al NAV, capital excluido de Modified
-   Dietz (§9 de este documento).
+   factor de ratio de CEDEAR, caja sin liquidación T+n ni saldos
+   declarados (ver hito 5 más abajo).
+2. **Cauciones** — ✅ hecho (2026-08-11, PR #1 [sic, ver commits directos a
+   `main`]). Alta colocadora/tomadora, las 3 patas sintéticas ligadas por
+   `grupo_caucion`, interés devengado sumado al NAV. Simplificación
+   declarada: el MEP de cada pata usa el MEP en vivo al momento de la
+   carga, no una serie histórica por fecha (mepDeFecha no está portado
+   todavía — ver hito 3).
+3. **Snapshot diario de NAV — mejora deliberada sobre Cartera legado**
+   (2026-08-11, PR #2). En Cartera legado el snapshot personal (a
+   diferencia del historial de PRECIOS de mercado, que sí corre solo vía
+   GitHub Action) solo se grababa si el usuario abría el navegador — un
+   día sin visitas era un día sin dato. cartera-app SÍ tiene backend, así
+   que se aprovechó para hacerlo mejor, no solo igual: un Vercel Cron Job
+   (`vercel.json`, `app/api/cron/snapshot`) corre lunes a viernes 21:30 UTC
+   (mismo horario que la Action de historial de Cartera) y graba el NAV de
+   TODOS los usuarios sin depender de que nadie entre a la app. Usa un
+   cliente Supabase con la service role key (`lib/supabase/admin.ts`, ver
+   §24 para el manejo de ese secreto) porque necesita leer datos de
+   usuarios sin sesión activa — es el único lugar del código que debería
+   usar ese cliente. El cálculo de NAV se compartió entre la página y el
+   cron (`lib/cartera/nav.ts`, función `calcularNav`) para que no haya dos
+   lugares calculando el mismo número de formas distintas.
+   Este es un ejemplo del criterio general: cuando cartera-app tiene una
+   capacidad real que Cartera legado no podía tener (backend, cron), no
+   hay obligación de copiar la limitación del legado — se declara la
+   mejora acá, explícitamente, para que quede claro que es una decisión y
+   no una copia parcial.
 3. **Rendimientos** — pendiente. Serie de NAV en el tiempo (usa la tabla
    `snapshots`, ya existe), Modified Dietz con la distinción real de
    aportes externos vs. rotación interna (§9), TIR/XIRR, benchmark contra
