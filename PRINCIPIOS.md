@@ -4,7 +4,14 @@ Documento único. Se lee **antes** de proponer o implementar cualquier cambio.
 Reemplaza a `PRINCIPIOS.md` y `PROYECTO_CARTERA_CONTEXTO_E_INSTRUCCIONES.md`
 como archivos separados: este es el único.
 
-Última revisión: 2026-07-30.
+Última revisión: 2026-08-11 — se agrega §26: objetivo final de cartera-app
+(paridad completa con Cartera) y el plan de hitos para llegar ahí. También
+se sincroniza esta copia con la del repo `nicofestu/Cartera`, que había
+quedado atrasada (le faltaban §0bis y §23-25).
+
+Revisión 2026-08-10 — se agrega §0bis y §23-25: cartera-app pasa a ser el
+producto multiusuario activo; Cartera queda como legado y referencia de
+lógica (ver §0bis).
 
 ---
 
@@ -37,10 +44,51 @@ de NASA.
 
 ---
 
+## 0bis. Dos proyectos, un objetivo (desde 2026-08)
+
+**Cartera deja de ser el destino final.** A partir de acá conviven dos
+repositorios con roles distintos:
+
+| | `nicofestu/Cartera` | `nicofestu/cartera-app` |
+|---|---|---|
+| Rol | **Legado / referencia de lógica.** Congelado salvo fixes puntuales. | **Producto activo.** Acá se construye la versión multiusuario. |
+| Visibilidad | Público, GitHub Pages | Privado, desplegado en Vercel |
+| Stack | HTML+JS embebido, sin backend, un solo archivo | Next.js + TypeScript, Supabase (auth + DB), Vercel |
+| Usuarios | Uno (Nicolás), datos en gist secreto | Múltiples, cada uno con su cuenta y sus datos |
+| Cambios | Se pegan a mano en el editor web de GitHub | Se commitean vía GitHub API (o el flujo que el usuario prefiera) |
+
+**Qué significa "legado" para Cartera:** toda la lógica financiera ya
+validada acá (motor de benchmark, métricas de riesgo, Modified Dietz,
+manejo de cauciones, reconstrucción de NAV, etc. — ver §5 en adelante) es
+la **fuente de verdad conceptual** que hay que portar a cartera-app. No se
+reinventa esa lógica desde cero: se traduce, adaptándola a un modelo de
+datos multiusuario (Supabase con Row Level Security en vez de un gist por
+persona). Cartera sigue recibiendo correcciones si aparece un bug real,
+pero no features nuevas pensadas solo para el caso de un usuario.
+
+**Qué significa "activo" para cartera-app:** acá el criterio ya no es "que
+funcione para mi cartera" ni siquiera "que funcione para cualquier
+cartera calculada en un archivo suelto" — es que **funcione de forma
+segura para N usuarios simultáneos que no se conocen entre sí, sin que
+los datos de uno puedan verse, mezclarse ni pisarse con los de otro.**
+Ver §23 para la disciplina de cambios específica de este repo.
+
+Cuando una instrucción de este documento (pensada originalmente para
+Cartera) no tenga sentido literal en cartera-app —por ejemplo, "pegar en
+el editor web de GitHub"— se aplica el equivalente correcto para ese
+stack, no se ignora el espíritu de la instrucción.
+
+---
+
 ## 1. Principio rector: escalar, no adaptar
 
 **Esta aplicación se construye para servir a cualquier cartera, no a una en
 particular.** Es el criterio que gana cuando hay conflicto con otros.
+
+*(Nota 2026-08: este principio nació pensando en generalizar la lógica de
+cálculo dentro de un archivo de uso personal. Sigue vigente tal cual para
+Cartera. En cartera-app se vuelve literal — "cualquier cartera" pasa a ser
+"cualquier usuario, con aislamiento real de datos" — ver §23.)*
 
 Que hoy la use una sola persona no autoriza a resolver nada "porque en este
 caso alcanza". Un atajo que funciona para una cartera concreta —y solo por
@@ -602,6 +650,12 @@ Antes de entregar: comparar contra la versión real de GitHub (§3), conservar
 las correcciones existentes, validar sintaxis (§14) y verificar las
 funciones críticas con smoke test (§15).
 
+**Este flujo (archivo completo / bloque acotado + pegar en el editor web)
+es el de Cartera.** En cartera-app, cuando el usuario autoriza el commit
+directo (compartiendo un token), la entrega es el commit mismo vía API —
+ver §23 para la disciplina de SHA, verificación previa y orden de subida
+en ese contexto.
+
 ---
 
 ## 17. Diseño e identidad visual
@@ -752,3 +806,217 @@ movimientos y sin exigirle conocimientos técnicos al usuario.
 
 Evaluar cada mejora contra estabilidad, mantenimiento y el principio rector
 de §1.
+
+---
+
+## 23. cartera-app — disciplina de cambios seguros
+
+Repo: `nicofestu/cartera-app` (privado). Stack: Next.js + TypeScript, App
+Router, Supabase (`@supabase/ssr`) para auth y base de datos, desplegado en
+Vercel con deploy automático desde `main`.
+
+```
+app/auth/callback/route.ts   intercambia el link de confirmación por sesión
+app/login/, app/signup/      formularios (Server Actions)
+app/dashboard/                área autenticada
+app/actions.ts                Server Actions: signIn, signUp, signOut
+lib/supabase/client.ts        cliente para componentes de navegador
+lib/supabase/server.ts        cliente para Server Components / Actions
+middleware.ts                 protege /dashboard, redirige sesiones activas
+supabase/schema.sql           esquema de base de datos
+```
+
+Con múltiples usuarios reales, un cambio mal hecho ya no arruina un solo
+archivo local: puede exponer datos de una persona a otra, romper el login
+de todos, o silenciosamente empezar a mezclar información entre cuentas.
+Por eso, para este repo, se suma a todo lo anterior (§3, §14, §15, §16):
+
+**1. Nunca asumir el estado del repo — verificar siempre antes de escribir.**
+Antes de tocar cualquier archivo, traer su contenido y su `sha` actual vía
+la API de contenidos de GitHub (`GET /repos/.../contents/{path}`), igual
+que se hizo para `route.ts` y `page.tsx`. El commit vía API (`PUT
+/contents/{path}`) requiere ese `sha`: si alguien más (el usuario, Vercel,
+otra sesión) tocó el archivo mientras tanto, el `sha` no matchea y GitHub
+**rechaza el commit** en vez de pisarlo. No forzar ese chequeo ni
+reintentar con un `sha` viejo — volver a bajar el archivo y reevaluar.
+
+**2. Cada archivo que se modifica se valida antes de subir, no después.**
+Mínimo: chequeo sintáctico (parser de TypeScript/JSX — ver ejemplo real
+usado para `route.ts`/`page.tsx`). Cuando el cambio toca lógica de datos
+(queries a Supabase, RLS, Server Actions que escriben), preferir inspección
+manual explícita de qué usuario puede leer/escribir qué fila, en vez de
+asumir que el cliente ya filtra correctamente.
+
+**3. Row Level Security (RLS) es la frontera entre usuarios — nunca se
+desactiva ni se bypassea "para probar".** Toda tabla en `supabase/schema.sql`
+que contenga datos de usuario necesita policies de RLS activas. Un cambio de
+esquema que agregue una tabla sin policy es, por defecto, un cambio que dejó
+los datos de todos los usuarios visibles para todos los usuarios. Antes de
+dar por cerrado un cambio de esquema: confirmar explícitamente qué policy
+aplica y qué usuario queda excluido.
+
+**4. Las migraciones de base de datos se registran, nunca se aplican solo
+a mano desde el dashboard de Supabase.** Si un cambio de esquema se hizo
+manualmente por urgencia, el paso siguiente es escribirlo en
+`supabase/schema.sql` (o en un archivo de migración versionado) para que
+el repo refleje el estado real de la base. Un esquema que solo existe en el
+dashboard de Supabase y no en el repo es un cambio que se puede perder o
+duplicar sin que nadie lo note.
+
+**5. Nada se pisa: preferir Server Actions y RLS por sobre lógica en el
+cliente,** para que un usuario no pueda, manipulando el navegador, escribir
+o sobreescribir datos de otro. La validación de "esto es tuyo" ocurre en el
+servidor (Server Action + policy de Supabase), no solo en la UI.
+
+**6. Los cambios no se commitean directo a `main` — pasan por una rama y un
+Preview Deployment antes de mergear.** Flujo estándar para cualquier cambio
+en cartera-app, salvo que el usuario pida explícitamente saltarlo:
+
+1. Crear una rama nueva desde `main` (vía API: `POST /git/refs`), con
+   nombre descriptivo (`fix/auth-callback-token-hash`,
+   `feat/importador-cocos`, etc.).
+2. Commitear los cambios a esa rama, no a `main` (mismo mecanismo de §23.1,
+   pasando `branch` en el body del `PUT /contents/{path}`).
+3. Abrir un Pull Request de esa rama contra `main` (`POST /pulls`).
+4. Avisarle al usuario el link del PR. Vercel genera automáticamente un
+   Preview Deployment por PR — el link aparece en los checks del PR o en el
+   dashboard de Vercel. Pedirle al usuario que lo pruebe ahí, no en `main`.
+5. **Mergear el PR solo después de que el usuario confirme explícitamente**
+   que probó el preview y está conforme. No asumir que "el build pasó" en
+   Vercel equivale a que el usuario ya lo vio funcionar.
+6. Si el usuario pide explícitamente saltar este flujo (cambio trivial,
+   apuro puntual), commitear directo a `main` como antes, pero dejarlo
+   explícito en la respuesta: "esto se sube directo a `main`, sin preview".
+
+Antes de un cambio con riesgo de romper el login o el acceso a datos
+(middleware, callback de auth, policies, variables de entorno), además:
+explicitar qué pasa con una sesión ya iniciada, qué pasa con un usuario a
+mitad del flujo de signup, y cómo se revierte si algo sale mal (ver §24
+para secretos).
+
+**7. Distinguir siempre, igual que en §15 para Cartera:** chequeo
+sintáctico ≠ compilación real de Next.js con los tipos del proyecto ≠
+prueba en navegador. No hay Playwright ni el toolchain completo de
+Next.js/Supabase en este entorno — decirlo explícitamente cuando aplique,
+no dar a entender que se corrió el build real si no se corrió.
+
+---
+
+## 24. Secretos y tokens
+
+cartera-app maneja credenciales reales: claves de Supabase, y cuando el
+usuario decide compartir uno, un Personal Access Token de GitHub con
+permisos de escritura sobre el repo privado.
+
+- **Un token que el usuario pega en el chat se usa para esa conversación y
+  no se guarda en memoria persistente entre sesiones — ni siquiera si el
+  usuario lo pide explícitamente.** Si hace falta en una conversación
+  nueva, se vuelve a pedir. No se escribe en `PRINCIPIOS.md`, en las
+  instrucciones del proyecto, ni en ningún archivo de project knowledge:
+  es una credencial de escritura sobre un repo privado, no un dato de
+  contexto. Esto ya es la práctica seguida y se deja documentado acá para
+  que no cambie.
+- Recomendar siempre: tokens *fine-grained*, acotados al repo puntual,
+  con expiración corta, y permiso de "Contents" al mínimo necesario (solo
+  lectura si no hace falta escribir).
+- Nunca proponer pegar un secreto (API key, contraseña, token) en un archivo
+  del repo, en un componente de cliente (`"use client"`), ni en cualquier
+  variable `NEXT_PUBLIC_*` — esas quedan expuestas en el bundle del
+  navegador. Los secretos van solo en variables de entorno server-side de
+  Vercel, leídas desde Server Actions / Route Handlers / Server Components.
+- Después de un uso puntual del token, recordarle al usuario la opción de
+  revocarlo desde `Settings → Developer settings → Personal access tokens`,
+  igual que se hizo acá.
+
+---
+
+## 25. Checklist de regresión — cartera-app
+
+Antes de dar un cambio por terminado en este repo, repasar:
+
+**Auth:** signup con email nuevo, confirmación de email (banner visible),
+login, logout, intento de entrar a `/dashboard` sin sesión (debe redirigir
+a `/login`), intento de ver `/login` o `/signup` con sesión activa (debe
+redirigir a `/dashboard`).
+
+**Aislamiento entre usuarios:** con dos cuentas de prueba, confirmar que
+ninguna puede leer ni escribir datos de la otra — ni por la UI ni
+consultando la tabla directamente si hay acceso al dashboard de Supabase.
+
+**Despliegue:** el cambio pasó por una rama + PR con Preview Deployment
+(§23.6), no se commiteó directo a `main` salvo excepción explícita; el
+usuario confirmó haber probado el preview antes del merge; las variables de
+entorno necesarias existen en Vercel para el ambiente correspondiente
+(Preview y Production pueden tener valores distintos — confirmarlo si el
+cambio toca configuración).
+
+**Nada roto en lo que ya andaba:** login/logout de una cuenta que ya
+funcionaba antes del cambio, siguen funcionando después.
+
+Este checklist crece a medida que cartera-app sume funcionalidad
+(portfolios, movimientos, importadores) trayendo lógica desde Cartera —
+cada pieza portada debería sumar acá su propia línea de regresión.
+
+---
+
+## 26. Objetivo final de cartera-app y plan de hitos
+
+**Meta explícita:** cartera-app tiene que llegar a ser, en funcionalidad,
+un calco de Cartera (nicofestu/Cartera) — multiusuario, con la misma
+lógica financiera ya validada en el legado — no una versión reducida
+permanente. Que hoy cubra menos no es el diseño final: es el estado
+intermedio de un plan en curso. Esta sección es ese plan, y se actualiza
+a medida que se completa cada hito o se decide dejar algo afuera a
+propósito (lo segundo se anota acá también, explícitamente, para que no
+se confunda con "todavía no llegamos").
+
+### Núcleo financiero (hitos 1-4)
+
+1. **Valuación de mercado y NAV** — ✅ hecho (2026-08-11, PR #1, merge
+   `865febe3`). Precios en vivo (data912.com), VCP de FCI
+   (argentinadatos.com), MEP/CCL (dolarapi.com), NAV total, liquidez por
+   pool, P&L no realizado por posición, en `/dashboard/cartera`.
+   Simplificaciones declaradas y pendientes de cerrar más adelante: sin
+   cauciones, sin factor de ratio de CEDEAR, caja sin liquidación T+n ni
+   saldos declarados (ver hito 5 más abajo).
+2. **Cauciones** — pendiente. Alta colocadora/tomadora, las 3 patas
+   sintéticas ligadas por `grupo_caucion` (la tabla `movimientos` ya las
+   prevé), interés devengado sumado al NAV, capital excluido de Modified
+   Dietz (§9 de este documento).
+3. **Rendimientos** — pendiente. Serie de NAV en el tiempo (usa la tabla
+   `snapshots`, ya existe), Modified Dietz con la distinción real de
+   aportes externos vs. rotación interna (§9), TIR/XIRR, benchmark contra
+   S&P 500 y Nasdaq 100 vía CEDEARs SPY/QQQ por encadenamiento de retornos
+   (§5).
+4. **Importadores de bróker** — pendiente. Carga masiva desde CSV de
+   Balanz, IEB+, Puente y Cocos, arrancando por el que más uso tenga.
+
+### Hito 5+ — paridad completa con Cartera (sin priorizar todavía)
+
+Todo lo que Cartera legado tiene y cartera-app todavía no, relevado el
+2026-08-11. Se prioriza según lo que el usuario más use, no en el orden
+en que está escrito acá:
+
+- Métricas de riesgo: Sortino, alfa de Jensen, volatilidad, Sharpe (§10).
+- Reconstrucción de NAV histórico (`reconstruirHistorialSnapshots`, §11)
+  y el gráfico de evolución de cartera en el tiempo.
+- Vistas ARS / MEP / CCL intercambiables (§8) — hoy cartera-app solo
+  muestra ARS y USD MEP fijos.
+- Panel Macro (dólares, commodities, tasas).
+- Formulario de precios manuales en la UI (la tabla `precios_manuales`
+  ya existe en el esquema; falta la pantalla para cargarlos).
+- Saldos declarados por cuenta y liquidación T+n de la caja (mencionado
+  como simplificación pendiente en el hito 1; la tabla `saldos` ya
+  existe).
+- Principales contribuidores/detractores, tabla de retorno por activo.
+- Identidad visual (§17) y fondo NASA (§13) — hoy cartera-app es
+  funcional pero visualmente básico.
+- Diagnósticos en pantalla (brechas de datos, sobreventas, etc.).
+
+### Qué significa "terminado"
+
+cartera-app no se considera terminado mientras falte algo de esta lista,
+salvo que el usuario decida explícitamente excluirlo (y en ese caso se
+anota acá el motivo, no se borra en silencio — mismo criterio que "un
+dato faltante se declara" de §1). Cada hito nuevo que se complete se
+marca ✅ con fecha y referencia al PR, igual que el hito 1.
