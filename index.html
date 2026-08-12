@@ -5171,6 +5171,10 @@ function guardarSaldos(){
       nuevo[row.dataset.cuenta]={ars,usdMep,usdCcl,real:true};
   });
   DATOS.saldos=nuevo;
+  // Sin esto, declarar un saldo y operar en la MISMA sesión (sin recargar)
+  // dejaba la plata de esa operación cancelada por el ajuste dinámico viejo
+  // hasta el próximo reload — ver migrarSaldosRealesAjustes().
+  migrarSaldosRealesAjustes();
   persistirYSync(); cerrarModales();
   if(ESTADO) render(); else cargar();
 }
