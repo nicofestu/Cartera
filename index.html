@@ -2807,6 +2807,17 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
       if(!mepHoy||!mepDesde) return {...fila,desdeEf,motivo:`sin MEP histórico al ${h.fecha}`};
       ret=(p.px/mepHoy)/(h.precio/mepDesde)-1;
     }
+    // Si hubo una venta parcial dentro de la ventana, combinar el remanente
+    // con lo cobrado por las unidades vendidas. De lo contrario, una venta de
+    // hoy haría que SPCX (u otro activo) pareciera rendir solo sobre la
+    // cantidad que sobrevivió a la venta.
+    const totalActivo=resultadoTotalActivoEnPeriodo(p,desde,hasta,h,valHoy);
+    if(totalActivo){
+      const dias=diasEntre(desdeEf,hasta);
+      return {...fila,ret:totalActivo.ret,desdeEf,dias,tna:anualizar(totalActivo.ret,dias),
+        valDesde:totalActivo.valorInicio,valHoy:totalActivo.valorFinal,
+        valActual:valHoy,gan:totalActivo.gan,vendidoEnPeriodo:true};
+    }
     // Valor actual (en la moneda de VISTA) y valor implícito al arranque
     // efectivo del período, derivado del mismo ret (asume cantidad estable
     // dentro de la ventana — igual limitación que "ret" arriba). Con eso se
@@ -2817,6 +2828,42 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
     return {...fila,ret,desdeEf,dias,tna:anualizar(ret,dias),valDesde,
       gan:(valHoy!=null&&valDesde!=null)?valHoy-valDesde:null};
   });
+}
+// Cuando una posición viva tuvo ventas parciales dentro de la ventana, su
+// retorno no puede calcularse solo con las unidades que quedaron. Hay que
+// sumar el efectivo neto de las ventas y descontar las compras realizadas en
+// la misma ventana. Esto es especialmente importante en "Hoy": una venta
+// intradía reduce la cantidad, pero no debe borrar del retorno las unidades
+// que estuvieron en cartera al comienzo del día.
+function resultadoTotalActivoEnPeriodo(p,desde,hasta,h,valHoy){
+  if(!p||!h||p.tipo==="fci"||p.tipo==="manual"||p.pxMoneda!=="ARS") return null;
+  const key=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
+  const movs=DATOS.movimientos.filter(m=>m.tipo!=="cash"&&
+    m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta===key&&
+    m.fecha>desde&&m.fecha<=hasta);
+  const ventas=movs.filter(m=>m.op==="venta");
+  if(!ventas.length) return null;
+  const compras=movs.filter(m=>m.op==="compra");
+  const cantidadVendida=ventas.reduce((s,m)=>s+Number(m.cantidad||0),0);
+  const cantidadComprada=compras.reduce((s,m)=>s+Number(m.cantidad||0),0);
+  const cantidadInicio=p.qty+cantidadVendida-cantidadComprada;
+  if(!(cantidadInicio>1e-9)) return null;
+  const mepInicio=VISTA==="ARS"?1:mepHistorial(h.fecha);
+  if(!(mepInicio>0)) return null;
+  const precioInicio=h.precio/divisorDe(p.tipo);
+  const valorInicio=VISTA==="ARS"
+    ?cantidadInicio*precioInicio
+    :cantidadInicio*precioInicio/mepInicio;
+  const importeVista=m=>{
+    const importe=importeNetoDe(m);
+    const ars=m.moneda==="USD"?importe*m.mep:importe;
+    return VISTA==="ARS"?ars:(m.moneda==="USD"?importe:importe/m.mep);
+  };
+  const cobrado=ventas.reduce((s,m)=>s+importeVista(m),0);
+  const invertido=compras.reduce((s,m)=>s+importeVista(m),0);
+  const valorFinal=(valHoy||0)+cobrado-invertido;
+  if(!(valorInicio>0)||!isFinite(valorFinal)) return null;
+  return {valorInicio,valorFinal,ret:valorFinal/valorInicio-1,gan:valorFinal-valorInicio};
 }
 // Orden común de los dos cuadros por activo: primero lo que se pudo medir
 // (mejor a peor retorno), y al final lo que no, para que no se mezcle.
