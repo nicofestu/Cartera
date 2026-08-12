@@ -4163,9 +4163,36 @@ function render(soloEstructura){
       <b>${sinPx.map(p=>p.tipo==="fci"?p.fondo.split(" - ")[0]:p.ticker).join(", ")}</b>.
       Revisá que el tipo de instrumento sea el correcto (editando el movimiento) o cargá un precio manual.</div></div>`;
   } else if(TAB==="rendimientos"&&sr&&sr.aporte>0&&(PERIODO==="todo"||ytdEsHistorico)){
-    const retHoy=(totalBase+sr.retirado)/sr.aporte-1; // + lo retirado: plata que salió pero fue generada/aportada
-    const pts=sr.puntos.filter(p=>p.fecha!==hoy());
-    pts.push({fecha:hoy(),ret:retHoy});
+    // Antes esta rama medía el punto de HOY con (valor+retirado)/aportado−1
+    // (money-weighted, sobre capital acumulado) mientras las cards de más
+    // abajo y la rama "otro período" de este mismo gráfico ya median con la
+    // serie diaria encadenada (Modified Dietz, time-weighted) — dos números
+    // para "Rendimiento acumulado" en la misma pantalla, uno de cada lado.
+    // Ahora usa la MISMA fuente que las cards (retornoEntre sobre serieT),
+    // con el mismo respaldo money-weighted de las cards para cuando los
+    // cierres diarios no cubren al menos la mitad del historial.
+    const fPrimCh=fPrimGlobal;
+    const diasTotCh=diasEntre(fPrimCh,hoy());
+    const rTotCh=retornoEntre(serieT,fPrimCh,hoy(),diasTotCh);
+    const cobTotCh=rTotCh?Math.min(1,rTotCh.diasReales/Math.max(1,diasTotCh)):0;
+    const twUsableCh=!!rTotCh&&cobTotCh>=0.5; // mismo COBERTURA_MIN que las cards
+    const tramoCh=twUsableCh?serieT.filter(d=>d.fecha>fPrimCh&&d.fecha<=hoy()):[];
+    const desdeCh=twUsableCh?(tramoCh[0].desde||fPrimCh):sr.desde;
+    let retHoy, pts, ganHoy;
+    if(twUsableCh){
+      let c=1; ganHoy=0;
+      pts=[{fecha:desdeCh,ret:0}];
+      for(const d of tramoCh){ c*=(1+d.r); ganHoy+=d.v-d.v0-d.flujo; pts.push({fecha:d.fecha,ret:c-1}); }
+      retHoy=c-1;
+    } else {
+      // Respaldo: sin cierres diarios suficientes para encadenar todo el
+      // historial, igual que en las cards — money-weighted sobre lo
+      // aportado, rotulado como tal más abajo (no "time-weighted").
+      retHoy=(totalBase+sr.retirado)/sr.aporte-1;
+      pts=sr.puntos.filter(p=>p.fecha!==hoy());
+      pts.push({fecha:hoy(),ret:retHoy});
+      ganHoy=totalBase+sr.retirado-sr.aporte;
+    }
     // Benchmark S&P 500: se encadena día a día con la resolución diaria real
     // (SP500_HIST) en vez de solo en los hitos dispersos de la cartera —
     // antes se graficaba solo en esos mismos puntos y por eso salía una
@@ -4174,10 +4201,10 @@ function render(soloEstructura){
     // ≤US$${NAV_MIN_USD} queda "pausado": ese día no suma el movimiento del
     // índice, para no simular una inversión en SPY que en los hechos no
     // existía mientras la plata estaba afuera de la cartera.
-    const bench0=benchSP(sr.desde,hoy(),sr.hitos);
-    const bPts=bench0?bench0.pts:[{fecha:sr.desde,ret:0}];
+    const bench0=benchSP(desdeCh,hoy(),sr.hitos);
+    const bPts=bench0?bench0.pts:[{fecha:desdeCh,ret:0}];
     const benchHoy=bench0?bench0.ret:null;
-    const t0=new Date(sr.desde+"T12:00").getTime(), t1=new Date(hoy()+"T12:00").getTime();
+    const t0=new Date(desdeCh+"T12:00").getTime(), t1=new Date(hoy()+"T12:00").getTime();
     const span=Math.max(1,t1-t0);
     const X=f=>(new Date(f+"T12:00").getTime()-t0)/span;
     const rets=[...pts.map(p=>p.ret),...bPts.map(p=>p.ret)];
@@ -4195,7 +4222,7 @@ function render(soloEstructura){
     const meses=[]; let cur=new Date(t0); cur.setDate(1);
     while(cur.getTime()<=t1){
       const f=cur.toLocaleDateString("sv-SE");
-      if(f>=sr.desde) meses.push({x:X(f),lbl:cur.toLocaleDateString("es-AR",{month:"short"}).toUpperCase().replace(".","")});
+      if(f>=desdeCh) meses.push({x:X(f),lbl:cur.toLocaleDateString("es-AR",{month:"short"}).toUpperCase().replace(".","")});
       cur.setMonth(cur.getMonth()+1);
     }
     // Escala Y: 4 niveles
@@ -4213,7 +4240,7 @@ function render(soloEstructura){
         <line x1="0" y1="${yCero}" x2="${W}" y2="${yCero}" stroke="#5E5E5E" stroke-width="1" stroke-dasharray="3 3"/>
         ${dBench?`<path d="${dBench}" fill="none" stroke="#8E8E8E" stroke-width="1.5" stroke-dasharray="5 4" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`:""}
         <path d="${dLine}" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-        ${sr.hitos.map(hh=>hh.fecha>sr.desde?`<line x1="${px(X(hh.fecha))}" y1="${H-pb}" x2="${px(X(hh.fecha))}" y2="${H-pb+4}" stroke="#5E5E5E" stroke-width="1"/>`:"").join("")}
+        ${sr.hitos.map(hh=>hh.fecha>desdeCh?`<line x1="${px(X(hh.fecha))}" y1="${H-pb}" x2="${px(X(hh.fecha))}" y2="${H-pb+4}" stroke="#5E5E5E" stroke-width="1"/>`:"").join("")}
         <circle cx="${px(1)}" cy="${py(retHoy)}" r="3.5" fill="${gan?"#00E08A":"#FF3B30"}"/>
         <line id="rend-crosshair" x1="0" y1="${pt}" x2="0" y2="${H-pb}" stroke="#3A3A3A" stroke-width="1" style="display:none"/>
         <circle id="rend-hover-nav" r="3" fill="#FFFFFF" style="display:none"/>
@@ -4222,9 +4249,9 @@ function render(soloEstructura){
       <div class="chart-tooltip" id="rend-tooltip"></div>
       <div class="chart-yaxis">${ticks.slice().reverse().map(t=>`<span>${sgn(t.v*100)}</span>`).join("")}</div>
       <div class="chart-axis">${meses.map(m=>`<span style="left:${(m.x*100).toFixed(1)}%">${m.lbl}</span>`).join("")}</div>
-      <div class="chart-meta"><span>Desde ${sr.desde} · ${diasEntre(sr.desde,hoy())} días</span>
-        <span>Aportado ${money(sr.aporte)}${sr.retirado>1?" · retirado "+money(sr.retirado):""}${sr.caja>1?" · caja "+money(sr.caja):""}</span>
-        <span class="${cls(retHoy)}">${signoMoney(totalBase+sr.retirado-sr.aporte)}</span></div>
+      <div class="chart-meta"><span>Desde ${fPrimCh} · ${diasTotCh} días</span>
+        <span>${twUsableCh?"time-weighted":"sobre lo aportado — todavía no hay cierres diarios para todo el período"} · Aportado ${money(sr.aporte)}${sr.retirado>1?" · retirado "+money(sr.retirado):""}${sr.caja>1?" · caja "+money(sr.caja):""}</span>
+        <span class="${cls(retHoy)}">${signoMoney(ganHoy)}</span></div>
       ${pts.length<4?`<div class="chart-note">La curva se dibuja sobre hitos ciertos: el inicio, cada operación y los cierres que registra el dashboard. Gana resolución a medida que lo abrís en días sucesivos.</div>`:""}
     </div>`;
     chartTipData={pts:pts.map(p=>({x:X(p.fecha),ret:p.ret})),bpts:dBench?bPts.map(p=>({x:X(p.fecha),ret:p.ret})):[],
