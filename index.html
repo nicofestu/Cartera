@@ -1980,7 +1980,11 @@ function persistir(){
    en otro plazo (contado inmediato, T+2). */
 const LIQ_DEF={bono:1,letra:1,on:1,accion:1,cedear:1,manual:1};
 function plazoLiq(m){
-  if(m&&typeof m.liq==="number"&&isFinite(m.liq)) return Math.max(0,Math.round(m.liq));
+  // La sincronización/importación puede traer el plazo como número o como
+  // texto. Ambos deben respetar 0: una venta SPCX en contado inmediato no
+  // puede caer al default T+1 por una diferencia de tipo.
+  if(m&&m.liq!==undefined&&m.liq!==null&&m.liq!==""&&isFinite(Number(m.liq)))
+    return Math.max(0,Math.round(Number(m.liq)));
   if(!m||m.tipo==="cash") return 0;   // depósito, retiro, gasto y renta ya están acreditados
   if(m.tipo==="fci") return m.categoria==="mercadoDinero"?0:1; // money market rescata en el día
   return LIQ_DEF[m.tipo]??1;
@@ -2193,6 +2197,36 @@ function ajusteNativoCta(cuenta){
   return {ars:dec.ars==null?0:dec.ars-d.ars,
           mep:dec.mep==null?0:dec.mep-d.mep,
           ccl:dec.ccl==null?0:dec.ccl-d.ccl};
+}
+// Los saldos guardados con `real:true` representan el saldo del bróker en el
+// momento en que fueron cargados. No deben seguir funcionando como un saldo
+// final fijo: si después se registra una venta, el aumento de caja derivado
+// quedaría neutralizado por un ajuste manual que se recalcula hacia abajo.
+// Los convertimos una sola vez en un ajuste inicial fijo. Así el NAV conserva
+// el nivel previo, pero toda operación posterior —incluidas ventas T+0 y T+1—
+// modifica efectivamente la liquidez y el NAV.
+function migrarSaldosRealesAjustes(){
+  let cambio=false;
+  for(const [cuenta,x] of Object.entries(DATOS.saldos||{})){
+    if(!x||!x.real||x._ajusteFijoMovimientos) continue;
+    // Tomamos como base el cierre anterior a hoy. De ese modo, si el usuario
+    // cargó el saldo antes de operar hoy, las operaciones de hoy se suman una
+    // sola vez al saldo declarado (en particular, la venta SPCX).
+    const hBase=hitoEn(hitosCaja(),restarDias(hoy(),1))||{};
+    const d={ars:(hBase.ctaPesos||{})[cuenta]||0,
+      mep:(hBase.ctaMep||{})[cuenta]||0,
+      ccl:(hBase.ctaCcl||{})[cuenta]||0};
+    const n={...x};
+    if(x.ars!=null) n.ars=(+x.ars||0)-d.ars;
+    if(x.usdMep!=null) n.usdMep=(+x.usdMep||0)-d.mep;
+    if(x.usdCcl!=null) n.usdCcl=(+x.usdCcl||0)-d.ccl;
+    delete n.real;
+    n._ajusteFijoMovimientos=true;
+    DATOS.saldos[cuenta]=n;
+    cambio=true;
+  }
+  if(cambio) persistir();
+  return cambio;
 }
 function ajusteManualARS(mep){
   // El ajuste en dólares se lleva al MEP acá adentro también para el pool CCL:
@@ -4041,6 +4075,9 @@ function render(soloEstructura){
           +(convMoneda(a.mep,"MEP",VISTA,MEP,CCL)||0)
           +(convMoneda(a.ccl,"CCL",VISTA,MEP,CCL)||0);
   };
+  // `cjCta` ya contiene TODA la caja derivada de los movimientos, incluidas
+  // las ventas aunque todavía estén T+1. La clasificación Disponible/T+1 se
+  // hace únicamente después, con `cashPendCta`; nunca se descuenta del NAV.
   const cashCta=c=>(cjCta[c]||0)+ajusteCta(c);
   const cashPendCta=c=>(pendCta[c]||0);
   const cash=cuentas.reduce((s,c)=>s+cashCta(c),0);
@@ -5977,7 +6014,7 @@ async function conectarSync(){
       if(nLocal>0&&nRemoto>0&&!confirm(`El gist tiene ${nRemoto} movimientos y este dispositivo tiene ${nLocal}.\n\nAl conectar se cargan los datos de la nube y se reemplazan los locales.\n\n¿Continuar?`)){
         SYNC=null; btn.disabled=false; btn.textContent="Conectar"; return;
       }
-      if(nRemoto>0){ DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...remoto}; persistir(); }
+      if(nRemoto>0){ DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...remoto}; migrarSaldosRealesAjustes(); persistir(); }
       SYNC.rev=remoto.rev||0;
     } else {
       const g=await apiGist("POST","",{description:"Cartera — datos de seguimiento",public:false,
@@ -6039,6 +6076,7 @@ async function bajarNube(manual){
     const nR=(remoto.movimientos||[]).length, nL=DATOS.movimientos.length;
     if(manual&&nL>0&&!confirm(`Traer ${nR} movimientos de la nube y reemplazar los ${nL} de este dispositivo?`)) return;
     DATOS={movimientos:[],snapshots:[],preciosManuales:{},saldos:{},ctasImportadas:{},...remoto};
+    migrarSaldosRealesAjustes();
     SYNC.rev=remoto.rev||0; SYNC.ultimo=new Date().toISOString(); SYNC.error=false;
     guardarSync(); persistir(); normalizarCajaSnapshots(true); purgarSnapshots();
     pintarSync(); cargar();
@@ -7760,6 +7798,7 @@ function pintarFondoNasa(img){
 }
 /* ══════════════ Init ══════════════ */
 restaurar();
+migrarSaldosRealesAjustes();
 // Antes de purgar: la purga juzga cada cierre contra el capital vigente y con
 // la definición vieja de caja algunos quedaban artificialmente bajos.
 normalizarCajaSnapshots(false);
