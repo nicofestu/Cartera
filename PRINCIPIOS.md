@@ -4,6 +4,47 @@ Documento único. Se lee **antes** de proponer o implementar cualquier cambio.
 Reemplaza a `PRINCIPIOS.md` y `PROYECTO_CARTERA_CONTEXTO_E_INSTRUCCIONES.md`
 como archivos separados: este es el único.
 
+Última revisión: 2026-08-12 (noche, más tarde) — el usuario corrigió con
+ChatGPT (commits directos a `main`, sin el pipeline de validación habitual)
+un bug real de saldos declarados que cancelaba ventas contado inmediato en
+el NAV y la liquidez, más un bug de interpretación de `liq` como string.
+Revisado, validado (`node --check` + identificadores + smoke tests) y
+encontrado un hueco residual que Claude corrigió encima: la migración de
+saldos (`migrarSaldosRealesAjustes()`) solo corría al recargar la página o
+sincronizar, no al guardar el modal de saldos, así que declarar un saldo y
+operar en la misma sesión sin recargar seguía perdiendo la plata. Ver §6,
+regla 13, para el detalle completo (causa raíz, por qué el arreglo original
+no alcanzaba solo, y la lección para el hito 7+ de cartera-app).
+
+Última revisión: 2026-08-12 (noche) — se reescribe §5 para describir la
+arquitectura ACTUAL del benchmark (tres fuentes encadenadas por retorno:
+CEDEAR en USD, `historial/{año}.json` como respaldo reciente, índice
+oficial por empalme; más dividendos compuestos y ajuste de ratio). El
+texto anterior documentaba la decisión original, más simple, que ya había
+quedado atrás en el código.
+
+Última revisión: 2026-08-12 — hito 5 (Rendimientos) en §26: se agrega
+benchmark contra S&P 500 y Nasdaq 100 (`lib/cartera/benchmark.ts`, nuevo),
+puerto del motor ACTUAL de Cartera legado. Con esto el núcleo financiero de
+Rendimientos queda completo; lo que resta pasa a hito 7+.
+
+Última revisión: 2026-08-12 — hito 5 (Rendimientos) en §26: se agrega TIR
+(XIRR) y selector de período (`rangoPeriodo`, `retornoEntre`, `xirr`,
+`tirDe`), puerto fiel del legado, con selector Hoy/Semana/Mes/YTD/1A/Todo
+en `/dashboard/cartera`. Sigue en curso: falta benchmark (hito 3d).
+
+Última revisión: 2026-08-12 — hito 5 (Rendimientos) en §26: se agrega
+retorno por tramo con Modified Dietz (`serieDiaria()`), puerto fiel de
+`serieDiaria()` del legado, ya mostrado en `/dashboard/cartera` junto al
+retorno acumulado. Sigue en curso: falta TIR/XIRR y benchmark (hito 3d).
+
+Última revisión: 2026-08-11 (noche) — se agrega hito nuevo en §26:
+migración de `movimientos` y `snapshots` del gist legado a cartera-app, con
+prioridad ALTA (antes de cerrar Rendimientos) a pedido explícito del
+usuario para no perder esa historia. Se renumeran los hitos del núcleo
+(ahora 1-6) y "hito 5+" pasa a llamarse "hito 7+" para no chocar.
+Rendimientos (hito 5) marcado "en curso": retorno acumulado ya hecho.
+
 Última revisión: 2026-08-11 (tarde) — hito 2 (Cauciones) marcado ✅ en
 §26; se documenta el snapshot diario vía Vercel Cron Job como mejora
 deliberada sobre Cartera legado (no una copia — ver §26, punto 3), y se
@@ -199,66 +240,87 @@ un dato histórico, se le entregan los valores al usuario para que los cargue
 
 ---
 
-## 5. Decisión: cómo se mide el benchmark
+## 5. Cómo se mide el benchmark
 
-### Estado anterior
+### Por qué no es un factor de calibración
 
-El benchmark contra S&P 500 y Nasdaq 100 combinaba dos fuentes de distinta
-naturaleza: para el pasado, los cierres oficiales del índice (FRED) en
-`historial/indices.json`; para hoy, el precio del CEDEAR convertido a
-"puntos de índice" mediante un **factor de calibración fijo** (`SPY_K`,
-`QQQ_K`), retocado a mano cada tanto.
+Hasta 2026-07 el benchmark combinaba dos fuentes de distinta naturaleza:
+cierres oficiales del índice (FRED) para el pasado, y el precio del CEDEAR
+convertido a "puntos de índice" con un **factor de calibración fijo**
+(`SPY_K`, `QQQ_K`) para hoy. El 2026-07-30 el S&P 500 cerró **+1,66%** y la
+app mostró **−0,79%**: `indices.json` estaba atrasado cuatro ruedas (la
+búsqueda de nivel no distinguía "cerrado" de "todavía no cargado") y el
+factor de calibración estaba desactualizado, agregando un retorno inventado
+que dependía de cuándo se había calibrado, no del mercado.
 
-### Qué falló
+La medición de fondo (CEDEAR SPY en dólares vs. S&P 500, 4,53 años,
+2022-01-18 → 2026-07-29: +59,33% vs. +59,84%, **−0,07% anual**) mostró que
+no hay deriva sistemática entre el CEDEAR y el índice — lo que hay es
+**ruido** (desvío diario 0,32% en condiciones normales, 1,18% en toda la
+serie), y un factor fijo congela el ruido del día en que se calibró y lo
+arrastra a toda ventana corta. Ese es el defecto de fondo, no la deriva.
 
-El 2026-07-30 el S&P 500 cerró **+1,66%** y la app mostró el índice
-**−0,79%** en el período "Hoy". Dos errores sumados:
+### Arquitectura actual: tres fuentes encadenadas por retorno, nunca por nivel
 
-1. `indices.json` se edita a mano y estaba atrasado cuatro ruedas. La
-   búsqueda de nivel no distingue "ese día el mercado estuvo cerrado" de
-   "ese día todavía no lo cargué": devolvía el último cierre que tuviera. La
-   base terminó siendo un cierre de cuatro días antes.
-2. El factor de calibración estaba desactualizado, y eso agrega un retorno
-   inventado que no depende del mercado sino de cuándo se calibró.
+**El benchmark se mide con la serie de retornos del CEDEAR. Nunca se
+compara un nivel de una fuente contra un nivel de otra** — eso fue
+precisamente el bug de arriba. La serie sintética se construye día a día
+(`construirBench()`), probando en orden:
 
-### La evidencia que ordena el diagnóstico
+1. **El CEDEAR en dólares**, especie D (MEP) y, si ese día no operó, C
+   (CCL) de respaldo — `usdEn()`. Fuente: `datos/precios/bench/{SPY,SPYD,
+   SPYC,QQQ,QQQD,QQQC}.json`, archivo curado con precios reales del ETF,
+   cobertura desde 2023-01-02. Las dos puntas de un cociente van SIEMPRE
+   por la misma vía (D con D, o C con C): mezclar D con C adentro de una
+   división lee el salto entre dos mercados como movimiento de precio
+   (§6.7).
+2. **`historial/{año}.json`** (el mismo archivo que escribe el Action de
+   snapshot diario, `snapshot_historial.py`) para los días recientes que
+   el archivo curado todavía no alcanzó — es la fuente rápida y siempre al
+   día, a costa de ser menos curada que (1).
+3. **El índice oficial** (FRED, `historial/indices.json`) **empalmado por
+   RETORNO**, solo si las dos fechas del tramo existen literalmente en esa
+   serie — acá no se usa relleno hacia atrás (`nivelEn()`): eso fue
+   exactamente el bug original. Cubre lo que las dos fuentes de arriba no
+   alcanzan (antes de 2023).
 
-Medido el 2026-07-30 sobre el CEDEAR SPY en dólares contra el S&P 500:
+Si ninguna de las tres resuelve un tramo, no se inventa nada: se arrastra
+la referencia anterior y se sigue sin perder el hilo (`out[f]` no se
+escribe ese día).
 
-| ventana | CEDEAR | índice | diferencia |
-|---|---|---|---|
-| 4,53 años (2022-01-18 → 2026-07-29) | +59,33% | +59,84% | **−0,07% anual** |
+**Filtro de cordura (`RATIO_OK`):** todo cociente entre dos ruedas tiene
+que caer en (0,8, 1,25). Fuera de esa banda no es mercado — es un dato
+roto o un cambio de ratio no declarado — y se descarta el tramo.
 
-**No hay deriva sistemática entre el CEDEAR y el índice.** El dividendo no la
-produce: el S&P 500 que reporta la prensa es un índice de precio y también lo
-excluye, igual que el precio del ETF, que cae en la fecha ex.
+**Cambios de ratio del CEDEAR** (`AJUSTES_RATIO`, ver también §12): antes
+de cualquier cociente, todos los precios se re-expresan a la escala vieja
+multiplicando por el factor acumulado hasta esa fecha (`factorRatioPrecio`,
+SIEMPRE activo acá — a diferencia del ajuste a nivel posición, que se
+desactiva si el usuario ya cargó el split a mano, este es un hecho del
+mercado y no depende de qué registró nadie). Sin esto, el día del split de
+SPY (×3, 2026-05-29) se leería como una caída de precio de −66% y
+`RATIO_OK` lo descartaría como dato roto.
 
-Lo que sí hay es **ruido**: la relación CEDEAR↔índice oscila con desvío diario
-de 0,32% en condiciones normales y 1,18% mirando toda la serie, con episodios
-de distorsión cambiaria real (octubre 2023). Un factor fijo **congela el
-ruido del día en que se calibró** y lo arrastra para siempre a toda ventana
-corta. Ese, y no la deriva, es el defecto de fondo.
+**Dividendos** (`historial/dividendos.json`, claves `SPY`/`QQQ`): se
+componen en la fecha ex (`factorDiv()`), en TODO tramo por igual —venga del
+CEDEAR o del empalme oficial—, porque las dos fuentes son retorno de PRECIO
+y las dos excluyen el dividendo. Formato: lista de `{ex, monto, px, frac}`
+por ticker, ordenada por `ex`; el motor solo usa `frac` (=monto/px), la
+fracción del precio que cae ese día — un monto absoluto no se le puede
+sumar al CEDEAR, que está en otra escala.
 
-### Decisión
+**El nivel que se muestra es cosmético**: toda la serie arranca en 1 y al
+final se multiplica por una constante que la ancla al primer cierre oficial
+común. Una constante sobre toda la serie se cancela en cualquier cociente
+— no por convención, por álgebra — y no interviene en ningún retorno.
 
-**El benchmark se mide con la serie de retornos del CEDEAR. No se convierte a
-puntos de índice mediante ningún factor calibrado a mano.**
+**El de HOY** (`nivelHoyEncadenado()`) parte del último nivel conocido y lo
+mueve con la variación EN VIVO del CEDEAR desde ese mismo día. Sin precio
+en vivo, se devuelve el último nivel (retorno 0 hoy) — el dato honesto, no
+uno inventado.
 
-- La serie del benchmark se construye **encadenando variaciones**, no
-  niveles. Cada día aporta su retorno; nunca se compara un precio de una
-  fuente contra un precio de otra.
-- Donde el CEDEAR no tiene cobertura, se **empalma la serie oficial del
-  índice por retorno**, no por nivel. Así conviven las dos fuentes sin
-  necesidad de un factor de conversión: un cambio de escala no altera un
-  retorno.
-- Los dividendos del ETF se componen en la fecha ex, desde
-  `historial/dividendos.json`.
-- El **nivel** que se muestre, si se muestra alguno, se ancla al cierre
-  oficial del índice en la primera fecha común. Es cosmético y no interviene
-  en ningún retorno.
-- El gráfico y las cards leen **la misma función**. Nunca dos maneras de
-  medir lo mismo: ya ocurrió antes y llegaron a dar signos opuestos (ver
-  también §11, la corrección del 28/07 sobre este mismo punto).
+El gráfico y las cards leen la misma función. Nunca dos maneras de medir lo
+mismo: ya ocurrió antes y llegaron a dar signos opuestos (§11).
 
 ### Consecuencias que hay que asumir
 
@@ -277,33 +339,43 @@ puntos de índice mediante ningún factor calibrado a mano.**
 
 ### Panel macro
 
-Mostraba **niveles** de índices y commodities derivados del mismo tipo de
-factor calibrado a mano. Al 2026-07-30 estaban desviados hasta 2% (oro).
-Decisión: **mostrar solo la variación porcentual, sin nivel.** Un número de
-display equivocado sigue siendo un número equivocado.
+Mostraba **niveles** de índices y commodities derivados de un factor
+calibrado a mano (`MACRO_K`, en `indices.json`, ver más abajo). Al
+2026-07-30 estaban desviados hasta 2% (oro). Decisión: **mostrar solo la
+variación porcentual, sin nivel.** Un número de display equivocado sigue
+siendo un número equivocado.
 
 ### `historial/indices.json` — formato y quién lo escribe
 
-Contiene las series diarias de cierre de S&P 500 y Nasdaq 100 (fuente FRED)
-más los factores de calibración de respaldo. Formato comprimido:
+Contiene las series diarias de cierre de S&P 500 y Nasdaq 100 (fuente
+FRED), que el motor de benchmark usa para el empalme oficial (fuente 3 de
+arriba). Formato comprimido:
 
 ```json
-{ "sp500": { "b": "2022-01-03", "g": "1111311114…", "v": [4796.56, 4793.54, …] },
+{ "sp500": { "b": "2022-01-03", "g": [1,1,1,3,…], "v": [4796.56, 4793.54, …] },
   "ndx":   { … },
   "calibracion": { "SPY_K": 577.0, "QQQ_K": 787.7, "MACRO_K": { "sp": 577.0, … } } }
 ```
 
 `b` = fecha del primer cierre, `v` = valores, `g` = huecos en días entre
-cierres consecutivos (un dígito por hueco). Lo expande `expandirSerie()`.
+cierres consecutivos (un número por hueco). Lo expande `expandirSerie()`.
+
+**El campo `calibracion` es vestigial**: era la base del factor fijo que
+motivó todo este rediseño (arriba) y ya no lo lee ningún camino de
+cálculo — ni el benchmark principal (que usa retornos del CEDEAR + ratio,
+no un factor) ni el panel macro (que ya no muestra niveles). Se conserva
+en el archivo por compatibilidad hacia atrás, no por necesidad.
 
 **El Action no lo toca**: `snapshot_historial.py` solo escribe
 `historial/{año}.json`. **`indices.json` se edita a mano** y por eso se
 atrasa — el diseño tiene que asumir que va a estar atrasado, no confiar en
-que no lo esté (ver arriba, "qué falló").
+que no lo esté (ver arriba, "por qué no es un factor de calibración").
 
-Carga: `cargarBenchmarks()`, asíncrona y memoizada. Arranca vacía;
-`nivelEn()` devuelve `null` cuando no hay serie, así que hasta que termine la
-descarga la app funciona igual y simplemente no dibuja la línea del índice.
+Carga: `cargarBenchmarks()`, asíncrona y memoizada — junto con
+`datos/precios/bench/*.json` y `historial/dividendos.json`, las tres
+fuentes de la arquitectura de arriba. Arranca vacía; `nivelEn()` devuelve
+`null` cuando no hay serie, así que hasta que termine la descarga la app
+funciona igual y simplemente no dibuja la línea del índice.
 
 **Trampa ya resuelta:** `cargar()` y `reconstruirHistorialSnapshots()`
 guardan el nivel del índice dentro de cada snapshot, y esos snapshots van al
@@ -350,6 +422,27 @@ Salen de errores ya cometidos. Cada una tuvo su costo.
     `DATOS`, `persistir()`, `persistirYSync()`, `restaurar()`,
     `subirNube()`, `bajarNube()`, importación y exportación.
 12. **Los cambios visuales no deben modificar cálculos financieros.**
+13. **Un ajuste de caja "declarado" (saldo real del bróker) no puede
+    recalcularse dinámicamente contra la caja nativa en cada render.**
+    Bug real, corregido el 2026-08-12: `saldoDeclaradoCta()` con
+    `real:true` devolvía el valor declarado tal cual, y `ajusteNativoCta()`
+    hacía `declarado − nativo(ahora)` en cada cálculo. Cualquier movimiento
+    posterior (una venta, un depósito) subía la caja nativa y el ajuste
+    bajaba en la misma magnitud, cancelándolo — la plata "desaparecía" del
+    NAV y de la liquidez aunque el movimiento estuviera bien cargado. La
+    corrección (`migrarSaldosRealesAjustes()`) convierte el saldo declarado
+    en un ajuste FIJO, calculado una sola vez contra el cierre del día
+    anterior, para que los movimientos posteriores se sumen en vez de
+    cancelarse. Ese primer arreglo (hecho con ChatGPT, commit directo sin
+    pasar por el pipeline de validación de §14-15) solo corría la migración
+    al recargar la página o sincronizar — declarar un saldo y operar en la
+    misma sesión sin recargar seguía perdiendo la plata. Claude lo confirmó
+    con un smoke test (`vm`, sin datos reales) y agregó la llamada faltante
+    en `guardarSaldos()`. **Lección para cartera-app (hito 7+, "saldos
+    declarados por cuenta"):** diseñar el ajuste como un valor fijo desde
+    el día uno (con fecha de vigencia explícita), nunca como una diferencia
+    recalculada contra el estado corriente — evita esta clase de bug de
+    raíz en vez de tener que migrarlo después.
 
 ---
 
@@ -986,7 +1079,7 @@ a medida que se completa cada hito o se decide dejar algo afuera a
 propósito (lo segundo se anota acá también, explícitamente, para que no
 se confunda con "todavía no llegamos").
 
-### Núcleo financiero (hitos 1-4)
+### Núcleo financiero (hitos 1-6)
 
 1. **Valuación de mercado y NAV** — ✅ hecho (2026-08-11, PR #1, merge
    `865febe3`). Precios en vivo (data912.com), VCP de FCI
@@ -994,13 +1087,13 @@ se confunda con "todavía no llegamos").
    pool, P&L no realizado por posición, en `/dashboard/cartera`.
    Simplificaciones declaradas y pendientes de cerrar más adelante: sin
    factor de ratio de CEDEAR, caja sin liquidación T+n ni saldos
-   declarados (ver hito 5 más abajo).
+   declarados (ver hito 7 más abajo).
 2. **Cauciones** — ✅ hecho (2026-08-11, PR #1 [sic, ver commits directos a
    `main`]). Alta colocadora/tomadora, las 3 patas sintéticas ligadas por
    `grupo_caucion`, interés devengado sumado al NAV. Simplificación
    declarada: el MEP de cada pata usa el MEP en vivo al momento de la
    carga, no una serie histórica por fecha (mepDeFecha no está portado
-   todavía — ver hito 3).
+   todavía — ver hito 5).
 3. **Snapshot diario de NAV — mejora deliberada sobre Cartera legado**
    (2026-08-11, PR #2). En Cartera legado el snapshot personal (a
    diferencia del historial de PRECIOS de mercado, que sí corre solo vía
@@ -1021,15 +1114,49 @@ se confunda con "todavía no llegamos").
    hay obligación de copiar la limitación del legado — se declara la
    mejora acá, explícitamente, para que quede claro que es una decisión y
    no una copia parcial.
-3. **Rendimientos** — pendiente. Serie de NAV en el tiempo (usa la tabla
-   `snapshots`, ya existe), Modified Dietz con la distinción real de
-   aportes externos vs. rotación interna (§9), TIR/XIRR, benchmark contra
-   S&P 500 y Nasdaq 100 vía CEDEARs SPY/QQQ por encadenamiento de retornos
-   (§5).
-4. **Importadores de bróker** — pendiente. Carga masiva desde CSV de
+4. **Migración de datos históricos del gist legado** — pendiente, subida
+   de prioridad el 2026-08-11 a pedido explícito del usuario: "que toda la
+   data histórica que en su momento bajamos y todos los snapshots de la
+   app vieja no sea info perdida — que se aproveche en la nueva app". Dos
+   partes:
+   - **`DATOS.movimientos` del gist** → tabla `movimientos` de
+     cartera-app. Mapeo directo campo a campo (mismo significado); es lo
+     más valioso de migrar, porque hoy cartera-app no tiene ningún
+     movimiento real cargado, solo pruebas.
+   - **`DATOS.snapshots` del gist** → tabla `snapshots` de cartera-app.
+     Con un matiz: el legado calculaba esos NAV históricos con más años de
+     ajustes de los que cartera-app ya porteó (factor de ratio de CEDEAR,
+     liquidación T+n, etc. — ver hito 7 más abajo), así que un snapshot
+     viejo no es 100% comparable con uno calculado hoy por `calcularNav`.
+     Igual se migran tal cual (con esa salvedad declarada, no silenciada):
+     da la curva de rendimiento completa desde el día 1 en vez de arrancar
+     de cero con el cron nuevo.
+   Se prioriza ANTES de cerrar Rendimientos (hito 5) porque cuanta más
+   historia real haya cargada, más preciso sale todo lo que ese hito
+   calcula (retorno acumulado, TIR, benchmark).
+5. **Rendimientos** — en curso. Retorno acumulado sobre los snapshots
+   (`lib/cartera/rendimiento.ts`) ✅ hecho (2026-08-11). Retorno por tramo
+   con Modified Dietz (`serieDiaria()`) ✅ hecho (2026-08-12). TIR (XIRR)
+   y selector de período (Hoy/Semana/Mes/YTD/1A/Todo) ✅ hecho (2026-08-12).
+   Benchmark contra S&P 500 y Nasdaq 100 (`lib/cartera/benchmark.ts`, nuevo)
+   ✅ hecho (2026-08-12) — motor de retornos del CEDEAR con empalme oficial
+   (FRED) y `historial/{año}.json` como HIST_REMOTO para el tramo reciente,
+   dividendos compuestos en la fecha ex, y ajuste de ratio (SPY ×3). Tabla
+   comparativa "Tu cartera / SPY / QQQ" con TIR anual | Resultado | Dif. TIR
+   en `/dashboard/cartera`, para la ventana de período elegida.
+   Simplificación declarada en `benchmark.ts`: sin `detectarRatiosNoDeclarados`
+   (el aviso en pantalla de un split todavía no declarado en `AJUSTES_RATIO`).
+   Núcleo financiero de Rendimientos completo. Queda para hito 7+: métricas
+   de riesgo (Sortino/alfa/volatilidad), gráfico histórico completo, vistas
+   ARS/MEP/CCL intercambiables.
+   Simplificaciones declaradas en el código de `rendimiento.ts`: el tope
+   de "caja insuficiente = aporte implícito" es por pool global, no por
+   cuenta como el original; sin liquidación T+n; sin la distinción "cuenta
+   importada completa" que desactiva ese tope en el legado.
+6. **Importadores de bróker** — pendiente. Carga masiva desde CSV de
    Balanz, IEB+, Puente y Cocos, arrancando por el que más uso tenga.
 
-### Hito 5+ — paridad completa con Cartera (sin priorizar todavía)
+### Hito 7+ — paridad completa con Cartera (sin priorizar todavía)
 
 Todo lo que Cartera legado tiene y cartera-app todavía no, relevado el
 2026-08-11. Se prioriza según lo que el usuario más use, no en el orden
@@ -1045,7 +1172,10 @@ en que está escrito acá:
   ya existe en el esquema; falta la pantalla para cargarlos).
 - Saldos declarados por cuenta y liquidación T+n de la caja (mencionado
   como simplificación pendiente en el hito 1; la tabla `saldos` ya
-  existe).
+  existe). **Al portarlo, ver §6 regla 13**: el legado tuvo un bug real
+  ahí (ajuste dinámico que cancelaba movimientos posteriores) — diseñar
+  cartera-app con un ajuste fijo desde el principio, no repetir el patrón
+  viejo y tener que migrarlo después.
 - Principales contribuidores/detractores, tabla de retorno por activo.
 - Identidad visual (§17) y fondo NASA (§13) — hoy cartera-app es
   funcional pero visualmente básico.
