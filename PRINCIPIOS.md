@@ -4,6 +4,20 @@ Documento único. Se lee **antes** de proponer o implementar cualquier cambio.
 Reemplaza a `PRINCIPIOS.md` y `PROYECTO_CARTERA_CONTEXTO_E_INSTRUCCIONES.md`
 como archivos separados: este es el único.
 
+Última revisión: 2026-08-12 (madrugada) — Nicolás detectó que la card
+"Retorno total" y el gráfico "Rendimiento acumulado" de Histórico
+completo/YTD mostraban dos números distintos para lo mismo (+24% en la
+card vs. +15% en el gráfico, y la cartera pasaba de ganarle a SPY a
+perderle según cuál se mirara). Causa: el gráfico de esa ventana seguía
+usando la fórmula money-weighted vieja (`serieRendimiento()`/`retHoy` =
+(valor+retirado)/aportado−1) mientras las cards y la tabla comparativa ya
+habían migrado al time-weighted encadenado (`retornoEntre` sobre
+`serieDiaria()`) — un refactor que se aplicó a las cards pero no se
+propagó al gráfico de esa ventana en particular (el gráfico de los demás
+períodos y el mini-gráfico de Inicio sí ya usaban el motor correcto). Ver
+§6 regla 14: mismo principio de fuente única que ya regía el benchmark
+(§5), aplicado acá.
+
 Última revisión: 2026-08-12 (noche, más tarde) — el usuario corrigió con
 ChatGPT (commits directos a `main`, sin el pipeline de validación habitual)
 un bug real de saldos declarados que cancelaba ventas contado inmediato en
@@ -443,6 +457,22 @@ Salen de errores ya cometidos. Cada una tuvo su costo.
     el día uno (con fecha de vigencia explícita), nunca como una diferencia
     recalculada contra el estado corriente — evita esta clase de bug de
     raíz en vez de tener que migrarlo después.
+14. **Un mismo concepto ("Rendimiento acumulado", "Retorno total") no puede
+    tener dos fórmulas distintas en dos lugares de la pantalla.** Bug real,
+    corregido el 2026-08-12 (madrugada): al migrar las cards de Histórico
+    completo/YTD de money-weighted a time-weighted encadenado
+    (`retornoEntre` sobre `serieDiaria()`), el gráfico de esa misma ventana
+    quedó afuera del refactor y siguió usando la fórmula vieja
+    (`serieRendimiento()`/`retHoy`). Resultado: la card decía +24% y el
+    gráfico +15% para el mismo período, con la cartera ganándole a SPY en
+    un lado y perdiéndole en el otro. El gráfico de los demás períodos
+    (Hoy/Semana/Mes/1A) y el mini-gráfico de Inicio (`serieMiniInicio()`)
+    ya usaban el motor correcto — sirvieron de referencia para el arreglo.
+    Mismo principio que ya regía el benchmark (§5: "el gráfico y las cards
+    leen la misma función, nunca dos maneras de medir lo mismo"), aplicado
+    acá también. Al tocar cualquier cálculo de rendimiento, verificar que
+    TODOS los lugares que lo muestran (cards, tabla comparativa, gráfico
+    grande, mini-gráfico de Inicio) sigan leyendo la misma fuente.
 
 ---
 
