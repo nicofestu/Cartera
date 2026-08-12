@@ -2841,17 +2841,6 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
       if(!mepHoy||!mepDesde) return {...fila,desdeEf,motivo:`sin MEP histórico al ${h.fecha}`};
       ret=(p.px/mepHoy)/(h.precio/mepDesde)-1;
     }
-    // Si hubo una venta parcial dentro de la ventana, combinar el remanente
-    // con lo cobrado por las unidades vendidas. De lo contrario, una venta de
-    // hoy haría que SPCX (u otro activo) pareciera rendir solo sobre la
-    // cantidad que sobrevivió a la venta.
-    const totalActivo=resultadoTotalActivoEnPeriodo(p,desde,hasta,h,valHoy);
-    if(totalActivo){
-      const dias=diasEntre(desdeEf,hasta);
-      return {...fila,ret:totalActivo.ret,desdeEf,dias,tna:anualizar(totalActivo.ret,dias),
-        valDesde:totalActivo.valorInicio,valHoy:totalActivo.valorFinal,
-        valActual:valHoy,gan:totalActivo.gan,vendidoEnPeriodo:true};
-    }
     // Valor actual (en la moneda de VISTA) y valor implícito al arranque
     // efectivo del período, derivado del mismo ret (asume cantidad estable
     // dentro de la ventana — igual limitación que "ret" arriba). Con eso se
@@ -2862,42 +2851,6 @@ function metricasPorPosicionEnPeriodo(pos,desde,hasta,primera){
     return {...fila,ret,desdeEf,dias,tna:anualizar(ret,dias),valDesde,
       gan:(valHoy!=null&&valDesde!=null)?valHoy-valDesde:null};
   });
-}
-// Cuando una posición viva tuvo ventas parciales dentro de la ventana, su
-// retorno no puede calcularse solo con las unidades que quedaron. Hay que
-// sumar el efectivo neto de las ventas y descontar las compras realizadas en
-// la misma ventana. Esto es especialmente importante en "Hoy": una venta
-// intradía reduce la cantidad, pero no debe borrar del retorno las unidades
-// que estuvieron en cartera al comienzo del día.
-function resultadoTotalActivoEnPeriodo(p,desde,hasta,h,valHoy){
-  if(!p||!h||p.tipo==="fci"||p.tipo==="manual"||p.pxMoneda!=="ARS") return null;
-  const key=p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta;
-  const movs=DATOS.movimientos.filter(m=>m.tipo!=="cash"&&
-    m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta===key&&
-    m.fecha>desde&&m.fecha<=hasta);
-  const ventas=movs.filter(m=>m.op==="venta");
-  if(!ventas.length) return null;
-  const compras=movs.filter(m=>m.op==="compra");
-  const cantidadVendida=ventas.reduce((s,m)=>s+Number(m.cantidad||0),0);
-  const cantidadComprada=compras.reduce((s,m)=>s+Number(m.cantidad||0),0);
-  const cantidadInicio=p.qty+cantidadVendida-cantidadComprada;
-  if(!(cantidadInicio>1e-9)) return null;
-  const mepInicio=VISTA==="ARS"?1:mepHistorial(h.fecha);
-  if(!(mepInicio>0)) return null;
-  const precioInicio=h.precio/divisorDe(p.tipo);
-  const valorInicio=VISTA==="ARS"
-    ?cantidadInicio*precioInicio
-    :cantidadInicio*precioInicio/mepInicio;
-  const importeVista=m=>{
-    const importe=importeNetoDe(m);
-    const ars=m.moneda==="USD"?importe*m.mep:importe;
-    return VISTA==="ARS"?ars:(m.moneda==="USD"?importe:importe/m.mep);
-  };
-  const cobrado=ventas.reduce((s,m)=>s+importeVista(m),0);
-  const invertido=compras.reduce((s,m)=>s+importeVista(m),0);
-  const valorFinal=(valHoy||0)+cobrado-invertido;
-  if(!(valorInicio>0)||!isFinite(valorFinal)) return null;
-  return {valorInicio,valorFinal,ret:valorFinal/valorInicio-1,gan:valorFinal-valorInicio};
 }
 // Orden común de los dos cuadros por activo: primero lo que se pudo medir
 // (mejor a peor retorno), y al final lo que no, para que no se mezcle.
@@ -3016,22 +2969,20 @@ function metricasPorPosicion(pos){
 // no cuenta acá — misma filosofía que el resto de esta pantalla: medir nada
 // más que la ventana elegida, no el historial completo de la posición.
 //
-// Solo entran posiciones con cantidad ~0 al llegar a `hasta` (cerradas para
-// ESE momento) que además tuvieron alguna venta dentro de la ventana. Si hoy
-// (fecha real, no `hasta`) la posición está viva de nuevo — la cerraste
-// adentro del período pero la volviste a comprar después — se excluye acá:
-// la sigue midiendo metricasPorPosicionEnPeriodo del lado de las vivas, con
-// su propia limitación conocida (mide desde la primera compra de toda la
-// vida, no desde la reapertura). Ampliar eso a ciclos de compra/venta
-// múltiples por posición es una mejora aparte, no la de este pedido.
+// Entran tanto posiciones cerradas del todo como posiciones con una venta
+// PARCIAL dentro de la ventana. En el segundo caso la tenencia remanente la
+// devuelve derivarPosiciones() y esta función agrega una segunda fila con la
+// porción ya realizada, marcada como `cerrada`. Así una venta no desaparece
+// del rendimiento del día ni queda mezclada con el valor de lo que todavía
+// está en cartera. Si una posición se cerró y luego se volvió a comprar, las
+// ventas de la ventana se acumulan en esta fila; la reapertura sigue siendo
+// una tenencia viva separada.
 function posicionesCerradasEnPeriodo(desde,hasta,existentes){
-  const vivas=new Set(existentes.map(p=>p.tipo+"|"+(p.tipo==="fci"?p.fondo:p.ticker)+"|"+p.cuenta));
   const map={};
   const movsTodos=[...DATOS.movimientos].filter(m=>m.tipo!=="cash"&&m.fecha<=hasta)
     .sort((a,b)=>a.fecha.localeCompare(b.fecha)||(a.op==="compra"?0:1)-(b.op==="compra"?0:1)||a.id-b.id);
   const acumular=(m,contarVenta)=>{
     const key=m.tipo+"|"+(m.tipo==="fci"?m.fondo:m.ticker)+"|"+m.cuenta;
-    if(vivas.has(key)) return; // sigue viva hoy: la mide el otro camino, no duplicar
     const importe=importeNetoDe(m);
     const cARS=m.moneda==="USD"?importe*m.mep:importe;
     const cUSD=m.moneda==="USD"?importe:importe/m.mep;
@@ -3064,7 +3015,12 @@ function posicionesCerradasEnPeriodo(desde,hasta,existentes){
     for(const m of movsTodos) acumular(m,true);
   }
   return Object.values(map)
-    .filter(p=>Math.abs(p.qty)<1e-6&&p.ultimaVenta) // cerrada a `hasta` Y con venta dentro de la ventana
+    // También incluimos ventas PARCIALES de posiciones que siguen vivas. La
+    // fila viva muestra solo el remanente y esta fila muestra la parte que se
+    // cerró dentro de la ventana. Antes se filtraban todas las posiciones que
+    // todavía tenían cantidad, por eso SPCX no aparecía en YTD el mismo día
+    // de la venta.
+    .filter(p=>p.ultimaVenta&&p.costoVendidoARS>1e-9)
     .map(p=>{
       const venta=VISTA==="ARS"?p.ventaARS:p.ventaUSD;
       const costoVendido=VISTA==="ARS"?p.costoVendidoARS:p.costoVendidoUSD;
@@ -4552,7 +4508,7 @@ function render(soloEstructura){
           <b>TIR anual</b> = la tasa efectiva anual que iguala el valor presente de todos tus flujos (aportes con signo negativo, retiros y valor actual con signo positivo). A diferencia del retorno total, sí pondera <b>cuándo</b> entró cada peso: si aportaste fuerte justo antes de una caída, el retorno total puede ser positivo y la TIR bajar igual. Los dos números describen la misma cartera y responden preguntas distintas — cómo rindieron los activos, y cómo rindió tu plata.<br>
           El <b>resultado en plata</b> sigue siendo el hecho verificable contra el extracto: valor actual + retirado − aportado. El capital aportado cuenta solo la plata que entró de afuera: cuando una compra se financia con el producto de una venta previa, es rotación interna y no suma aporte nuevo.<br>
           <b>Retorno por posición</b> = valor actual / costo promedio ponderado, en ${VISTA==="ARS"?"pesos":VISTA==="MEP"?"dólares MEP":"dólares CCL"}. Mide cada tenencia viva por separado y no incluye el resultado ya realizado en ventas.
-          Las filas con el tag <b>cerrada</b> son posiciones que vendiste del todo: su retorno sale de comparar lo que obtuviste en la venta contra el costo promedio de lo vendido, no contra un precio de mercado de hoy (no tienen). Van al final y no entran en "mejor/peor posición".
+          Las filas con el tag <b>cerrada</b> representan la porción vendida dentro del período, tanto si cerraste toda la posición como si fue una venta parcial: su retorno sale de comparar lo que obtuviste en la venta contra el costo promedio de lo vendido, no contra un precio de mercado de hoy (no tienen). Van después de las vivas y no entran en "mejor/peor posición".
           La contribución mide cuánto aportó cada posición al retorno total de la cartera.<br>
           <b>vs. SPY (CEDEAR)</b> y <b>vs. QQQ (CEDEAR)</b>: simulan tus mismos aportes (fechas y montos) comprando el CEDEAR, medido por su cotización en dólares en BYMA (especie D, con la C de respaldo)${BENCH_DIV_OK?" y con los dividendos del ETF reinvertidos en la fecha ex":", <b>sin</b> dividendos: falta historial/dividendos.json, así que es retorno de precio"}. Donde el CEDEAR no tiene cobertura se empalma la variación del índice oficial. <b>No coincide con el índice del noticiero</b>: mide el instrumento que se puede comprar acá, con su propio horario y su error de seguimiento. En pesos, la conversión usa el MEP de cada fecha.${notaBaseCCL?"<br>"+notaBaseCCL:""}</div>`;
       }
